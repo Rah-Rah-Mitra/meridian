@@ -12,8 +12,25 @@ publish.workspace = true
 [dependencies]
 meridian-common.workspace = true
 meridian-geo.workspace = true
-meridian-fetch.workspace = true
-meridian-privacy.workspace = true
+meridian-egress.workspace = true
+h3o.workspace = true
+petgraph.workspace = true
+redb.workspace = true
+blake3.workspace = true
+zip.workspace = true
+md-5.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+metrics.workspace = true
+serde.workspace = true
+url.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "rt"] }
+reqwest.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+# Hash-contract test only — keeps gdelt::domain_hash in sync with the index's
+meridian-index.workspace = true
 
 [lints]
 workspace = true

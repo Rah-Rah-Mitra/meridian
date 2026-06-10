@@ -9,6 +9,7 @@ pub mod config;
 pub mod error;
 pub mod ids;
 pub mod netpolicy;
+pub mod prior;
 pub mod shed;
 pub mod sysprobe;
 
