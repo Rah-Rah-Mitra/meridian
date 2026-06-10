@@ -147,8 +147,8 @@ mod tests {
             x ^= x >> 12;
             x ^= x << 25;
             x ^= x >> 27;
-            *slot += ((x.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 40) as f32 / (1u64 << 24) as f32)
-                * 0.1;
+            *slot +=
+                ((x.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 40) as f32 / (1u64 << 24) as f32) * 0.1;
         }
         let n = v.iter().map(|a| a * a).sum::<f32>().sqrt().max(1e-9);
         v.iter_mut().for_each(|a| *a /= n);
