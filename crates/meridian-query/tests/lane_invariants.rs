@@ -39,18 +39,19 @@ async fn canary() -> (SocketAddr, Arc<AtomicUsize>) {
     (addr, hits)
 }
 
+/// Tests run in parallel: nanosecond timestamps collided on fast CI runners
+/// (tantivy LockBusy), so uniqueness comes from a process-wide counter.
+static DIR_SEQ: AtomicUsize = AtomicUsize::new(0);
+
 fn temp_planner(
     lanes_cfg: LanesConfig,
     searx_url: Option<String>,
     anon_url: Option<String>,
 ) -> Planner {
     let dir = std::env::temp_dir().join(format!(
-        "meridian-lane-inv-{}-{:x}",
+        "meridian-lane-inv-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .subsec_nanos()
+        DIR_SEQ.fetch_add(1, Ordering::SeqCst)
     ));
     let index_cfg = IndexConfig {
         data_dir: dir.clone(),
