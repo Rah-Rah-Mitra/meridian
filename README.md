@@ -4,10 +4,11 @@
 hybrid index (BM25 + dense vectors) + geo analytics, sized for a Raspberry Pi 5 and scaling to
 edge servers without redesign.
 
-> Status: **Phase 1 complete** — lexical hybrid search (local BM25 + SearXNG
-> metasearch with RRF fusion), privacy core, and the direct egress lane are live
-> and deployed via compose. Phase 2 (dense vectors / hybrid ANN) is next.
-> Planning artifacts: [`docs/plan/`](docs/plan/).
+> Status: **Phase 2 complete** — hybrid retrieval is live: local BM25 + dense
+> model2vec/USearch ANN fused with RRF, plus SearXNG metasearch, query/fetch
+> caches, and a resource-shedding ladder. Deployed via compose; hybrid local
+> search p50 14.5ms, hybrid nDCG@10 beats BM25. Phase 3 (LTR + deep rerank +
+> bandit routing) is next. Planning artifacts: [`docs/plan/`](docs/plan/).
 
 ## What it is
 
@@ -44,7 +45,7 @@ The full, binding specification is [`docs/SPEC.md`](docs/SPEC.md) (v2.1).
 |---|---|---|
 | 0 | Planning artifacts, workspace + CI scaffold, bench harness | **Done** (2026-06-10) |
 | 1 | Lexical MVP + direct lane + privacy core | **Done** (2026-06-10) |
-| 2 | Hybrid retrieval (embeddings + ANN) | — |
+| 2 | Hybrid retrieval (embeddings + ANN) | **Done** (2026-06-10) |
 | 3 | Ranking stack (LTR, deep rerank, bandit routing) | — |
 | 4 | Egress lanes: anon (Arti) + region (WireGuard) | — |
 | 5 | Geo + analytics + retention/forget | — |

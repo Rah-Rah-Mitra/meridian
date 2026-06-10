@@ -115,7 +115,7 @@ Phase-1+ deps stay feature-scoped where possible.
 |---|---|
 | 0 | **DONE 2026-06-10 ✓** — image 55.4MB boots on Pi under hardening flags; bench report committed; this file re-issued |
 | 1 | **DONE 2026-06-10 ✓** — 100k docs, disk 57.5MB, RSS 97.6MB, end-to-end p50 10.6ms ([exit note](phase-exits/p1.md)) |
-| 2 | vectors ≤600MB disk / ≤520MB RAM @1M (F, by extrapolation); p50 ≤80ms |
+| 2 | **DONE 2026-06-10 ✓** — hybrid nDCG@10 0.42 > BM25 0.38; vectors 405MB disk / 506MB RAM @1M (extrapolated); hybrid p50 14.5ms ([exit note](phase-exits/p2.md)) |
 | 3 | deep p50 ≤2.5s; rerank cache hit ≤100ms |
 | 4 | anon p50 ≤8s; Arti RSS delta ≤150MB; zero direct-lane egress under Arti-down |
 | 5 | analytics ≤700MB steady; heatmap ≤150ms; every store under its cap |
