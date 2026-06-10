@@ -1,6 +1,7 @@
-//! Suite 2 — USearch ANN: build 1M×256-d int8, search latency, recall, and the
-//! ADR-01 16K-page mmap `view()` smoke test (SPEC §15.2).
-//! Gates: p99 <40ms @ ef=64 AND recall@10 ≥0.95 AND view() works on this kernel.
+//! Suite 2 — USearch ANN: build 1M×256-d int8, then an `ef_search` SWEEP measuring
+//! latency + recall at each setting (SPEC §15: this bench *re-derives* ef_search),
+//! plus the ADR-01 16K-page mmap `view()` smoke test.
+//! Gate: some swept ef reaches recall@10 ≥0.95 with p99 <40ms (and view() works).
 //!
 //! Recall is measured against exact brute-force over usearch's OWN int8
 //! representation (unit vector × 127) — i.e. pure graph recall over exactly what
@@ -18,6 +19,7 @@ const DIMS: usize = 256;
 const QUERIES: usize = 1_000;
 const RECALL_QUERIES: usize = 100;
 const TOP_K: usize = 10;
+const EF_SWEEP: [usize; 4] = [64, 128, 192, 256];
 
 /// Deterministic random unit vector (xorshift + Box-Muller + L2 norm).
 fn unit_gaussian(seed: u64) -> Vec<f32> {
@@ -118,45 +120,72 @@ pub fn run(cfg: &BenchConfig) -> SuiteResult {
         result.metric("index_size", index.size());
         result.metric("memory_usage_mb", index.memory_usage() / (1024 * 1024));
 
-        // Search latency: single-threaded per-query timing, fresh random queries.
-        let mut samples = Vec::with_capacity(QUERIES);
-        for qi in 0..QUERIES as u64 {
-            let q = unit_vector(0xFFFF_0000 + qi);
-            let t = Instant::now();
-            let matches = index.search(&q, TOP_K).map_err(err)?;
-            std::hint::black_box(matches.keys.len());
-            samples.push(t.elapsed().as_secs_f64() * 1e3);
-        }
-        let p50 = percentile_ms(&mut samples, 50.0);
-        let p99 = percentile_ms(&mut samples, 99.0);
-        result.metric("search_p50_ms", p50);
-        result.metric("search_p99_ms", p99);
+        // Exact truth sets (i8 brute force over the index's own representation) —
+        // independent of ef, so computed once for the whole sweep.
+        let truths: Vec<std::collections::HashSet<u64>> = (0..RECALL_QUERIES as u64)
+            .map(|qi| {
+                let qq = quantize_usearch(&unit_vector(0xFFFF_0000 + qi));
+                let mut scored: Vec<(i32, u64)> = (0..n)
+                    .map(|i| {
+                        let row = &ref_i8[i * DIMS..(i + 1) * DIMS];
+                        let dot: i32 = row
+                            .iter()
+                            .zip(qq.iter())
+                            .map(|(a, b)| *a as i32 * *b as i32)
+                            .sum();
+                        (dot, i as u64)
+                    })
+                    .collect();
+                scored.sort_unstable_by_key(|p| std::cmp::Reverse(p.0));
+                scored[..TOP_K].iter().map(|p| p.1).collect()
+            })
+            .collect();
 
-        // Recall@10 vs exact int8 brute force.
-        let mut hits = 0usize;
-        for qi in 0..RECALL_QUERIES as u64 {
-            let qf = unit_vector(0xFFFF_0000 + qi);
-            let qq = quantize_usearch(&qf);
-            // Exact top-K by i8 dot over the index's own representation.
-            let mut scored: Vec<(i32, u64)> = (0..n)
-                .map(|i| {
-                    let row = &ref_i8[i * DIMS..(i + 1) * DIMS];
-                    let dot: i32 = row
-                        .iter()
-                        .zip(qq.iter())
-                        .map(|(a, b)| *a as i32 * *b as i32)
-                        .sum();
-                    (dot, i as u64)
-                })
-                .collect();
-            scored.sort_unstable_by_key(|p| std::cmp::Reverse(p.0));
-            let truth: std::collections::HashSet<u64> =
-                scored[..TOP_K].iter().map(|p| p.1).collect();
-            let matches = index.search(&qf, TOP_K).map_err(err)?;
-            hits += matches.keys.iter().filter(|k| truth.contains(k)).count();
+        // ef_search sweep: latency (1k queries, single-threaded) + recall@10 per ef.
+        let mut derived_ef = None;
+        let mut derived_p99 = f64::NAN;
+        for ef in EF_SWEEP {
+            index.change_expansion_search(ef);
+            let mut samples = Vec::with_capacity(QUERIES);
+            for qi in 0..QUERIES as u64 {
+                let q = unit_vector(0xFFFF_0000 + qi);
+                let t = Instant::now();
+                let matches = index.search(&q, TOP_K).map_err(err)?;
+                std::hint::black_box(matches.keys.len());
+                samples.push(t.elapsed().as_secs_f64() * 1e3);
+            }
+            let p50 = percentile_ms(&mut samples, 50.0);
+            let p99 = percentile_ms(&mut samples, 99.0);
+            let mut hits = 0usize;
+            for (qi, truth) in truths.iter().enumerate() {
+                let qf = unit_vector(0xFFFF_0000 + qi as u64);
+                let matches = index.search(&qf, TOP_K).map_err(err)?;
+                hits += matches.keys.iter().filter(|k| truth.contains(k)).count();
+            }
+            let recall = hits as f64 / (RECALL_QUERIES * TOP_K) as f64;
+            result.metric(
+                &format!("search_p50_ms_ef_{ef}"),
+                (p50 * 1000.0).round() / 1000.0,
+            );
+            result.metric(
+                &format!("search_p99_ms_ef_{ef}"),
+                (p99 * 1000.0).round() / 1000.0,
+            );
+            result.metric(
+                &format!("recall_at_10_ef_{ef}"),
+                (recall * 1000.0).round() / 1000.0,
+            );
+            if derived_ef.is_none() && recall >= 0.95 && p99 < 40.0 {
+                derived_ef = Some(ef);
+                derived_p99 = p99;
+            }
         }
-        let recall = hits as f64 / (RECALL_QUERIES * TOP_K) as f64;
-        result.metric("recall_at_10", (recall * 1000.0).round() / 1000.0);
+        if let Some(ef) = derived_ef {
+            result.metric("derived_ef_search", ef);
+            result.note(format!(
+                "ef_search re-derived per SPEC §15: {ef} (recall ≥0.95 at p99 {derived_p99:.2}ms)"
+            ));
+        }
 
         // ADR-01: serialize + mmap view() on this kernel (16K pages on the Pi 5).
         std::fs::create_dir_all(&cfg.scratch_dir).map_err(|e| e.to_string())?;
@@ -172,9 +201,9 @@ pub fn run(cfg: &BenchConfig) -> SuiteResult {
         drop(viewed);
         let _ = std::fs::remove_file(&path);
 
-        let gate_ok = p99 < 40.0 && recall >= 0.95 && view_ok;
+        let gate_ok = derived_ef.is_some() && view_ok;
         result.gate(
-            "p99 <40ms @ ef=64 AND recall@10 ≥0.95 AND 16K mmap view ok",
+            "some swept ef reaches recall@10 ≥0.95 at p99 <40ms AND 16K mmap view ok",
             gate_ok,
         );
         Ok(())
@@ -183,7 +212,7 @@ pub fn run(cfg: &BenchConfig) -> SuiteResult {
     if let Err(e) = run_inner {
         result.note(e);
         result.gate(
-            "p99 <40ms @ ef=64 AND recall@10 ≥0.95 AND 16K mmap view ok",
+            "some swept ef reaches recall@10 ≥0.95 at p99 <40ms AND 16K mmap view ok",
             false,
         );
     }
