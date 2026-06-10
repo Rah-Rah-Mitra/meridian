@@ -7,10 +7,10 @@
 //! seam: a LightGBM→ONNX model loaded via `ort` drops in here unchanged once
 //! training data exists, without touching the planner.
 //!
-//! Cold-start design goal: **never regress RRF order materially.** `rrf` carries
-//! the dominant weight; the other features add mild, bounded lift. On a static
-//! corpus (no clicks, neutral freshness) the re-score is close to identity —
-//! which is exactly what "no regression" requires (SPEC §16 Phase-3 exit).
+//! Cold-start design (see [`LinearLtr`] for the full reasoning): the shipped
+//! default is **RRF-identity** — unit RRF weight, zero secondary weights — which
+//! guarantees the SPEC §16 "LTR no regression" gate by construction. The feature
+//! extraction, weights, and trait all ship so the trained GBDT slots in unchanged.
 
 /// Per-candidate features (SPEC §11). Fields not yet plumbed are fed neutral
 /// values by the planner and documented there (freshness/domain_prior/geo).
@@ -43,13 +43,28 @@ pub trait Scorer: Send + Sync {
     fn name(&self) -> &'static str;
 }
 
-/// Hand-tuned linear cold-start model. Weights are deliberately RRF-dominant so
-/// the re-score is order-preserving in the common case and only nudges on strong
-/// secondary signals (title match, multi-source consensus).
+/// Linear LTR model: `score = w_rrf·rrf + Σ wᵢ·featureᵢ`.
+///
+/// **The shipped cold-start is RRF-identity** (unit RRF weight, ZERO secondary
+/// weights), and here is the honest reasoning. With no training data
+/// (Phase 3 has no click logs, only a synthetic eval), the secondary features are
+/// either already inside RRF (bm25, ann, source-consensus), neutral until later
+/// phases (freshness/domain_prior/geo are 0 — Phase 5), or — for title-match —
+/// genuinely informative on real queries but *anti-correlated* on the
+/// describe-without-naming synthetic eval. Empirically, every non-zero secondary
+/// weighting regressed nDCG@10 on that eval. So an untrained linear model cannot
+/// beat RRF on the data we have; the responsible cold-start is the identity,
+/// which guarantees the §16 "LTR no regression" gate by construction.
+///
+/// What ships is therefore the **stage + interface + feature extraction**, with
+/// the weights as tunable fields all defaulting to zero except `w_rrf`. The
+/// trained GBDT (ADR-02, once labeled data exists) implements the same [`Scorer`]
+/// trait and is what will actually weight the secondaries — that is its job, not
+/// the cold-start's. Operators with their own labeled set can also hand-tune
+/// these weights without recompiling the planner.
 #[derive(Debug, Clone)]
 pub struct LinearLtr {
     pub w_rrf: f32,
-    pub w_bm25: f32,
     pub w_ann: f32,
     pub w_title: f32,
     pub w_source: f32,
@@ -61,20 +76,16 @@ pub struct LinearLtr {
 
 impl Default for LinearLtr {
     fn default() -> Self {
-        // RRF in [~0, ~0.07] for our k=60 fusion; multiply up so it dominates the
-        // others (each in [0,1] with small weights). Secondary signals add at
-        // most ~0.15 total, so they break ties and nudge but never overturn a
-        // clear RRF win — the "no regression" guarantee.
+        // RRF-identity cold-start: secondaries plumbed but unweighted.
         Self {
-            w_rrf: 100.0,
-            w_bm25: 0.0, // already inside rrf; avoid double-counting scale
-            w_ann: 0.05,
-            w_title: 0.10,
-            w_source: 0.03,
-            w_snippet: 0.02,
-            w_freshness: 0.02,
-            w_domain: 0.05,
-            w_geo: 0.05,
+            w_rrf: 1.0,
+            w_ann: 0.0,
+            w_title: 0.0,
+            w_source: 0.0,
+            w_snippet: 0.0,
+            w_freshness: 0.0,
+            w_domain: 0.0,
+            w_geo: 0.0,
         }
     }
 }
@@ -82,18 +93,17 @@ impl Default for LinearLtr {
 impl Scorer for LinearLtr {
     fn score(&self, f: &Features) -> f32 {
         self.w_rrf * f.rrf
-            + self.w_bm25 * f.bm25
             + self.w_ann * f.ann
             + self.w_title * f.title_match_ratio
-            + self.w_source * f.source_count
+            + self.w_source * (f.source_count.min(3.0) / 3.0)
             + self.w_snippet * f.snippet_len_norm
-            + self.w_freshness * (f.freshness - 0.5) // center neutral at 0
+            + self.w_freshness * (f.freshness - 0.5)
             + self.w_domain * f.domain_prior
             + self.w_geo * f.geo
     }
 
     fn name(&self) -> &'static str {
-        "linear-coldstart-v1"
+        "linear-coldstart-rrf-identity"
     }
 }
 
@@ -118,33 +128,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rrf_dominates_so_ordering_is_preserved() {
+    fn cold_start_is_rrf_identity() {
         let s = LinearLtr::default();
-        // A clear RRF winner with weak secondaries vs a clear RRF loser with
-        // strong secondaries: the RRF winner must still rank higher.
-        let winner = Features {
-            rrf: 0.030,
+        // Order is determined by RRF alone; the strongest possible secondaries
+        // do not change the score (zero weights), so they cannot reorder.
+        let plain = Features {
+            rrf: 0.025,
             ..Default::default()
         };
-        let loser = Features {
-            rrf: 0.020,
+        let loaded = Features {
+            rrf: 0.025,
             title_match_ratio: 1.0,
             ann: 1.0,
-            source_count: 5.0,
+            source_count: 9.0,
             snippet_len_norm: 1.0,
+            domain_prior: 1.0,
+            geo: 1.0,
+            freshness: 1.0,
             ..Default::default()
         };
-        assert!(
-            s.score(&winner) > s.score(&loser),
-            "RRF gap of 0.01 (= ~1 fusion rank) must not be overturned by secondaries: {} vs {}",
-            s.score(&winner),
-            s.score(&loser)
+        assert_eq!(
+            s.score(&plain),
+            s.score(&loaded),
+            "cold-start must ignore secondaries"
         );
+        assert_eq!(s.score(&plain), 0.025, "cold-start score is exactly rrf");
     }
 
     #[test]
-    fn secondaries_break_ties() {
-        let s = LinearLtr::default();
+    fn custom_weights_activate_secondaries() {
+        // A trained/operator model with non-zero weights DOES use the features —
+        // the machinery is real, only the default is identity.
+        let s = LinearLtr {
+            w_title: 0.1,
+            ..LinearLtr::default()
+        };
         let plain = Features {
             rrf: 0.025,
             ..Default::default()
