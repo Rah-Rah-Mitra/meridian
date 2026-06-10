@@ -3,6 +3,7 @@
 //! compiled in reports `skipped`, and a gated suite that fails its gate makes the
 //! whole run exit non-zero so a partial run can never masquerade as a passed gate.
 
+#[cfg(any(feature = "bench-embed", feature = "bench-rerank"))]
 use crate::stats::Rng;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -197,6 +198,7 @@ impl Default for Report {
 
 /// Words sampled to build deterministic synthetic sentences (the embed cost of a
 /// static model is tokenizer+lookup+mean-pool, so realistic word shapes suffice).
+#[cfg(any(feature = "bench-embed", feature = "bench-rerank"))]
 const WORDS: &[&str] = &[
     "search",
     "engine",
@@ -230,6 +232,7 @@ const WORDS: &[&str] = &[
     "treaty",
 ];
 
+#[cfg(any(feature = "bench-embed", feature = "bench-rerank"))]
 pub(crate) fn synthetic_sentences(n: usize, rng: &mut Rng) -> Vec<String> {
     (0..n)
         .map(|_| {

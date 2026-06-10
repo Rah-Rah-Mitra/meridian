@@ -97,34 +97,39 @@ jobs:
           retention-days: 14
 
   bench-build:
-    name: build meridian-bench aarch64-musl
+    # GNU (not musl) deliberately: tract-linalg's SVE f16 kernels pass `-march=
+    # armv8.2-a+sve+fp16` — a GCC extension spelling that zig's clang rejects
+    # (clang wants `fullfp16`), so zigbuild cannot build tract today (ADR-02
+    # evidence). The bench binary is a dev tool for the glibc Pi (2.41 ≥ the
+    # runner toolchain's 2.39 floor); the PRODUCT image stays zigbuild+musl.
+    name: build meridian-bench aarch64-gnu
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-unknown-linux-musl
-      - uses: mlugg/setup-zig@v2
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-zigbuild
+          targets: aarch64-unknown-linux-gnu
+      - run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
       - uses: Swatinem/rust-cache@v2
         with:
-          key: bench-aarch64-musl
+          key: bench-aarch64-gnu
       # release-bench = release profile with thin LTO (divergence recorded in every
       # bench report header). Suites: all 8 incl. the Arti anon suite.
       - run: >
-          cargo zigbuild --profile release-bench
-          --target aarch64-unknown-linux-musl
+          cargo build --profile release-bench
+          --target aarch64-unknown-linux-gnu
           -p meridian-eval --features bench,bench-anon
           --bin meridian-bench
         env:
           RUSTFLAGS: -C target-cpu=cortex-a76
-      - run: ls -la target/aarch64-unknown-linux-musl/release-bench/meridian-bench
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
+      - run: ls -la target/aarch64-unknown-linux-gnu/release-bench/meridian-bench
       - uses: actions/upload-artifact@v4
         with:
-          name: meridian-bench-aarch64-musl
-          path: target/aarch64-unknown-linux-musl/release-bench/meridian-bench
+          name: meridian-bench-aarch64
+          path: target/aarch64-unknown-linux-gnu/release-bench/meridian-bench
           retention-days: 14
 
   # Phase-0 exit gate (SPEC §16): FROM scratch image <120MB, pushed to GHCR on main.

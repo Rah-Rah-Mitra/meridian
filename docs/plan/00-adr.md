@@ -67,7 +67,18 @@ inference runtime) recoverable. ONNX Runtime's aarch64 INT8 kernels use
 NEON+dotprod (sdot/udot) at runtime — the A76 qualifies (no i8mm/SVE, so no i8mm
 fast path on either plan).
 
-**Status: CHALLENGE → staged resolution proposed** (needs sign-off).
+**Status: CHALLENGE → staged resolution APPROVED** (operator sign-off 2026-06-10).
+
+**Post-sign-off evidence (Phase-0 bench build):** tract-linalg 0.23's build script
+compiles SVE f16 C kernels with `-march=armv8.2-a+sve+fp16` — a GCC extension
+spelling that zig's clang rejects (`fullfp16` is the clang name), and its SVE
+probe doesn't catch this because it probes `+sve` only. Consequence: **tract does
+not build under cargo-zigbuild/musl today.** The bench binary therefore builds on
+`aarch64-unknown-linux-gnu` with the GNU cross toolchain (a dev tool for the
+glibc-2.41 Pi — acceptable). For Phase 3, Plan A (tract in the musl product)
+requires either an upstream fix to tract-linalg's probe/flags (small,
+upstreamable) or a vendored build.rs patch; otherwise Plan B (gnu + distroless)
+absorbs this too. Logged as risk #2/#3 adjunct.
 
 ## ADR-03 — Extraction bake-off: dom_smoothie presumed winner
 
