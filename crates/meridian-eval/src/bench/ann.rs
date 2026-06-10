@@ -17,10 +17,29 @@ const QUERIES: usize = 1_000;
 const RECALL_QUERIES: usize = 100;
 const TOP_K: usize = 10;
 
-/// Deterministic unit vector for a key (xorshift + Box-Muller + L2 norm).
-fn unit_vector(key: u64) -> Vec<f32> {
-    let mut rng = Rng::new(key ^ 0xA11CE);
+/// Deterministic random unit vector (xorshift + Box-Muller + L2 norm).
+fn unit_gaussian(seed: u64) -> Vec<f32> {
+    let mut rng = Rng::new(seed ^ 0xA11CE);
     let mut v: Vec<f32> = (0..DIMS).map(|_| rng.next_gaussian()).collect();
+    let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-9);
+    v.iter_mut().for_each(|x| *x /= norm);
+    v
+}
+
+/// Clustered vector per the bench plan: a Gaussian MIXTURE, not uniform noise.
+/// Real embeddings live on low-dimensional manifolds; on uniformly random 256-d
+/// vectors all distances concentrate and HNSW recall is meaningless (measured:
+/// recall@10 = 0.012 on the first run — the methodology bug this fixes).
+/// centroid(key % 4096) + ~0.5 relative Gaussian noise → within-cluster cosine
+/// ≈ 0.89, cross-cluster ≈ 0, ~244 vectors/cluster at 1M.
+fn unit_vector(key: u64) -> Vec<f32> {
+    let centroid = unit_gaussian(0xC0DE_0000 + (key % 4096));
+    let mut rng = Rng::new(key.wrapping_mul(0x9E37_79B9) ^ 0x5EED);
+    let sigma = 0.5 / (DIMS as f32).sqrt();
+    let mut v: Vec<f32> = centroid
+        .iter()
+        .map(|c| c + sigma * rng.next_gaussian())
+        .collect();
     let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-9);
     v.iter_mut().for_each(|x| *x /= norm);
     v
