@@ -28,3 +28,9 @@ server:
   secret_key: "CHANGE_ME_AT_DEPLOY"   # pi-setup.sh generates a random one
   limiter: false                       # internal-only network; meridiand rate-limits
   image_proxy: false
+
+outgoing:
+  # SearXNG answers only when every engine returns or times out — this is the
+  # floor of metasearch latency. Keep it tight; slow engines yield partials.
+  request_timeout: 1.5
+  max_request_timeout: 3.0

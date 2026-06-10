@@ -114,7 +114,7 @@ Phase-1+ deps stay feature-scoped where possible.
 | Phase exit | Must hold |
 |---|---|
 | 0 | **DONE 2026-06-10 ✓** — image 55.4MB boots on Pi under hardening flags; bench report committed; this file re-issued |
-| 1 | disk <3GB (F) / <1GB (R); RSS <1.2GB; local p50 <50ms |
+| 1 | **DONE 2026-06-10 ✓** — 100k docs, disk 57.5MB, RSS 97.6MB, end-to-end p50 10.6ms ([exit note](phase-exits/p1.md)) |
 | 2 | vectors ≤600MB disk / ≤520MB RAM @1M (F, by extrapolation); p50 ≤80ms |
 | 3 | deep p50 ≤2.5s; rerank cache hit ≤100ms |
 | 4 | anon p50 ≤8s; Arti RSS delta ≤150MB; zero direct-lane egress under Arti-down |

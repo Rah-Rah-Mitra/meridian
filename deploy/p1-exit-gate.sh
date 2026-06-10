@@ -21,16 +21,21 @@ curl -s "$BASE/healthz" >/dev/null || { echo "server down"; exit 1; }
 
 echo "== search latency ($N local queries) =="
 TIMES=$(mktemp)
+# Status-aware sampling: only 200s count; pace below any rate limit in effect.
 head -n "$N" "$QUERIES" | while IFS= read -r q; do
-  curl -s -o /dev/null -w '%{time_total}\n' \
+  curl -s -o /dev/null -w '%{http_code} %{time_total}\n' \
     --get --data-urlencode "q=$q" --data-urlencode "scope=local" \
     "$BASE/v1/search"
+  sleep "${QUERY_GAP:-0}"
 done > "$TIMES"
 python3 - "$TIMES" <<'PY'
 import sys
-times = sorted(float(l) * 1000 for l in open(sys.argv[1]) if l.strip())
+rows = [l.split() for l in open(sys.argv[1]) if l.strip()]
+rejected = sum(1 for r in rows if r[0] != "200")
+times = sorted(float(r[1]) * 1000 for r in rows if r[0] == "200")
+print(f"non-200 responses: {rejected}")
 if not times:
-    print("no samples"); sys.exit(1)
+    print("no 200 samples — rate limit?"); sys.exit(1)
 def pct(p):
     return times[min(len(times) - 1, max(0, int(p / 100 * len(times)) - 1))]
 print(f"samples={len(times)} p50={pct(50):.1f}ms p95={pct(95):.1f}ms p99={pct(99):.1f}ms")
