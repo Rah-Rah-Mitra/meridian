@@ -55,6 +55,17 @@ Referer. Hedging allowed here alone — bounded by per-domain budgets.
 | Tor network abuse by us | Circuit cap (6), single attempt, no hedging/duplicate circuits, shared per-domain budgets |
 | .onion as an SSRF/abuse vector | `.onion` rejected on every lane unless `allow_onion` (off; separate flag) |
 
+### 3.4 Secret material at rest in RAM (`mlock` decision, SPEC §16 Phase 5)
+
+Secrets (`secrecy::SecretString`) are zeroized on drop and never serialized,
+logged, or surfaced in metrics. We deliberately do NOT `mlock` them: this Pi
+runs zram swap (compressed RAM, no disk swap device), so secret pages cannot
+reach persistent storage in the default deployment; `mlock` under memory
+pressure would instead fight the shed ladder (RSS tripwires) and risks
+OOM-killing the appliance to protect a token that rotates with one `.env` edit.
+Operators who add DISK swap should prefer encrypted swap (or none) — recorded
+in the operator manual (Phase 6).
+
 ## 4. What `anon` DOES and DOES NOT provide (SPEC §13.3, stated plainly)
 
 **DOES:** hide the operator's source IP from upstream engines/sites for that

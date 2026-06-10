@@ -61,6 +61,14 @@ The full, binding specification is [`docs/SPEC.md`](docs/SPEC.md) (v2.1).
 For development, `cargo check` / `cargo clippy` are sufficient locally; tests and builds run in
 GitHub Actions.
 
+## Data credits
+
+- Gazetteer place names: [GeoNames](https://www.geonames.org/) (`cities15000`),
+  licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) — fetched
+  and compiled offline by `deploy/fetch-gazetteer.sh`, never redistributed here.
+- Regional event analytics (operator opt-in): [GDELT v2](https://www.gdeltproject.org/)
+  15-minute event slices — stream-parsed into bounded counters, raw slices never stored.
+
 ## License
 
 Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.

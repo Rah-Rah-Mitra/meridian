@@ -176,6 +176,8 @@ jobs:
           mkdir -p deploy/stage
           cp target/aarch64-unknown-linux-musl/release/meridiand deploy/stage/
           bash deploy/fetch-models.sh deploy/stage/models
+      - name: gazetteer fst (GeoNames CC-BY; SPEC §6.1 ships it in the image)
+        run: bash deploy/fetch-gazetteer.sh deploy/stage/models
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - name: build image (arm64) and enforce the 120MB gate

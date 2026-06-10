@@ -283,6 +283,30 @@ the nightly domain-prior job — no hand-rolled implementation.
 
 **Status: CONFIRMED.**
 
+**Phase-5 amendments (as built, 2026-06-11).**
+- **Geo prefilter mechanics**: `h3_r7` AND `h3_r5` are INDEXED|FAST; k-rings
+  become `TermSetQuery` MUST clauses (fine res-7 sets ≤8km radius via res-6/7
+  disks; >30km switches to res-5 term sets directly — no child expansion, which
+  is what keeps sets ≤4096). Radius clamped to 250km.
+- **ANN under a geo/ts filter is dropped** (lexical-only fusion): usearch has
+  no filtered search, and post-filtering the dense list would smuggle
+  out-of-area docs into RRF. Constrained queries are exact-BM25; the dense path
+  returns when a filtered ANN (usearch v2 filter callbacks or rung-3 hnsw_rs)
+  lands. Recorded tradeoff, not a bug.
+- **PageRank substrate**: GDELT carries no hyperlink graph, so `domain_prior`
+  ranks the DOMAIN CO-OCCURRENCE graph (domains reporting the same event-root
+  class in the same 15-min slice, ≤30-domain cliques, weight-1 edges dropped,
+  200k-edge cap). Honest available signal; bounded; recomputed nightly from
+  scratch; max-normalized to [0,1]. The cold-start LTR weighs the feature 0 —
+  it feeds the future GBDT.
+- **Remote geocoder built but NOT wired into ingest** (gazetteer-first per
+  SPEC §3 covers it without network; the Nominatim fallback + redb/Moka cache
+  ships tested in `meridian-geo::geocode` awaiting an operator who wants it —
+  ingest wiring is a config flag away, deferred to keep ingest zero-network).
+- **GeoNames licensing**: cities15000 is CC-BY 4.0 — attribution added to the
+  README data-credits line; artifact built offline via
+  `deploy/fetch-gazetteer.sh`, never committed.
+
 ## ADR-11 — SearXNG sidecars (direct + Tor-proxied)
 
 **Decision.** As specced: two instances of the official `searxng/searxng` image
