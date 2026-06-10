@@ -26,11 +26,18 @@ allow = [
     "MPL-2.0",
     # Some transitive deps still declare the older Unicode license id
     "Unicode-DFS-2016",
+    # webpki-root-certs (reqwest/rustls CA store): CDLA-Permissive-2.0 — a
+    # permissive DATA license for the Mozilla CA bundle; no copyleft obligations.
+    # Recorded as a license election alongside MPL-2.0 (ADR-04/ADR-14).
+    "CDLA-Permissive-2.0",
 ]
-# NOTE: webpki-roots (MPL-2.0) may arrive with reqwest/rustls in Phase 1. Decision
-# deferred to the Phase-1 ADR: either allow MPL-2.0 (file-level copyleft, core stays
-# MIT/Apache-clean) or use rustls-native-certs + container CA bundle. Do not add it
-# here without recording that ADR.
+
+# model2vec-rs declares license-file (verbatim MIT text) instead of an SPDX
+# expression — clarify so the graph stays explicit.
+[[licenses.clarify]]
+crate = "model2vec-rs"
+expression = "MIT"
+license-files = []
 confidence-threshold = 0.8
 
 [bans]
