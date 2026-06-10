@@ -12,6 +12,7 @@ publish.workspace = true
 [dependencies]
 meridian-common.workspace = true
 meridian-privacy.workspace = true
+reqwest.workspace = true
 thiserror.workspace = true
 
 [lints]

@@ -27,7 +27,7 @@ libc = "0.2"
 axum = "0.8"
 tower = { version = "0.5", features = ["timeout", "limit", "load-shed", "util"] }
 tower-http = { version = "0.6", features = ["compression-gzip", "limit"] }
-reqwest = { version = "0.13", default-features = false, features = ["rustls-tls", "json", "stream", "gzip"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "stream", "gzip"] }
 figment = { version = "0.10", features = ["toml", "env"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "registry"] }
