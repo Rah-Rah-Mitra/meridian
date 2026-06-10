@@ -7,6 +7,8 @@ members = ["crates/*", "bins/meridiand"]
 
 [workspace.package]
 version = "0.0.1"
+# Crates are unpublished until v0.1.0; release flips this with real version reqs
+publish = false
 edition = "2024"
 # tantivy 0.26 requires 1.86 (verified 2026-06-10); keep in lockstep with the heaviest dep
 rust-version = "1.86"
