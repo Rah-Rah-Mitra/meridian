@@ -5,12 +5,14 @@
 # Build context = deploy/stage-deep assembled by CI:
 #   stage-deep/meridiand               (aarch64-gnu binary, --features rerank-ort)
 #   stage-deep/models/...              (incl. ms-marco-minilm-l6-v2 INT8 CE)
-#   stage-deep/libonnxruntime*.so*     (copied next to the binary by ort copy-dylibs)
+#
+# NOTE: ort statically links ONNX Runtime (libonnxruntime.a), so the binary is
+# self-contained — no shared lib or LD_LIBRARY_PATH needed. The distroless-cc
+# base still provides glibc ≥2.39 + libstdc++ for the static C++ runtime deps.
 
 FROM gcr.io/distroless/cc-debian13:nonroot
 
 COPY stage-deep/ /app/
 ENV MERIDIAN_MODELS__DIR=/app/models
-ENV LD_LIBRARY_PATH=/app
 WORKDIR /app
 ENTRYPOINT ["/app/meridiand"]

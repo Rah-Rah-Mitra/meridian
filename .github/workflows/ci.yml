@@ -245,8 +245,7 @@ jobs:
         run: |
           mkdir -p deploy/stage-deep
           cp target/aarch64-unknown-linux-gnu/release/meridiand deploy/stage-deep/
-          # ort copy-dylibs places libonnxruntime next to the binary
-          find target/aarch64-unknown-linux-gnu/release -maxdepth 1 -name 'libonnxruntime*' -exec cp {} deploy/stage-deep/ \; || true
+          # ort statically links ONNX Runtime — no .so to copy.
           bash deploy/fetch-models.sh deploy/stage-deep/models
       - run: ls -la deploy/stage-deep
       - uses: actions/upload-artifact@v4
