@@ -11,7 +11,7 @@ pub mod rrf;
 
 // Re-exports so meridian-api consumes lane/fetch types through its sanctioned
 // dependency (api → query) instead of growing direct edges (SPEC §5 rules).
-pub use meridian_egress::{Lane, LaneStatus};
+pub use meridian_egress::{Lane, LaneRegistry, LaneStatus};
 pub use meridian_fetch::{FetchError, Fetcher};
 
 /// Search execution mode (SPEC §10). `Deep` adds the INT8 cross-encoder rerank stage.

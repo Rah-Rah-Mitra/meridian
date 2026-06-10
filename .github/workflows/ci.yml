@@ -133,17 +133,19 @@ jobs:
           cargo build --profile release-bench
           --target aarch64-unknown-linux-gnu
           -p meridian-eval --features bench,bench-anon
-          --bin meridian-bench
+          --bin meridian-bench --bin meridian-eval
         env:
           RUSTFLAGS: -C target-cpu=cortex-a76
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
           CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
-      - run: ls -la target/aarch64-unknown-linux-gnu/release-bench/meridian-bench
+      - run: ls -la target/aarch64-unknown-linux-gnu/release-bench/meridian-bench target/aarch64-unknown-linux-gnu/release-bench/meridian-eval
       - uses: actions/upload-artifact@v4
         with:
           name: meridian-bench-aarch64
-          path: target/aarch64-unknown-linux-gnu/release-bench/meridian-bench
+          path: |
+            target/aarch64-unknown-linux-gnu/release-bench/meridian-bench
+            target/aarch64-unknown-linux-gnu/release-bench/meridian-eval
           retention-days: 14
 
   # Phase-0 exit gate (SPEC §16): FROM scratch image <120MB, pushed to GHCR on main.

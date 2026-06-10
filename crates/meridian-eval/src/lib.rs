@@ -6,5 +6,7 @@
 //! and the /proc-based resource probes.
 
 pub mod bench;
+pub mod metrics;
 pub mod probe;
+pub mod qrels;
 pub mod stats;
