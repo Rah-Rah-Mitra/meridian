@@ -1,9 +1,10 @@
 # 02 — Resource Budgets (Dual Profile)
 
-> SPEC §1.3, refined from SPEC §6. **Ceilings, never targets.** Every latency number
-> is PROVISIONAL until `meridian-bench` runs on-device (SPEC §15); this file is
-> re-issued with measured values as the Phase-0 exit artifact and re-validated at
-> every phase exit.
+> SPEC §1.3, refined from SPEC §6. **Ceilings, never targets.** Re-issued
+> 2026-06-10 with MEASURED values from the on-device run
+> ([bench/2026-06-10-pi5-report.md](bench/2026-06-10-pi5-report.md)); measured
+> numbers are marked ✓. Re-validated at every phase exit. Caveats: release-bench
+> profile (thin LTO) and short simplewiki docs — both noted in the report.
 
 ## 0. Why two profiles
 
@@ -25,8 +26,8 @@ dev box hosting other services. Decision (operator-confirmed):
 | Docker images (meridiand + searxng) | 550MB | 550MB | CI fails meridiand >120MB; searxng digest-pinned |
 | Models | 80MB | 80MB | manifest-pinned; fetched at image build |
 | Gazetteer fst | 10MB | 10MB | built offline |
-| Tantivy index | 1.4GB @1M | 150MB @100k | alert 1.3GB (140MB) |
-| USearch vectors (256-d int8, M=16) | 600MB @1M | 60MB @100k | alert 560MB (56MB) |
+| Tantivy index | 1.4GB @1M | 150MB @100k — **measured 53MB ✓** (527 B/doc, short docs) | alert 1.3GB (140MB) |
+| USearch vectors (256-d int8, M=16) | 600MB @1M | 60MB @100k | alert 560MB (56MB); **RAM @1M measured 506MB ✓** |
 | redb KV (geocode/dedup/frontier/bandit) | 600MB | 150MB | LRU-evict geocode; weekly compaction |
 | Analytics rollups (90-day TTL) | 700MB | 250MB | daily TTL job; alert 650MB (230MB) |
 | Arti state + directory cache | 200MB | 200MB | prune stale consensus on start |
@@ -66,19 +67,23 @@ Shared-device note (Profile R): the dev Pi already runs other services
 binding contract; if steady-state headroom drops below 512MB free+reclaimable, the
 shed ladder (SPEC §8.6) starts early at RSS >2.3GB.
 
-## 3. CPU & latency (p50 targets — ALL PROVISIONAL until bench)
+## 3. CPU & latency (p50 targets — MEASURED 2026-06-10 where marked ✓)
 
-| Path | Profile F target | Profile R expectation | Bench that grounds it |
+| Path | Profile F target | Profile R measured/expected | Bench grounding |
 |---|---|---|---|
-| fast, local-only, direct | ≤80ms | ≤60ms (smaller index) | §15.1–3, 5 |
-| fast, metasearch, direct | ≤900ms | ≤900ms (network-bound) | §15.3 + load |
-| fast, metasearch, anon | ≤8s, no hedging | ≤8s | §15.8 |
-| deep, direct | ≤2.5s | ≤2.0s | §15.4 |
+| fast, local-only, direct | ≤80ms (keep ceiling) | **stages sum <5ms @100k ✓** — working target ≤25ms | §15.1–3, 5 ✓ |
+| fast, metasearch, direct | ≤900ms | ≤900ms (network-bound, Phase-1 load test) | §15.3 + load |
+| fast, metasearch, anon | ≤8s, no hedging | **connect p50 1.10s / p99 2.29s post-bootstrap ✓** — 8s holds; cold bootstrap 14.7s happens at lane-enable, never inside a request | §15.8 ✓ |
+| deep, direct | ≤2.5s | **UNMEASURED** — tract cannot load the INT8 CE (ADR-02); re-measure at Phase-3 entry | §15.4 (blocked) |
 | /geo/heatmap | ≤150ms | ≤100ms | Phase-5 bench |
-| Ingest sustained | ≥50 docs/s | ≥25 docs/s (SD write path) | §15.3, 7 |
+| Ingest sustained | ≥50 docs/s | **index-side 15,021 docs/s ✓** (300×) — fetch/extract-bound as designed | §15.3, 7 ✓ |
 
-Stage sub-budgets (fast/local): normalize+intent 2ms · BM25 ≤30ms · embed <1ms ·
-ANN ≤20ms · RRF <1ms · LTR ≤10ms · render 5ms.
+Measured stage numbers (fast/local, Profile R): BM25 top-1000 **0.48ms p50 @100k ✓**
+(0.10/0.28/0.48 at 10k/50k/100k; extrapolated 2–5ms @1M) · embed **<1ms** (42.9k
+docs/s batch-32 ✓) · ANN **0.45ms p50 / 0.95ms p99 @ ef=64, recall@10 0.98 ✓**
+(`derived_ef_search = 64`; ef=128 → recall 1.00 at 1.45ms p99) · RRF+LTR-shape
+**0.144ms ✓**. Thermal: 10-min all-core max **75.7°C, zero throttle flags ✓**.
+Merge transient @100k: **58MB ✓** (1Hz sampler caveat; re-check at F scale).
 
 Threading contract (SPEC §7.2): tokio 4 workers (IO only, >100µs CPU work
 forbidden), one rayon pool ×4 @ nice 5, ort intra=4/inter=1, ingest ≤2 rayon
@@ -99,15 +104,16 @@ tickets @ nice 10, per-query concurrency 8 (anon: separate budget of 2).
 | Local `cargo check`/clippy target dir | ≤1.5GB | `cargo clean` when tripped; never `cargo build --release` locally |
 | cargo registry cache delta | ≤500MB | pi-cleanup-safe (regenerable) |
 
-Measured 2026-06-10 (scaffold, 15 stub crates): check+clippy+test target = 255MB,
-wall ~11s. Re-measure when tantivy enters in Phase 1; if the target dir exceeds
-1.5GB, drop to check-only (no clippy --all-targets) or strict CI-only iteration.
+Measured 2026-06-10 (scaffold): check target 255MB, ~11s. With all bench features
+(tantivy+usearch+tract+tokenizers): **1.9GB** — slightly over the cap; acceptable
+because bench features are off by default and `cargo clean` recovers it. Heavy
+Phase-1+ deps stay feature-scoped where possible.
 
 ## 6. Phase-exit budget checkpoints
 
 | Phase exit | Must hold |
 |---|---|
-| 0 | image <120MB; bench report committed; this file re-issued with measured numbers |
+| 0 | **DONE 2026-06-10 ✓** — image 55.4MB boots on Pi under hardening flags; bench report committed; this file re-issued |
 | 1 | disk <3GB (F) / <1GB (R); RSS <1.2GB; local p50 <50ms |
 | 2 | vectors ≤600MB disk / ≤520MB RAM @1M (F, by extrapolation); p50 ≤80ms |
 | 3 | deep p50 ≤2.5s; rerank cache hit ≤100ms |

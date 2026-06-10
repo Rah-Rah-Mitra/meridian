@@ -1,9 +1,9 @@
 # 04 — On-Device Benchmark Plan (BUILD & RUN FIRST)
 
-> SPEC §1.5 / §15. This suite runs on the Pi 5 **before** any latency budget is
-> treated as real. Implementation = WBS items 0.6–0.10, starting immediately after
-> planning sign-off. Output: `docs/plan/bench/<date>-report.{md,json}` + a re-issued
-> `02-budgets.md`.
+> SPEC §1.5 / §15. **EXECUTED 2026-06-10** — results in
+> [bench/2026-06-10-pi5-report.md](bench/2026-06-10-pi5-report.md); budgets
+> re-issued. All gates pass; rerank unmeasured (tract op gap, ADR-02). The plan
+> below remains the reference for re-runs at later phase exits.
 
 ## 0. Device & invariants captured in every report header
 

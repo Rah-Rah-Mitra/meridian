@@ -1,0 +1,148 @@
+{
+  "version": "0.0.1",
+  "kernel": "6.18.33+rpt-rpi-2712",
+  "page_size": 16384,
+  "nproc": 4,
+  "compiled_suites": [
+    "fusion",
+    "embed",
+    "thermal",
+    "ann",
+    "lexical",
+    "disk",
+    "rerank",
+    "anon"
+  ],
+  "profile_note": "release-bench (thin LTO, target-cpu=cortex-a76); product profile is fat LTO — gates re-validated under it at Phase-1 exit",
+  "suites": [
+    {
+      "name": "fusion",
+      "gate": "RRF(1000+200+3×20) + linear LTR top-100 < 2ms p50",
+      "gate_passed": true,
+      "skipped": false,
+      "metrics": {
+        "iterations": 1000,
+        "p50_ms": 0.144241,
+        "p99_ms": 0.18201900000000001
+      },
+      "notes": [],
+      "duration_ms": 146.64558
+    },
+    {
+      "name": "embed",
+      "gate": "embed throughput > 2000 docs/s (batch 32)",
+      "gate_passed": true,
+      "skipped": false,
+      "metrics": {
+        "dimensions": 256,
+        "docs_per_sec_batch_1": 18311.0,
+        "docs_per_sec_batch_256": 47994.0,
+        "docs_per_sec_batch_32": 42882.0
+      },
+      "notes": [],
+      "duration_ms": 1372.8571940000002
+    },
+    {
+      "name": "rerank",
+      "gate": null,
+      "gate_passed": null,
+      "skipped": false,
+      "metrics": {},
+      "notes": [
+        "tract failed to load/optimize INT8 CE at batch 1: Failed analyse for node #379 \"/bert/Unsqueeze\" Unsqueeze13",
+        "tract failed to load/optimize INT8 CE at batch 4: Failed analyse for node #379 \"/bert/Unsqueeze\" Unsqueeze13",
+        "tract failed to load/optimize INT8 CE at batch 8: Failed analyse for node #379 \"/bert/Unsqueeze\" Unsqueeze13"
+      ],
+      "duration_ms": 371.93568
+    },
+    {
+      "name": "ann",
+      "gate": "p99 <40ms @ ef=64 AND recall@10 ≥0.95 AND 16K mmap view ok",
+      "gate_passed": false,
+      "skipped": false,
+      "metrics": {
+        "build_rss_delta_mb": 440,
+        "build_vectors_per_sec": 931.0,
+        "index_size": 1000000,
+        "memory_usage_mb": 506,
+        "mmap_view_smoke": "pass",
+        "recall_at_10": 0.012,
+        "search_p50_ms": 1.313134,
+        "search_p99_ms": 1.799098,
+        "vectors": 1000000
+      },
+      "notes": [],
+      "duration_ms": 1096400.478399
+    },
+    {
+      "name": "lexical",
+      "gate": "BM25 top-1000 p50 < 30ms at max indexed size",
+      "gate_passed": true,
+      "skipped": false,
+      "metrics": {
+        "bm25_p50_ms_at_10000": 0.099722,
+        "bm25_p50_ms_at_100000": 0.480057,
+        "bm25_p50_ms_at_50000": 0.282279,
+        "bm25_p99_ms_at_10000": 0.42679700000000004,
+        "bm25_p99_ms_at_100000": 2.53812,
+        "bm25_p99_ms_at_50000": 1.304245,
+        "bytes_per_doc": 527.0,
+        "corpus_docs": 100000,
+        "docs_per_sec_ingest": 15021.0,
+        "index_bytes_final": 52664555
+      },
+      "notes": [],
+      "duration_ms": 16678.206691
+    },
+    {
+      "name": "disk",
+      "gate": "merge transient ≤ 0.75GB (Profile R scratch floor)",
+      "gate_passed": true,
+      "skipped": false,
+      "metrics": {
+        "index_bytes_final": 52664555,
+        "index_bytes_pre_merge": 58503822,
+        "merge_transient_bytes": 58564608,
+        "peak_used_bytes": 111247360,
+        "settled_used_bytes": 52682752
+      },
+      "notes": [
+        "sampler is 1Hz — short merges can under-report the true peak"
+      ],
+      "duration_ms": 16678.206691
+    },
+    {
+      "name": "thermal",
+      "gate": "no throttle flags and max temp < 80°C",
+      "gate_passed": true,
+      "skipped": false,
+      "metrics": {
+        "duration_secs": 600,
+        "max_temp_c": 75.7,
+        "throttle_flags_union": "0x0",
+        "throughput_drift_pct": 0.0
+      },
+      "notes": [],
+      "duration_ms": 600349.700794
+    },
+    {
+      "name": "anon",
+      "gate": null,
+      "gate_passed": null,
+      "skipped": false,
+      "metrics": {
+        "arti_rss_delta_mb": 55,
+        "bootstrap_ms": 14731.0,
+        "connect_p50_ms": 1097.0,
+        "connect_p99_ms": 2289.0,
+        "isolated_connect_failures": 0,
+        "isolated_connects_attempted": 10,
+        "state_plus_cache_mb": 43
+      },
+      "notes": [
+        "informational — grounds anon deadline / circuit cap / RSS budget"
+      ],
+      "duration_ms": 27334.670522
+    }
+  ]
+}
