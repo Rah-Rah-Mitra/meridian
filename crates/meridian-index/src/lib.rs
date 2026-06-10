@@ -1,9 +1,11 @@
 //! Tantivy lexical index (SPEC §5): schema, IndexWriter management, merge policy,
 //! snippets, fast fields, H3 range pruning — and the `SegmentStore` scale-out seam.
 //!
-//! Status: Phase-0 scaffold. Tantivy lands in Phase 1; only the v2 seam is defined
-//! now because SPEC §18 makes "object storage = implement one trait" a definition
-//! of done.
+//! Status: Phase 1 — the tantivy-backed [`lexical::LexicalIndex`] is live. The
+//! `SegmentStore` seam below stays the v2 contract (SPEC §18: object storage =
+//! implement one trait); in v1 tantivy owns segment lifecycle locally.
+
+pub mod lexical;
 
 use meridian_common::MeridianError;
 

@@ -11,6 +11,10 @@ publish.workspace = true
 
 [dependencies]
 meridian-common.workspace = true
+blake3.workspace = true
+tantivy.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
 
 [lints]
 workspace = true
