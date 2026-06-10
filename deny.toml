@@ -31,6 +31,7 @@ allow = [
     # Recorded as a license election alongside MPL-2.0 (ADR-04/ADR-14).
     "CDLA-Permissive-2.0",
 ]
+confidence-threshold = 0.8
 
 # model2vec-rs declares license-file (verbatim MIT text) instead of an SPDX
 # expression — clarify so the graph stays explicit.
@@ -38,7 +39,6 @@ allow = [
 crate = "model2vec-rs"
 expression = "MIT"
 license-files = []
-confidence-threshold = 0.8
 
 [bans]
 multiple-versions = "warn"
