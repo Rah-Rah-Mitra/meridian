@@ -105,6 +105,7 @@ impl Ingestor {
     /// commit — the only sane write pattern on SD-card storage (Profile R).
     pub fn ingest_batch(&self, docs: &[IngestText]) -> Result<IngestStats, IngestError> {
         let mut stats = IngestStats::default();
+        let mut accepted: Vec<(u64, String)> = Vec::new(); // (url_key, text) → embed
         let wtx = self
             .dedup
             .begin_write()
@@ -134,17 +135,44 @@ impl Ingestor {
                     .insert(key, ts)
                     .map_err(|e| IngestError::Dedup(e.to_string()))?;
 
+                let index_doc = self.build_doc(doc, text, ts);
+                accepted.push((index_doc.url_key, text.to_owned()));
                 self.index
-                    .add(&self.build_doc(doc, text, ts))
+                    .add(&index_doc)
                     .map_err(|e| IngestError::Index(e.to_string()))?;
                 stats.accepted += 1;
             }
         }
         wtx.commit()
             .map_err(|e| IngestError::Dedup(e.to_string()))?;
+
+        // Dense path (SPEC §3): batch-embed accepted texts → vector store under
+        // the same url_key identity as the lexical doc.
+        if !accepted.is_empty() {
+            let texts: Vec<String> = accepted.iter().map(|(_, t)| t.clone()).collect();
+            let embeddings = self.embedder.embed_batch(&texts);
+            for ((key, _), vector) in accepted.iter().zip(embeddings.iter()) {
+                self.vectors
+                    .add(*key, vector)
+                    .map_err(|e| IngestError::Vector(e.to_string()))?;
+            }
+        }
+
         self.index
             .commit()
             .map_err(|e| IngestError::Index(e.to_string()))?;
+
+        // Coarse persist cadence (full-file save; SD-friendly). A crash loses
+        // vectors since the last persist — lexical docs survive, so the worst
+        // case is reduced dense recall until re-ingest (exit-note item).
+        let since = self
+            .docs_since_persist
+            .fetch_add(stats.accepted, Ordering::Relaxed)
+            + stats.accepted;
+        if since >= self.persist_every {
+            self.docs_since_persist.store(0, Ordering::Relaxed);
+            self.flush_vectors()?;
+        }
         Ok(stats)
     }
 
@@ -269,6 +297,14 @@ mod tests {
 
         let hits = ingestor.index.search("meridian metre", 10).unwrap();
         assert_eq!(hits.len(), 1);
+        // Dense path actually ran: one vector under the doc's url_key, and the
+        // stub embedding of the same text retrieves it.
+        assert_eq!(ingestor.vectors.len(), 1);
+        let qv = ingestor
+            .embedder
+            .embed_query("meridian arc measurement metre");
+        let ann = ingestor.vectors.search(&qv, 1).unwrap();
+        assert_eq!(ann[0].0, hits[0].url_key);
         assert!(
             hits[0].snippet.contains("meridian arc"),
             "whitespace-normalized snippet"
