@@ -110,6 +110,16 @@ impl VectorStore {
         Ok(())
     }
 
+    /// Drop a vector (SPEC §10 `/v1/forget`). Missing keys are a no-op —
+    /// deletion must be idempotent.
+    pub fn remove(&self, key: u64) -> Result<bool, VectorError> {
+        if !self.index.contains(key) {
+            return Ok(false);
+        }
+        self.index.remove(key).map_err(err)?;
+        Ok(true)
+    }
+
     pub fn len(&self) -> usize {
         self.index.size()
     }

@@ -61,6 +61,13 @@ arti-client = { version = "0.43", default-features = false }
 # Runtime type names only (PreferredRuntime); features unify with arti-client's
 tor-rtcompat = { version = "0.43", default-features = false }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
+# --- Phase 5: geo + analytics (versions verified 2026-06-11, ADR-10/15) ---
+h3o = "0.10"
+fst = "0.4"
+petgraph = "0.8"
+# GDELT slices are .CSV.zip; deflate only — no encryption/zstd variants needed
+zip = { version = "8", default-features = false, features = ["deflate-flate2"] }
+md-5 = "0.11"
 
 # Internal crates
 meridian-common = { path = "crates/meridian-common" }
@@ -85,6 +92,12 @@ unsafe_code = "warn"
 [workspace.lints.clippy]
 # SPEC §8.5 zero-copy discipline
 redundant_clone = "deny"
+
+# Dev-on-target reality (ADR-D1): full debuginfo for the whole workspace
+# (arti + tantivy + analytics) exceeds the SD card. Line tables keep file:line
+# in backtraces at a fraction of the size; CI is unaffected (its own disks).
+[profile.dev]
+debug = "line-tables-only"
 
 # SPEC §7.1 — maximum performance-per-watt release profile
 [profile.release]
