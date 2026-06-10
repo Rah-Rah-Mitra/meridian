@@ -1,0 +1,37 @@
+# Region-lanes overlay (SPEC §12.3) — host networking so meridiand can bind
+# operator WireGuard interface source IPs (`reqwest local_address` + the
+# operator-applied `ip rule` policy routing from wg-lane-templates/).
+#
+# Usage:
+#   docker compose -f compose.yaml -f compose.regions.yaml up -d
+#
+# Documented tradeoffs (SPEC §4: "documented tradeoff, never required"):
+# - meridiand leaves the bridge networks; searxng is reached via a
+#   localhost-published port instead of the internal `back` network.
+# - INCOMPATIBLE with the anon profile in v0.x: searxng-anon's only route to
+#   the SOCKS listener is the internal `back` network, which host networking
+#   removes. Run anon OR regions per deployment, not both.
+# - The API binds 127.0.0.1 on the HOST. Do not widen without auth + TLS
+#   (SPEC §13.4).
+#
+# Region definitions come from the operator's config, e.g. in .env:
+#   MERIDIAN_LANES__REGIONS__EU_WEST__SOURCE_IP=10.77.1.2
+#   MERIDIAN_LANES__REGIONS__EU_WEST__EXPECTED_IP=203.0.113.7
+# (env-style ids must be snake_case; use meridian.toml for anything richer)
+
+services:
+  meridiand:
+    network_mode: host
+    networks: !reset []
+    ports: !reset []
+    environment:
+      MERIDIAN_SERVER__BIND: 127.0.0.1
+      MERIDIAN_SEARX__URL: http://127.0.0.1:8888
+      MERIDIAN_LANES__REGIONS_ENABLED: "true"
+      # anon stays off under host networking (see header)
+      MERIDIAN_ANON: "false"
+
+  searxng:
+    ports:
+      # Loopback-only publish so host-network meridiand can reach the sidecar
+      - "127.0.0.1:8888:8080"

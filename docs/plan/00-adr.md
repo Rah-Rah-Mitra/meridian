@@ -161,6 +161,28 @@ depending on the `arti` binary crate's `run_proxy`, which is exposed only behind
 
 **Status: CONFIRMED** (embedded), with the SOCKS implementation choice recorded.
 
+**Phase-4 amendments (as built, 2026-06-11).**
+- **In-core anon fetches also ride the SOCKS front-end** (a fresh RFC1929
+  username per logical request → its own `IsolationToken`), rather than a second
+  raw `connect_with_prefs` HTTP stack. One egress path, one destination-policy
+  chokepoint, and reqwest's TLS/redirect/timeout handling stays uniform across
+  lanes. The spec's per-request isolation requirement is met via the
+  username→token map (`anon/arti.rs::TokenMap`, unit-tested).
+- **searxng-anon gets per-CONNECTION isolation, not per-query.** SearXNG's
+  outgoing proxy URL is static — it cannot vary RFC1929 credentials per request —
+  so no-auth connections each get a fresh token. Strictly stronger than the
+  `arti` proxy default (which lumps all no-auth clients of one listener into one
+  isolation group), but weaker than true per-query isolation: httpx connection
+  pooling can carry several queries' engine hits over one tunnel. Recorded in
+  the threat model; revisit if SearXNG grows per-request proxy auth.
+- **Anon lane is compiled in unconditionally** (config-gated, not
+  feature-gated): pure-Rust + bundled sqlite builds fine for musl, unlike ort
+  (ADR-02). `rustls`'s provider is installed by the lane (`ring`).
+- **Region verification**: implemented as exact/prefix `expected_ip` match on an
+  operator-configured IP-echo endpoint, re-checked every 30 min; an unverified
+  or mismatched lane REFUSES traffic (not merely "Degraded-but-serving").
+  GeoLite2 region-name matching is deferred to Phase 5 (geo crate brings mmdb).
+
 ## ADR-05 — Tantivy as the lexical index
 
 **Decision.** tantivy 0.26.x, mmap directory, BM25 + block-WAND, u64 fast fields,

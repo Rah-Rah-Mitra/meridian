@@ -50,7 +50,7 @@ Referer. Hedging allowed here alone — bounded by per-domain budgets.
 |---|---|
 | **Fail-open**: Arti down → request silently uses direct | Type-level `AnonClient` with no direct transport; planner returns degraded error; injection test asserts zero direct egress (P4 gate) |
 | DNS leak | `socks5h` end-to-end; searxng-anon on an internal-only network whose sole egress is the Arti SOCKS port (topology fail-closed, already in compose.yaml) |
-| Cross-request linkability | Per-request IsolationToken / RFC1929 SOCKS-username isolation; no circuit reuse across logical queries |
+| Cross-request linkability | Per-request IsolationToken / RFC1929 SOCKS-username isolation; no circuit reuse across logical queries. **As built (P4):** full per-request isolation on the in-core path (fresh username per request); the searxng-anon path gets per-CONNECTION isolation (SearXNG's proxy URL is static — it cannot vary credentials per query), so httpx connection pooling can carry several queries' engine hits over one tunnel. Stronger than arti's no-auth proxy default; not query-perfect. |
 | Cache/state leakage de-anonymizes behavior | Anon results only in ephemeral 32MB TTL-5m cache; never warm shared query cache, LTR priors, or bandit arms |
 | Tor network abuse by us | Circuit cap (6), single attempt, no hedging/duplicate circuits, shared per-domain budgets |
 | .onion as an SSRF/abuse vector | `.onion` rejected on every lane unless `allow_onion` (off; separate flag) |

@@ -32,6 +32,14 @@ services:
       MERIDIAN_SEARX__URL: http://searxng:8080
       # Operator sets this in .env (never committed); compose interpolates
       MERIDIAN_BEARER_TOKEN: ${MERIDIAN_BEARER_TOKEN:?set MERIDIAN_BEARER_TOKEN in .env}
+      # --- anon profile (SPEC §12.4) ---------------------------------------
+      # Compose profiles can't vary a service's env, so the anon switches ride
+      # .env: set MERIDIAN_ANON=true there AND start with `--profile anon`.
+      # The SOCKS listener binds the container's interfaces; it is reachable
+      # ONLY on the internal `back` network (never published to the host).
+      MERIDIAN_LANES__ANON_ENABLED: ${MERIDIAN_ANON:-false}
+      MERIDIAN_LANES__ANON__SOCKS_LISTEN: ${MERIDIAN_ANON_SOCKS_LISTEN:-0.0.0.0:9150}
+      MERIDIAN_SEARX__ANON_URL: ${MERIDIAN_ANON_SEARX_URL:-http://searxng-anon:8080}
     read_only: true
     security_opt:
       - no-new-privileges:true
