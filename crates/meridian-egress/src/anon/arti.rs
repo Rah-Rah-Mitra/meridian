@@ -108,9 +108,14 @@ pub fn build_client(
     std::fs::create_dir_all(&state_dir).map_err(|e| format!("arti state dir: {e}"))?;
     std::fs::create_dir_all(&cache_dir).map_err(|e| format!("arti cache dir: {e}"))?;
 
-    let config = TorClientConfigBuilder::from_directories(state_dir, cache_dir)
-        .build()
-        .map_err(|e| format!("arti config: {e}"))?;
+    let mut builder = TorClientConfigBuilder::from_directories(state_dir, cache_dir);
+    // fs-mistrust guards Tor state against OTHER LOCAL USERS — but it needs the
+    // passwd/group database, which the scratch image doesn't have (and can't:
+    // FROM scratch). The state root is the appliance's private /data volume in
+    // a single-tenant container, so local-user mistrust has nothing to protect
+    // here; threat model §3.3 covers the host-side expectations.
+    builder.storage().permissions().dangerously_trust_everyone();
+    let config = builder.build().map_err(|e| format!("arti config: {e}"))?;
 
     // OnDemand: a use before bootstrap completes waits (bounded by the caller's
     // deadline) rather than failing spuriously; the lane still gates requests on
