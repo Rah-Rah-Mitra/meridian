@@ -131,17 +131,25 @@ impl VectorStore {
 mod tests {
     use super::*;
 
-    fn unit(seed: u64, dims: usize) -> Vec<f32> {
-        // Deterministic pseudo-random unit vector.
+    const DIMS: usize = 512;
+    const N: u64 = 500;
+
+    /// Well-separated unit vector: a dominant component at a per-key dimension
+    /// (unique for keys < DIMS) plus small deterministic noise. Separation is
+    /// robust to int8 quantization and the portable (non-SIMD) kernels — the
+    /// property under test is store/search/persist correctness, not ANN recall
+    /// on hard data (that is the §15.2 bench's job).
+    fn unit(seed: u64) -> Vec<f32> {
         let mut x = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).max(1);
-        let mut v: Vec<f32> = (0..dims)
-            .map(|_| {
-                x ^= x >> 12;
-                x ^= x << 25;
-                x ^= x >> 27;
-                ((x.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 40) as f32 / (1u64 << 24) as f32) - 0.5
-            })
-            .collect();
+        let mut v = vec![0.0f32; DIMS];
+        v[(seed as usize) % DIMS] = 4.0;
+        for slot in v.iter_mut() {
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            *slot += ((x.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 40) as f32 / (1u64 << 24) as f32)
+                * 0.1;
+        }
         let n = v.iter().map(|a| a * a).sum::<f32>().sqrt().max(1e-9);
         v.iter_mut().for_each(|a| *a /= n);
         v
@@ -158,24 +166,24 @@ mod tests {
                 .subsec_nanos()
         ));
         let cfg = VectorConfig::default();
-        let store = VectorStore::open_or_create(&dir, 64, &cfg).unwrap();
-        for key in 0..500u64 {
-            store.add(key, &unit(key, 64)).unwrap();
+        let store = VectorStore::open_or_create(&dir, DIMS, &cfg).unwrap();
+        for key in 0..N {
+            store.add(key, &unit(key)).unwrap();
         }
-        // Self-retrieval: the vector's own key must be its nearest neighbor.
-        let hits = store.search(&unit(42, 64), 5).unwrap();
+        // Self-retrieval: the vector's own key is its nearest neighbor.
+        let hits = store.search(&unit(42), 5).unwrap();
         assert_eq!(hits[0].0, 42, "{hits:?}");
         assert!(hits[0].1 > 0.9, "self-sim should be ~1: {}", hits[0].1);
 
         // Replacement keeps one vector per key.
-        store.add(42, &unit(9999, 64)).unwrap();
-        assert_eq!(store.len(), 500);
+        store.add(42, &unit(9999)).unwrap();
+        assert_eq!(store.len(), N as usize);
 
         store.persist().unwrap();
         drop(store);
-        let reopened = VectorStore::open_or_create(&dir, 64, &cfg).unwrap();
-        assert_eq!(reopened.len(), 500);
-        let hits = reopened.search(&unit(7, 64), 3).unwrap();
+        let reopened = VectorStore::open_or_create(&dir, DIMS, &cfg).unwrap();
+        assert_eq!(reopened.len(), N as usize);
+        let hits = reopened.search(&unit(7), 3).unwrap();
         assert_eq!(hits[0].0, 7);
         let _ = std::fs::remove_dir_all(dir);
     }
