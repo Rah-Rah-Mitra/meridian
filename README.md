@@ -4,12 +4,14 @@
 hybrid index (BM25 + dense vectors) + geo analytics, sized for a Raspberry Pi 5 and scaling to
 edge servers without redesign.
 
-> Status: **Phase 3 complete** — the ranking stack is in: cold-start LTR
-> re-score, heuristic intent classification, ε-greedy bandit engine routing, and
-> opt-in deep cross-encoder rerank (INT8 MiniLM via ort, deep p50 204ms on the
-> gnu image; the default musl image degrades mode=deep cleanly). Fast hybrid
-> search, metasearch, caches, and shedding all live. Phase 4 (anon + region
-> egress lanes) is next. Planning artifacts: [`docs/plan/`](docs/plan/).
+> Status: **Phase 4 complete** — all three egress lanes are live. `anon` runs
+> Tor via embedded Arti behind Meridian's own SOCKS5 isolation front-end
+> (RFC1929 username → isolation token, fail-closed at four layers; anon
+> metasearch cold p50 1.34s through the real Tor network). `region:<id>` binds
+> the operator's WireGuard source IPs and refuses traffic until egress-IP
+> verification passes. The five SPEC §12.5 cross-lane invariants are enforced by
+> a hermetic test suite in CI. Phase 5 (geo + analytics + retention/forget) is
+> next. Planning artifacts: [`docs/plan/`](docs/plan/).
 
 ## What it is
 
@@ -48,7 +50,7 @@ The full, binding specification is [`docs/SPEC.md`](docs/SPEC.md) (v2.1).
 | 1 | Lexical MVP + direct lane + privacy core | **Done** (2026-06-10) |
 | 2 | Hybrid retrieval (embeddings + ANN) | **Done** (2026-06-10) |
 | 3 | Ranking stack (LTR, deep rerank, bandit routing) | **Done** (2026-06-10) |
-| 4 | Egress lanes: anon (Arti) + region (WireGuard) | — |
+| 4 | Egress lanes: anon (Arti) + region (WireGuard) | **Done** (2026-06-11) |
 | 5 | Geo + analytics + retention/forget | — |
 | 6 | Hardening + v0.1.0 release | — |
 
