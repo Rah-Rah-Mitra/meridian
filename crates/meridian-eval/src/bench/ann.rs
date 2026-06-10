@@ -149,7 +149,7 @@ pub fn run(cfg: &BenchConfig) -> SuiteResult {
                     (dot, i as u64)
                 })
                 .collect();
-            scored.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+            scored.sort_unstable_by_key(|p| std::cmp::Reverse(p.0));
             let truth: std::collections::HashSet<u64> =
                 scored[..TOP_K].iter().map(|p| p.1).collect();
             let matches = index.search(&qf, TOP_K).map_err(err)?;
