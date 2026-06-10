@@ -211,3 +211,46 @@ jobs:
               ghcr.io/rah-rah-mitra/meridian/meridiand:$TAG
             docker push ghcr.io/rah-rah-mitra/meridian/meridiand:$TAG
           done
+
+  image-deep:
+    # mode=deep variant (ADR-02): gnu + ort cross-encoder. Built natively-ish via
+    # the gnu cross toolchain; distroless-cc base (glibc 2.39+). Informational —
+    # not the default deploy image; operators opt into deep mode.
+    name: deep image (aarch64-gnu + ort) → GHCR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+      - run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: image-deep-aarch64-gnu
+      - name: build meridiand with the ort rerank backend
+        run: >
+          cargo build --release --target aarch64-unknown-linux-gnu
+          -p meridiand --features rerank-ort
+        env:
+          RUSTFLAGS: -C target-cpu=cortex-a76
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
+          # ort downloads the aarch64-gnu ONNX Runtime prebuilt at build time
+          ORT_DOWNLOAD_BINARIES: "1"
+      - name: stage deep image contents
+        run: |
+          mkdir -p deploy/stage-deep
+          cp target/aarch64-unknown-linux-gnu/release/meridiand deploy/stage-deep/
+          # ort copy-dylibs places libonnxruntime next to the binary
+          find target/aarch64-unknown-linux-gnu/release -maxdepth 1 -name 'libonnxruntime*' -exec cp {} deploy/stage-deep/ \; || true
+          bash deploy/fetch-models.sh deploy/stage-deep/models
+      - run: ls -la deploy/stage-deep
+      - uses: actions/upload-artifact@v4
+        with:
+          name: meridiand-deep-aarch64-gnu
+          path: target/aarch64-unknown-linux-gnu/release/meridiand
+          retention-days: 14

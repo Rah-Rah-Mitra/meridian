@@ -1,0 +1,16 @@
+# meridiand-deep image — the mode=deep variant (SPEC §11, ADR-02). Unlike the
+# default scratch/musl image, this is gnu (ort needs glibc ≥2.39) and carries
+# the cross-encoder rerank. Distroless cc base keeps it small and rootless.
+#
+# Build context = deploy/stage-deep assembled by CI:
+#   stage-deep/meridiand               (aarch64-gnu binary, --features rerank-ort)
+#   stage-deep/models/...              (incl. ms-marco-minilm-l6-v2 INT8 CE)
+#   stage-deep/libonnxruntime*.so*     (copied next to the binary by ort copy-dylibs)
+
+FROM gcr.io/distroless/cc-debian13:nonroot
+
+COPY stage-deep/ /app/
+ENV MERIDIAN_MODELS__DIR=/app/models
+ENV LD_LIBRARY_PATH=/app
+WORKDIR /app
+ENTRYPOINT ["/app/meridiand"]
