@@ -402,6 +402,23 @@ impl Planner {
         // Geo + ts prefilter (SPEC §11: applied BEFORE scoring).
         let (search_filter, geo_origin) = Self::build_filter(&req)?;
 
+        // Geo/ts filters constrain LOCAL documents only — the metasearch
+        // fan-out can't be geo-filtered (ADR-10). Pure web scope would make
+        // the filter a silent no-op: refuse as a caller error. Mixed scope
+        // serves filtered local + unfiltered web, flagged honestly.
+        let has_filter = search_filter.geo.is_some()
+            || search_filter.after_ts.is_some()
+            || search_filter.before_ts.is_some();
+        if has_filter && wants_web_scope {
+            if !matches!(req.scope, Scope::Both) {
+                return Err(PlanError::BadGeo(
+                    "geo/time filters apply to local documents only; use scope=local or scope=both"
+                        .into(),
+                ));
+            }
+            degraded.push("geo_web_unfiltered");
+        }
+
         // Local hybrid stages on the rayon pool (SPEC §7.2: no CPU on tokio):
         // BM25 top-1000 ∥-ish embed→ANN top-200 → resolve ANN-only docs.
         let wants_local = matches!(req.scope, Scope::Local | Scope::Both)
