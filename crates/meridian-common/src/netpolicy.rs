@@ -35,9 +35,21 @@ pub fn ip_denied(ip: IpAddr) -> bool {
             v6.is_loopback()                       // ::1
                 || v6.is_unspecified()             // ::
                 || (seg[0] & 0xffc0) == 0xfe80     // fe80::/10 link-local
+                || (seg[0] & 0xffc0) == 0xfec0     // fec0::/10 site-local (deprecated, still routed by some gear)
                 || (seg[0] & 0xfe00) == 0xfc00     // fc00::/7 ULA
                 || (seg[0] & 0xff00) == 0xff00     // ff00::/8 multicast
                 || (seg[0] == 0x2001 && seg[1] == 0xdb8) // 2001:db8::/32 doc
+                // Transition prefixes embed a v4 the far gateway dials on our
+                // behalf — apply the v4 table to the embedded address rather
+                // than blanket-denying (IPv6-only NAT64 networks are legitimate).
+                || (seg[0] == 0x0064 && seg[1] == 0xff9b // 64:ff9b::/32 NAT64, v4 in the low 32 bits
+                    && ip_denied(IpAddr::V4(std::net::Ipv4Addr::new(
+                        (seg[6] >> 8) as u8, seg[6] as u8, (seg[7] >> 8) as u8, seg[7] as u8,
+                    ))))
+                || (seg[0] == 0x2002 // 2002::/16 6to4, v4 in segs 1–2
+                    && ip_denied(IpAddr::V4(std::net::Ipv4Addr::new(
+                        (seg[1] >> 8) as u8, seg[1] as u8, (seg[2] >> 8) as u8, seg[2] as u8,
+                    ))))
                 || v6.to_ipv4_mapped().is_some_and(|v4| ip_denied(IpAddr::V4(v4)))
         }
     }
@@ -100,10 +112,22 @@ mod tests {
             "ff02::1",
             "::ffff:10.0.0.1",  // v4-mapped private
             "::ffff:127.0.0.1", // v4-mapped loopback
+            "fec0::1",          // site-local (deprecated)
+            "64:ff9b::a00:1",   // NAT64-embedded 10.0.0.1
+            "64:ff9b::7f00:1",  // NAT64-embedded 127.0.0.1
+            "2002:a00:101::",   // 6to4-embedded 10.0.1.1
+            "2002:c0a8:101::",  // 6to4-embedded 192.168.1.1
         ] {
             assert!(denied(ip), "{ip} must be denied");
         }
-        for ip in ["93.184.216.34", "1.1.1.1", "2606:4700::1111", "8.8.8.8"] {
+        for ip in [
+            "93.184.216.34",
+            "1.1.1.1",
+            "2606:4700::1111",
+            "8.8.8.8",
+            "64:ff9b::5db8:d822", // NAT64-embedded 93.184.216.34 (public) — IPv6-only nets are legitimate
+            "2002:5db8:d822::",   // 6to4-embedded public v4
+        ] {
             assert!(!denied(ip), "{ip} must be allowed");
         }
     }
