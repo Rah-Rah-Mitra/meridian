@@ -1,0 +1,13 @@
+# cargo-audit policy. Every ignore MUST carry a justification and a revisit trigger.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 — `rsa` (Marvin timing side-channel, medium 5.9).
+    # Transitive via arti/tor-llcrypto (bench-anon feature; Phase-4 product anon
+    # lane). The oracle requires an attacker timing RSA PRIVATE-KEY operations;
+    # Meridian/arti clients only VERIFY relay signatures and hold no RSA private
+    # keys, so the attack surface is absent. No fixed `rsa` release exists
+    # (advisory open since 2023). Revisit on every arti version bump
+    # (risk register #9) — remove the ignore the moment rsa ships a fix.
+    "RUSTSEC-2023-0071",
+]

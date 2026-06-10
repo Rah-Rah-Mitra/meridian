@@ -168,6 +168,16 @@ jobs:
           SIZE=$(docker image inspect -f '{{.Size}}' ghcr.io/rah-rah-mitra/meridian/meridiand:ci)
           echo "image size: $SIZE bytes"
           test "$SIZE" -lt $((120 * 1024 * 1024)) || { echo "IMAGE EXCEEDS 120MB GATE"; exit 1; }
+      # The repo (and so the GHCR package) is private; device tokens may lack
+      # read:packages. The tarball artifact is the guaranteed delivery path:
+      #   gh run download <id> -n meridiand-image && docker load < meridiand-image.tar
+      - name: save image tarball artifact
+        run: docker save ghcr.io/rah-rah-mitra/meridian/meridiand:ci -o meridiand-image.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: meridiand-image
+          path: meridiand-image.tar
+          retention-days: 14
       - name: push to GHCR (main only)
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         uses: docker/login-action@v3
