@@ -52,6 +52,8 @@ usearch = { version = "2.25", default-features = false }
 cxx = "1"
 model2vec-rs = { version = "0.2", default-features = false, features = ["fancy-regex", "local-only"] }
 tract-onnx = "0.23"
+ort = "2.0.0-rc.12"
+ndarray = "0.17"
 tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
 tokio = { version = "1", default-features = false }
 arti-client = { version = "0.43", default-features = false }

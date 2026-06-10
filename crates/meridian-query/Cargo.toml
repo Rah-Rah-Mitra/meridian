@@ -9,6 +9,11 @@ repository.workspace = true
 authors.workspace = true
 publish.workspace = true
 
+[features]
+default = []
+# Propagate the deep-rerank ort backend up to the binary (gnu image only).
+rerank-ort = ["meridian-rerank/ort-backend"]
+
 [dependencies]
 meridian-common.workspace = true
 meridian-index.workspace = true

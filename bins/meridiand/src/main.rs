@@ -13,6 +13,7 @@ use meridian_fetch::Fetcher;
 use meridian_index::lexical::LexicalIndex;
 use meridian_query::ingest::{IngestText, Ingestor};
 use meridian_query::planner::Planner;
+use meridian_rerank::Reranker;
 use meridian_searx::bandit::Bandit;
 use meridian_searx::client::SearxClient;
 use meridian_vector::VectorStore;
@@ -117,11 +118,18 @@ fn build_components(config: MeridianConfig) -> Result<Components, String> {
     } else {
         None
     };
+    // Deep reranker: real on the gnu/ort image; inert (degrades mode=deep) on the
+    // musl image or if the model is absent.
+    let reranker = Arc::new(Reranker::load(&config.models.dir).unwrap_or_else(|e| {
+        tracing::info!(reason = %e, "deep rerank unavailable; mode=deep will degrade to LTR");
+        Reranker::unavailable()
+    }));
     let planner = Arc::new(Planner::new(
         index,
         embedder,
         vectors,
         searx,
+        reranker,
         bandit,
         lanes,
         shed.clone(),

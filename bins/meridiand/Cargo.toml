@@ -9,6 +9,11 @@ repository.workspace = true
 authors.workspace = true
 publish.workspace = true
 
+[features]
+default = []
+# gnu image build: cargo build -p meridiand --features rerank-ort
+rerank-ort = ["meridian-query/rerank-ort"]
+
 [dependencies]
 meridian-common.workspace = true
 meridian-api.workspace = true
@@ -19,6 +24,7 @@ meridian-fetch.workspace = true
 meridian-index.workspace = true
 meridian-privacy.workspace = true
 meridian-query.workspace = true
+meridian-rerank.workspace = true
 meridian-searx.workspace = true
 axum.workspace = true
 libc.workspace = true

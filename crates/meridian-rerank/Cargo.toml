@@ -9,8 +9,17 @@ repository.workspace = true
 authors.workspace = true
 publish.workspace = true
 
+[features]
+# OFF by default: the deep CE needs ort (glibc ≥2.39 → gnu image, ADR-02). The
+# default musl/scratch build is a no-op stub and the planner degrades mode=deep.
+default = []
+ort-backend = ["dep:ort", "dep:tokenizers"]
+
 [dependencies]
 meridian-common.workspace = true
+thiserror.workspace = true
+ort = { workspace = true, optional = true }
+tokenizers = { workspace = true, optional = true, features = ["fancy-regex"] }
 
 [lints]
 workspace = true

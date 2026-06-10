@@ -12,6 +12,7 @@ use meridian_egress::{Lane, LaneRegistry};
 use meridian_embed::Embedder;
 use meridian_index::lexical::{LexicalIndex, url_key};
 use meridian_rank::{Features, LinearLtr, Scorer, title_match_ratio};
+use meridian_rerank::{Pair, Reranker};
 use meridian_searx::client::SearxClient;
 use meridian_vector::VectorStore;
 use std::collections::HashMap;
@@ -49,6 +50,9 @@ pub struct RankSignals {
     pub searx_rank: Option<usize>,
     /// LTR re-score (SPEC §11). Always set after the rank stage.
     pub ltr: f32,
+    /// Cross-encoder score (SPEC §11), only on `mode=deep` reranked results.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ce: Option<f32>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -87,6 +91,7 @@ pub struct Planner {
     lanes: Arc<LaneRegistry>,
     shed: Arc<ShedState>,
     scorer: Arc<dyn Scorer>,
+    reranker: Arc<Reranker>,
     bandit: Option<Arc<meridian_searx::bandit::Bandit>>,
     cache: moka::sync::Cache<[u8; 32], Arc<CachedSearch>>,
     cfg: SearchConfig,
@@ -100,6 +105,7 @@ impl Planner {
         embedder: Arc<Embedder>,
         vectors: Arc<VectorStore>,
         searx: Option<Arc<SearxClient>>,
+        reranker: Arc<Reranker>,
         bandit: Option<Arc<meridian_searx::bandit::Bandit>>,
         lanes: Arc<LaneRegistry>,
         shed: Arc<ShedState>,
@@ -127,6 +133,7 @@ impl Planner {
             lanes,
             shed,
             scorer: Arc::new(LinearLtr::default()),
+            reranker,
             bandit,
             cache,
             cfg: cfg.clone(),
@@ -340,6 +347,7 @@ impl Planner {
                     ann: None,
                     searx_rank: None,
                     ltr: 0.0,
+                    ce: None,
                 },
                 source: "local",
             });
@@ -373,6 +381,7 @@ impl Planner {
                                 ann: Some(*sim),
                                 searx_rank: None,
                                 ltr: 0.0,
+                                ce: None,
                             },
                             source: "local",
                         });
@@ -414,6 +423,7 @@ impl Planner {
                             ann: None,
                             searx_rank: Some(hit.rank),
                             ltr: 0.0,
+                            ce: None,
                         },
                         source: "web",
                     });
@@ -474,6 +484,70 @@ impl Planner {
             results.push(r);
             if results.len() >= limit {
                 break;
+            }
+        }
+
+        // Deep-mode rerank (SPEC §11): cross-encoder over the top-20, 1.5s stage
+        // deadline, Moka-cached. Degrades (never fails the query) when the model
+        // isn't compiled in (musl image) or RSS shedding disabled it.
+        if matches!(req.mode, SearchMode::Deep) {
+            let rss_shed = self
+                .shed
+                .rerank_disabled
+                .load(std::sync::atomic::Ordering::Relaxed);
+            if rss_shed {
+                degraded.push("rerank_shed");
+            } else if !self.reranker.available() {
+                degraded.push("rerank_unavailable");
+            } else {
+                let rr_start = Instant::now();
+                let top = results.len().min(20);
+                let pairs: Vec<Pair> = results[..top]
+                    .iter()
+                    .map(|r| Pair {
+                        doc_key: url_key(&r.url),
+                        title: r.title.clone(),
+                        snippet: r.snippet.clone(),
+                    })
+                    .collect();
+                let query = req.q.clone();
+                let reranker = self.reranker.clone();
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                rayon::spawn(move || {
+                    let r = reranker.rerank(&query, &pairs, std::time::Duration::from_millis(1500));
+                    let _ = tx.send(r);
+                });
+                match rx.await {
+                    Ok(Ok(scored)) if !scored.is_empty() => {
+                        let ce_by_key: HashMap<u64, f32> =
+                            scored.iter().map(|s| (s.doc_key, s.ce_score)).collect();
+                        // Reorder the reranked prefix by CE; tail (beyond top-20
+                        // or past the deadline) keeps LTR order.
+                        let order: HashMap<u64, usize> = scored
+                            .iter()
+                            .enumerate()
+                            .map(|(i, s)| (s.doc_key, i))
+                            .collect();
+                        for r in results[..top].iter_mut() {
+                            let k = url_key(&r.url);
+                            if let Some(ce) = ce_by_key.get(&k) {
+                                r.rank_signals.ce = Some(*ce);
+                            }
+                        }
+                        let reranked_count = order.len();
+                        results[..top].sort_by_key(|r| {
+                            order
+                                .get(&url_key(&r.url))
+                                .copied()
+                                .unwrap_or(reranked_count)
+                        });
+                        timings.insert("rerank_ms", rr_start.elapsed().as_millis() as u64);
+                        if reranked_count < top {
+                            degraded.push("rerank_timeout");
+                        }
+                    }
+                    _ => degraded.push("rerank_timeout"),
+                }
             }
         }
 
