@@ -44,6 +44,10 @@ fn main() -> ExitCode {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(usize::MAX),
         ),
+        "gazetteer" => gazetteer(
+            &get("--source").unwrap_or_else(|| "cities15000.txt".into()),
+            &get("--out").unwrap_or_else(|| "models/gazetteer.fst".into()),
+        ),
         "run" => run(
             &get("--data").unwrap_or_else(|| "eval/data".into()),
             &get("--models").unwrap_or_else(|| "models".into()),
@@ -51,7 +55,7 @@ fn main() -> ExitCode {
             &get("--qrels").unwrap_or_else(|| "eval/qrels.txt".into()),
         ),
         _ => {
-            eprintln!("usage: meridian-eval gen|build|run [flags] — see source header");
+            eprintln!("usage: meridian-eval gen|build|run|gazetteer [flags] — see source header");
             ExitCode::FAILURE
         }
     }
@@ -117,6 +121,38 @@ fn known_item_query(doc: &CorpusDoc, rng: &mut Rng) -> Option<String> {
         }
     }
     (picked.len() >= 4).then(|| picked.join(" "))
+}
+
+/// Offline gazetteer build (SPEC §3: "built offline, shipped in image"):
+/// GeoNames cities15000.txt → fst map for ingest geo-tagging.
+fn gazetteer(source: &str, out: &str) -> ExitCode {
+    let file = match std::fs::File::open(source) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("gazetteer source {source}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Some(parent) = Path::new(out).parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match meridian_geo::gazetteer::build_from_geonames(
+        std::io::BufReader::new(file),
+        Path::new(out),
+    ) {
+        Ok(n) => {
+            let bytes = std::fs::metadata(out).map(|m| m.len()).unwrap_or(0);
+            println!(
+                ">> gazetteer: {n} place names → {out} ({} KB)",
+                bytes / 1024
+            );
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("gazetteer build failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn generate(corpus: &str, out_dir: &str, n: usize, seed: u64) -> ExitCode {
@@ -208,6 +244,7 @@ fn build(corpus: &str, data: &str, models: &str, max_docs: usize) -> ExitCode {
         stack.embedder,
         vectors.clone(),
         Path::new(data),
+        None,
         &meridian_common::config::IngestConfig::default(),
         &stack.vector_cfg,
     ) {

@@ -22,6 +22,8 @@ pub struct AppState {
     pub ingestor: Arc<Ingestor>,
     pub fetcher: Arc<Fetcher>,
     pub shed: Arc<ShedState>,
+    /// `/v1/trends` backend; None = analytics disabled (404s).
+    pub analytics: Option<Arc<meridian_analytics::Analytics>>,
     /// None = no token configured → mutating endpoints refuse outright.
     pub bearer: Option<SecretString>,
     pub iphash: IpHasher,
@@ -40,6 +42,7 @@ impl AppState {
         ingestor: Arc<Ingestor>,
         fetcher: Arc<Fetcher>,
         shed: Arc<ShedState>,
+        analytics: Option<Arc<meridian_analytics::Analytics>>,
         bearer: Option<SecretString>,
         metrics: metrics_exporter_prometheus::PrometheusHandle,
     ) -> Arc<Self> {
@@ -52,6 +55,7 @@ impl AppState {
             ingestor,
             fetcher,
             shed,
+            analytics,
             bearer,
             iphash: IpHasher::new(),
             ip_limiter: governor::RateLimiter::keyed(quota),

@@ -2,8 +2,10 @@
 //! dedup (blake3 in redb) → snippet → index. Raw bodies never persist; the
 //! content hash is the only memory of them (SPEC §6.1).
 //!
-//! Geo-tagging (gazetteer → H3) is Phase 5; `h3_r7` is indexed as 0 until then
-//! so the schema never needs a reindex.
+//! Geo-tagging (SPEC §3): gazetteer fst scan over title + lead text → H3 res-7
+//! cell (+ res-5 parent for coarse filters). Zero network — the remote geocoder
+//! is an operator opt-in fallback handled at a higher layer. Untagged docs
+//! carry h3 = 0 and simply never match geo filters.
 
 use meridian_common::config::{IngestConfig, VectorConfig};
 use meridian_egress::Lane;
@@ -11,13 +13,18 @@ use meridian_embed::Embedder;
 use meridian_fetch::Fetcher;
 use meridian_index::lexical::{IndexDoc, LexicalIndex, domain_hash, url_key};
 use meridian_vector::VectorStore;
-use redb::{Database, ReadableTable, TableDefinition};
+use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// content-hash → ingest unix-time. Tombstones (Phase 5 `/v1/forget`) will live
-/// in a sibling table.
+/// content-hash → ingest unix-time.
 const DEDUP_TABLE: TableDefinition<&[u8], u64> = TableDefinition::new("dedup_v1");
+/// url_key → content-hash (16B): the reverse map `/v1/forget` needs to
+/// tombstone a document's CONTENT when asked to forget its URL.
+const HASH_BY_KEY: TableDefinition<u64, &[u8]> = TableDefinition::new("hash_by_key_v1");
+/// Tombstoned content hashes: re-ingest of forgotten content is REFUSED until
+/// the operator clears the tombstone (SPEC §10 `/v1/forget`).
+const TOMBSTONES: TableDefinition<&[u8], u64> = TableDefinition::new("forget_tombstones_v1");
 
 #[derive(Debug, thiserror::Error)]
 pub enum IngestError {
@@ -47,6 +54,8 @@ pub struct IngestText {
 pub struct IngestStats {
     pub accepted: usize,
     pub deduped: usize,
+    /// Refused because the content hash is tombstoned (`/v1/forget`).
+    pub refused: usize,
 }
 
 pub struct Ingestor {
@@ -55,6 +64,8 @@ pub struct Ingestor {
     fetcher: Arc<Fetcher>,
     embedder: Arc<Embedder>,
     vectors: Arc<VectorStore>,
+    /// `None` = geo-tagging off (no gazetteer artifact shipped/found).
+    gazetteer: Option<Arc<meridian_geo::Gazetteer>>,
     cfg: IngestConfig,
     persist_every: usize,
     docs_since_persist: AtomicUsize,
@@ -68,17 +79,22 @@ impl Ingestor {
         embedder: Arc<Embedder>,
         vectors: Arc<VectorStore>,
         data_dir: &std::path::Path,
+        gazetteer: Option<Arc<meridian_geo::Gazetteer>>,
         cfg: &IngestConfig,
         vector_cfg: &VectorConfig,
     ) -> Result<Self, IngestError> {
         std::fs::create_dir_all(data_dir).map_err(|e| IngestError::Dedup(e.to_string()))?;
         let dedup = Database::create(data_dir.join("dedup.redb"))
             .map_err(|e| IngestError::Dedup(e.to_string()))?;
-        // Ensure the table exists so first reads do not error.
+        // Ensure the tables exist so first reads do not error.
         let wtx = dedup
             .begin_write()
             .map_err(|e| IngestError::Dedup(e.to_string()))?;
         wtx.open_table(DEDUP_TABLE)
+            .map_err(|e| IngestError::Dedup(e.to_string()))?;
+        wtx.open_table(HASH_BY_KEY)
+            .map_err(|e| IngestError::Dedup(e.to_string()))?;
+        wtx.open_table(TOMBSTONES)
             .map_err(|e| IngestError::Dedup(e.to_string()))?;
         wtx.commit()
             .map_err(|e| IngestError::Dedup(e.to_string()))?;
@@ -88,6 +104,7 @@ impl Ingestor {
             fetcher,
             embedder,
             vectors,
+            gazetteer,
             cfg: cfg.clone(),
             persist_every: vector_cfg.persist_every_docs.max(1),
             docs_since_persist: AtomicUsize::new(0),
@@ -114,6 +131,12 @@ impl Ingestor {
             let mut table = wtx
                 .open_table(DEDUP_TABLE)
                 .map_err(|e| IngestError::Dedup(e.to_string()))?;
+            let mut by_key = wtx
+                .open_table(HASH_BY_KEY)
+                .map_err(|e| IngestError::Dedup(e.to_string()))?;
+            let tombstones = wtx
+                .open_table(TOMBSTONES)
+                .map_err(|e| IngestError::Dedup(e.to_string()))?;
             for doc in docs {
                 let text = doc.text.trim();
                 if text.is_empty() {
@@ -122,6 +145,15 @@ impl Ingestor {
                 // SPEC §9.3: dedup key = blake3(content) truncated to 16 bytes.
                 let digest = blake3::hash(text.as_bytes());
                 let key = &digest.as_bytes()[..16];
+                // Forgotten content stays forgotten (SPEC §10 /v1/forget).
+                if tombstones
+                    .get(key)
+                    .map_err(|e| IngestError::Dedup(e.to_string()))?
+                    .is_some()
+                {
+                    stats.refused += 1;
+                    continue;
+                }
                 let seen = table
                     .get(key)
                     .map_err(|e| IngestError::Dedup(e.to_string()))?
@@ -136,6 +168,9 @@ impl Ingestor {
                     .map_err(|e| IngestError::Dedup(e.to_string()))?;
 
                 let index_doc = self.build_doc(doc, text, ts);
+                by_key
+                    .insert(index_doc.url_key, key)
+                    .map_err(|e| IngestError::Dedup(e.to_string()))?;
                 accepted.push((index_doc.url_key, text.to_owned()));
                 self.index
                     .add(&index_doc)
@@ -212,6 +247,20 @@ impl Ingestor {
 
         let lang = whichlang::detect_language(text) as u64;
 
+        // Geo-tag (SPEC §3): gazetteer scan → res-7 cell + res-5 parent.
+        // 0 = untagged; geo filters then simply never match this doc.
+        let (h3_r7, h3_r5) = self
+            .gazetteer
+            .as_ref()
+            .and_then(|g| g.scan(&title, text))
+            .and_then(|(lat, lon)| {
+                let r7 =
+                    meridian_geo::h3::latlng_to_cell(lat, lon, meridian_geo::INDEX_RES).ok()?;
+                let r5 = meridian_geo::h3::parent_at(r7, meridian_geo::ANALYTICS_RES)?;
+                Some((r7, r5))
+            })
+            .unwrap_or((0, 0));
+
         IndexDoc {
             url_key: url_key(&url),
             url,
@@ -221,9 +270,117 @@ impl Ingestor {
             ts,
             domain_hash: domain_hash(&domain),
             lang,
-            h3_r7: 0,
+            h3_r7,
+            h3_r5,
             quality: 0.0,
         }
+    }
+
+    /// `/v1/forget` (SPEC §10): remove documents by url_key from the lexical
+    /// index + vector store, tombstone their content hashes (re-ingest refused),
+    /// and drop their dedup entries. Idempotent; returns docs actually removed.
+    pub fn forget_keys(&self, keys: &[u64]) -> Result<usize, IngestError> {
+        let mut removed = 0;
+        let wtx = self
+            .dedup
+            .begin_write()
+            .map_err(|e| IngestError::Dedup(e.to_string()))?;
+        {
+            let mut dedup = wtx
+                .open_table(DEDUP_TABLE)
+                .map_err(|e| IngestError::Dedup(e.to_string()))?;
+            let mut by_key = wtx
+                .open_table(HASH_BY_KEY)
+                .map_err(|e| IngestError::Dedup(e.to_string()))?;
+            let mut tombstones = wtx
+                .open_table(TOMBSTONES)
+                .map_err(|e| IngestError::Dedup(e.to_string()))?;
+            for &key in keys {
+                let hash: Option<Vec<u8>> = by_key
+                    .get(key)
+                    .map_err(|e| IngestError::Dedup(e.to_string()))?
+                    .map(|v| v.value().to_vec());
+                if let Some(hash) = hash {
+                    tombstones
+                        .insert(hash.as_slice(), now_unix())
+                        .map_err(|e| IngestError::Dedup(e.to_string()))?;
+                    dedup
+                        .remove(hash.as_slice())
+                        .map_err(|e| IngestError::Dedup(e.to_string()))?;
+                    by_key
+                        .remove(key)
+                        .map_err(|e| IngestError::Dedup(e.to_string()))?;
+                    removed += 1;
+                }
+                self.index.delete_by_url_key(key);
+                let _ = self
+                    .vectors
+                    .remove(key)
+                    .map_err(|e| IngestError::Vector(e.to_string()))?;
+            }
+        }
+        wtx.commit()
+            .map_err(|e| IngestError::Dedup(e.to_string()))?;
+        self.index
+            .commit()
+            .map_err(|e| IngestError::Index(e.to_string()))?;
+        self.flush_vectors()?;
+        Ok(removed)
+    }
+
+    /// Forget every document under a domain (SPEC §10 `{domain}` form).
+    pub fn forget_domain(&self, domain: &str) -> Result<usize, IngestError> {
+        let keys = self
+            .index
+            .url_keys_by_domain(domain_hash(domain))
+            .map_err(|e| IngestError::Index(e.to_string()))?;
+        self.forget_keys(&keys)
+    }
+
+    /// Forget by content hash (SPEC §10 `{content_hash}` form, 16-byte hex).
+    /// Tombstones the hash UNCONDITIONALLY (so content never seen locally is
+    /// still refused at future ingest), then removes any docs carrying it.
+    pub fn forget_content_hash(&self, hash: &[u8]) -> Result<usize, IngestError> {
+        // Find url_keys carrying this hash (bounded scan: one entry per doc).
+        let keys: Vec<u64> = {
+            let rtx = self
+                .dedup
+                .begin_read()
+                .map_err(|e| IngestError::Dedup(e.to_string()))?;
+            let by_key = rtx
+                .open_table(HASH_BY_KEY)
+                .map_err(|e| IngestError::Dedup(e.to_string()))?;
+            by_key
+                .iter()
+                .map_err(|e| IngestError::Dedup(e.to_string()))?
+                .filter_map(|entry| entry.ok())
+                .filter(|(_, v)| v.value() == hash)
+                .map(|(k, _)| k.value())
+                .collect()
+        };
+        let removed = self.forget_keys(&keys)?;
+        // Tombstone even when no doc matched.
+        let wtx = self
+            .dedup
+            .begin_write()
+            .map_err(|e| IngestError::Dedup(e.to_string()))?;
+        {
+            let mut tombstones = wtx
+                .open_table(TOMBSTONES)
+                .map_err(|e| IngestError::Dedup(e.to_string()))?;
+            tombstones
+                .insert(hash, now_unix())
+                .map_err(|e| IngestError::Dedup(e.to_string()))?;
+            let mut dedup = wtx
+                .open_table(DEDUP_TABLE)
+                .map_err(|e| IngestError::Dedup(e.to_string()))?;
+            dedup
+                .remove(hash)
+                .map_err(|e| IngestError::Dedup(e.to_string()))?;
+        }
+        wtx.commit()
+            .map_err(|e| IngestError::Dedup(e.to_string()))?;
+        Ok(removed)
     }
 }
 
@@ -267,6 +424,7 @@ mod tests {
             embedder,
             vectors,
             &dir,
+            None,
             &meridian_common::config::IngestConfig::default(),
             &vector_cfg,
         )
@@ -291,7 +449,7 @@ mod tests {
         assert_eq!(stats.deduped, 1);
 
         // Same content again in a later batch — still deduped (persisted hash).
-        let stats2 = ingestor.ingest_batch(&[doc]).unwrap();
+        let stats2 = ingestor.ingest_batch(std::slice::from_ref(&doc)).unwrap();
         assert_eq!(stats2.accepted, 0);
         assert_eq!(stats2.deduped, 1);
 
@@ -309,6 +467,24 @@ mod tests {
             hits[0].snippet.contains("meridian arc"),
             "whitespace-normalized snippet"
         );
+
+        // /v1/forget semantics (SPEC §10): removal + tombstone + refusal.
+        let key = meridian_index::lexical::url_key("https://history.example/metre");
+        let removed = ingestor.forget_keys(&[key]).unwrap();
+        assert_eq!(removed, 1);
+        assert!(
+            ingestor
+                .index
+                .search("meridian metre", 10)
+                .unwrap()
+                .is_empty(),
+            "forgotten doc must leave the lexical index"
+        );
+        assert_eq!(ingestor.vectors.len(), 0, "vector dropped too");
+        // Re-ingest of the SAME content is refused (tombstone), not deduped.
+        let stats3 = ingestor.ingest_batch(&[doc]).unwrap();
+        assert_eq!(stats3.accepted, 0);
+        assert_eq!(stats3.refused, 1, "tombstoned content must be refused");
         let _ = std::fs::remove_dir_all(dir);
     }
 }

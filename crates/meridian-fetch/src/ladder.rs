@@ -63,6 +63,13 @@ impl Fetcher {
         }
     }
 
+    /// `/v1/forget purge_caches`: drop the fetch/extract cache wholesale —
+    /// entries are keyed by raw URL, so domain- and hash-scoped forgets cannot
+    /// be enumerated; the cache refills from live fetches (SPEC §10).
+    pub fn purge_cache(&self) {
+        self.cache.invalidate_all();
+    }
+
     /// Fetch + extract one URL on the given lane. All three lanes; each fails
     /// closed in `LaneRegistry` when disabled/unready (SPEC §12.1).
     pub async fn fetch_extract(

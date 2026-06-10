@@ -77,6 +77,7 @@ fn temp_planner(
         lanes,
         Arc::new(ShedState::default()),
         2,
+        Arc::new(meridian_common::prior::NoPrior),
         &SearchConfig::default(),
         &vector_cfg,
     )
@@ -89,6 +90,9 @@ fn request(lane: Lane, scope: Scope) -> SearchRequest {
         scope,
         lane,
         limit: 10,
+        geo: None,
+        after: None,
+        before: None,
     }
 }
 

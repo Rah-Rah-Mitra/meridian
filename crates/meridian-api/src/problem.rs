@@ -52,6 +52,11 @@ pub fn plan_error(e: meridian_query::planner::PlanError) -> Problem {
             "anon lane busy",
             e.to_string(),
         ),
+        PlanError::BadGeo(_) => Problem::new(
+            StatusCode::BAD_REQUEST,
+            "invalid geo constraint",
+            e.to_string(),
+        ),
         PlanError::Index(_) => Problem::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "index error",

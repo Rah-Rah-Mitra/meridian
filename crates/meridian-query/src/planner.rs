@@ -10,7 +10,7 @@ use meridian_common::config::{SearchConfig, VectorConfig};
 use meridian_common::shed::ShedState;
 use meridian_egress::{Lane, LaneRegistry};
 use meridian_embed::Embedder;
-use meridian_index::lexical::{LexicalIndex, url_key};
+use meridian_index::lexical::{GeoCells, LexicalIndex, SearchFilter, url_key};
 use meridian_rank::{Features, LinearLtr, Scorer, title_match_ratio};
 use meridian_rerank::{Pair, Reranker};
 use meridian_searx::client::SearxClient;
@@ -26,6 +26,9 @@ pub enum PlanError {
     /// The anon search admission budget (SPEC §12.4 citizenship) is exhausted.
     #[error("anon lane is at its concurrent-search budget")]
     AnonBusy,
+    /// Invalid geo constraint (bad coords, oversized radius, malformed cell).
+    #[error("invalid geo constraint: {0}")]
+    BadGeo(String),
     #[error("index: {0}")]
     Index(String),
     #[error("internal: {0}")]
@@ -39,6 +42,17 @@ pub struct SearchRequest {
     pub scope: Scope,
     pub lane: Lane,
     pub limit: usize,
+    /// Geo constraint (SPEC §10): point+radius or an explicit H3 cell.
+    pub geo: Option<GeoConstraint>,
+    /// `ts` window (unix seconds, inclusive).
+    pub after: Option<u64>,
+    pub before: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub enum GeoConstraint {
+    Point { lat: f64, lon: f64, radius_km: f64 },
+    Cell(u64),
 }
 
 /// Explainability block (SPEC §10): every surfaced signal, always populated.
@@ -67,6 +81,11 @@ pub struct SearchResult {
     pub rank_signals: RankSignals,
     /// "local" | "web" | "both"
     pub source: &'static str,
+    /// H3 res-7 cell of geo-tagged local docs (SPEC §10).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub h3: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ts: Option<u64>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -114,6 +133,8 @@ pub struct Planner {
     anon_cache: moka::sync::Cache<[u8; 32], Arc<CachedSearch>>,
     /// Anon concurrent-search admission (SPEC §12.4 rate-limit citizenship).
     anon_permits: Arc<tokio::sync::Semaphore>,
+    /// LTR domain_prior source (analytics PageRank; NoPrior until first run).
+    priors: Arc<dyn meridian_common::prior::DomainPriorSource>,
     cfg: SearchConfig,
     vector_cfg: VectorConfig,
 }
@@ -131,6 +152,7 @@ impl Planner {
         lanes: Arc<LaneRegistry>,
         shed: Arc<ShedState>,
         anon_max_searches: usize,
+        priors: Arc<dyn meridian_common::prior::DomainPriorSource>,
         cfg: &SearchConfig,
         vector_cfg: &VectorConfig,
     ) -> Self {
@@ -159,6 +181,7 @@ impl Planner {
             cache,
             anon_cache,
             anon_permits: Arc::new(tokio::sync::Semaphore::new(anon_max_searches.max(1))),
+            priors,
             cfg: cfg.clone(),
             vector_cfg: vector_cfg.clone(),
         }
@@ -169,12 +192,102 @@ impl Planner {
         hasher.update(req.q.as_bytes());
         hasher.update(&[req.scope as u8, req.mode as u8]);
         hasher.update(&limit.to_le_bytes());
+        // Geo + time constraints MUST key the cache — a filtered result set
+        // cached under the unfiltered key would poison every later query.
+        match &req.geo {
+            Some(GeoConstraint::Point {
+                lat,
+                lon,
+                radius_km,
+            }) => {
+                hasher.update(&[1u8]);
+                hasher.update(&lat.to_le_bytes());
+                hasher.update(&lon.to_le_bytes());
+                hasher.update(&radius_km.to_le_bytes());
+            }
+            Some(GeoConstraint::Cell(cell)) => {
+                hasher.update(&[2u8]);
+                hasher.update(&cell.to_le_bytes());
+            }
+            None => {
+                hasher.update(&[0u8]);
+            }
+        }
+        hasher.update(&req.after.unwrap_or(0).to_le_bytes());
+        hasher.update(&req.before.unwrap_or(u64::MAX).to_le_bytes());
         *hasher.finalize().as_bytes()
+    }
+
+    /// Resolve the request's geo constraint to an index filter. Invalid
+    /// coordinates/radii are a caller error surfaced as 400 by the API.
+    fn build_filter(req: &SearchRequest) -> Result<(SearchFilter, Option<(f64, f64)>), PlanError> {
+        let mut origin = None;
+        let geo = match &req.geo {
+            None => None,
+            Some(GeoConstraint::Point {
+                lat,
+                lon,
+                radius_km,
+            }) => {
+                origin = Some((*lat, *lon));
+                let (res, cells) = meridian_geo::h3::filter_cells(*lat, *lon, *radius_km)
+                    .map_err(|e| PlanError::BadGeo(e.to_string()))?;
+                Some(match res {
+                    meridian_geo::FilterRes::R5 => GeoCells::R5(cells),
+                    meridian_geo::FilterRes::R7 => GeoCells::R7(cells),
+                })
+            }
+            Some(GeoConstraint::Cell(cell)) => {
+                origin = meridian_geo::h3::cell_to_latlng(*cell);
+                let (res, cells) = meridian_geo::h3::cells_for_cell(*cell)
+                    .map_err(|e| PlanError::BadGeo(e.to_string()))?;
+                Some(match res {
+                    meridian_geo::FilterRes::R5 => GeoCells::R5(cells),
+                    meridian_geo::FilterRes::R7 => GeoCells::R7(cells),
+                })
+            }
+        };
+        Ok((
+            SearchFilter {
+                geo,
+                after_ts: req.after,
+                before_ts: req.before,
+            },
+            origin,
+        ))
     }
 
     /// Lane observability for `GET /v1/lanes` (SPEC §10).
     pub fn lane_statuses(&self) -> Vec<(String, meridian_egress::LaneStatus)> {
         self.lanes.statuses()
+    }
+
+    /// `/v1/geo/heatmap` (SPEC §10): res-3..7 rollup of geo-tagged docs,
+    /// optional q + window. Runs on the rayon pool (fast-field scan = CPU).
+    pub async fn heatmap(
+        &self,
+        q: Option<String>,
+        res: u8,
+        after_ts: Option<u64>,
+    ) -> Result<Vec<(u64, u32)>, PlanError> {
+        if !(3..=7).contains(&res) {
+            return Err(PlanError::BadGeo("res must be 3..=7".into()));
+        }
+        let index = self.index.clone();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        rayon::spawn(move || {
+            let _ = tx.send(index.heatmap(q.as_deref(), after_ts, res));
+        });
+        rx.await
+            .map_err(|_| PlanError::Internal("heatmap stage dropped".into()))?
+            .map_err(|e| PlanError::Index(e.to_string()))
+    }
+
+    /// `/v1/forget purge_caches=true`: drop BOTH query caches — cached SERPs
+    /// may embed the forgotten document's snippet (SPEC §10).
+    pub fn purge_caches(&self) {
+        self.cache.invalidate_all();
+        self.anon_cache.invalidate_all();
     }
 
     /// Aggregate per-engine counters for `/metrics` (no user data).
@@ -286,6 +399,9 @@ impl Planner {
             degraded.push("metasearch_shed");
         }
 
+        // Geo + ts prefilter (SPEC §11: applied BEFORE scoring).
+        let (search_filter, geo_origin) = Self::build_filter(&req)?;
+
         // Local hybrid stages on the rayon pool (SPEC §7.2: no CPU on tokio):
         // BM25 top-1000 ∥-ish embed→ANN top-200 → resolve ANN-only docs.
         let wants_local = matches!(req.scope, Scope::Local | Scope::Both)
@@ -300,14 +416,20 @@ impl Planner {
             let q = req.q.clone();
             let top_k = self.cfg.bm25_top_k;
             let ann_k = self.vector_cfg.top_k;
+            let filter = search_filter.clone();
+            let filtered =
+                filter.geo.is_some() || filter.after_ts.is_some() || filter.before_ts.is_some();
             let (tx, rx) = tokio::sync::oneshot::channel();
             rayon::spawn(move || {
                 let started = Instant::now();
-                let bm25 = index.search(&q, top_k);
+                let bm25 = index.search_filtered(&q, top_k, &filter);
                 let bm25_ms = started.elapsed().as_millis() as u64;
 
                 let ann_started = Instant::now();
-                let ann = if vectors.is_empty() {
+                // Dense ANN has no filter support (usearch); under a geo/ts
+                // constraint the dense list would smuggle out-of-area docs into
+                // the fusion, so the constrained path is lexical-only (exact).
+                let ann = if vectors.is_empty() || filtered {
                     Ok(Vec::new())
                 } else {
                     let query_vec = embedder.embed_query(&q);
@@ -432,6 +554,8 @@ impl Planner {
                     ce: None,
                 },
                 source: "local",
+                h3: (hit.h3_r7 != 0).then_some(hit.h3_r7),
+                ts: (hit.ts != 0).then_some(hit.ts),
             });
         }
         if !bm25_list.is_empty() {
@@ -466,6 +590,8 @@ impl Planner {
                                 ce: None,
                             },
                             source: "local",
+                            h3: (d.h3_r7 != 0).then_some(d.h3_r7),
+                            ts: (d.ts != 0).then_some(d.ts),
                         });
                     }
                     // Key with no resolvable doc (vector for a deleted/lost doc)
@@ -508,6 +634,8 @@ impl Planner {
                             ce: None,
                         },
                         source: "web",
+                        h3: None,
+                        ts: None,
                     });
                 }
             }
@@ -521,6 +649,10 @@ impl Planner {
         // model (ADR-02); RRF-dominant so order is preserved unless a secondary
         // signal is decisive. `mode=deep` adds the CE rerank stage AFTER this.
         let rank_start = Instant::now();
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
         let mut scored: Vec<(u64, f32, f32)> = Vec::new(); // (key, rrf, ltr)
         for (key, rrf_score) in fused.iter().take(100) {
             let Some(r) = by_key.get(key) else { continue };
@@ -528,6 +660,24 @@ impl Planner {
             let source_count = sig.bm25.is_some() as u8 as f32
                 + sig.ann.is_some() as u8 as f32
                 + sig.searx_rank.is_some() as u8 as f32;
+            // Freshness: exp-decay over doc age (SPEC §11), neutral 0.5 when
+            // the doc has no timestamp. ~30-day half-life.
+            let freshness = match r.ts {
+                Some(doc_ts) if doc_ts > 0 => {
+                    let age_days = (now_unix.saturating_sub(doc_ts)) as f32 / 86_400.0;
+                    (-age_days / 43.0).exp().clamp(0.0, 1.0)
+                }
+                _ => 0.5,
+            };
+            // Geo closeness in [0,1] when both a query origin and a doc cell
+            // exist (1/(1+km)); 0 otherwise. The cold-start LTR weighs it 0 —
+            // geo influence comes from the FILTER; this feeds the future GBDT.
+            let geo = match (geo_origin, r.h3) {
+                (Some((lat, lon)), Some(cell)) => meridian_geo::h3::distance_km(cell, lat, lon)
+                    .map(|d| 1.0 / (1.0 + d as f32))
+                    .unwrap_or(0.0),
+                _ => 0.0,
+            };
             let features = Features {
                 rrf: *rrf_score,
                 bm25: sig.bm25.unwrap_or(0.0),
@@ -535,9 +685,9 @@ impl Planner {
                 title_match_ratio: title_match_ratio(&req.q, &r.title),
                 source_count,
                 snippet_len_norm: (r.snippet.len() as f32 / 240.0).min(1.0),
-                freshness: 0.5,    // neutral until ts plumbing (static corpus)
-                domain_prior: 0.0, // Phase-5 analytics PageRank
-                geo: 0.0,          // Phase-5 geo
+                freshness,
+                domain_prior: self.priors.domain_prior(result_domain_hash(r)),
+                geo,
             };
             scored.push((*key, *rrf_score, self.scorer.score(&features)));
         }
@@ -678,6 +828,15 @@ impl Planner {
             degraded,
         })
     }
+}
+
+/// Stable domain identity of a result (the LTR domain_prior key) — same hash
+/// the index stores, derived from the URL host.
+fn result_domain_hash(r: &SearchResult) -> u64 {
+    url::Url::parse(&r.url)
+        .ok()
+        .and_then(|u| u.host_str().map(meridian_index::lexical::domain_hash))
+        .unwrap_or(0)
 }
 
 fn lane_name(lane: &Lane) -> String {

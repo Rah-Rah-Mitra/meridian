@@ -30,6 +30,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/ingest", post(ingest))
         .route("/v1/fetch", get(fetch))
         .route("/v1/lanes", get(lanes))
+        .route("/v1/geo/heatmap", get(heatmap))
+        .route("/v1/trends", get(trends))
         .route("/v1/forget", post(forget))
         .route("/healthz", get(healthz))
         .route("/metrics", get(metrics_endpoint))
@@ -154,6 +156,54 @@ struct SearchParams {
     lane: Option<String>,
     #[serde(default)]
     limit: Option<usize>,
+    // Geo constraint (SPEC §10): lat+lon+radius_km together, OR h3.
+    #[serde(default)]
+    lat: Option<f64>,
+    #[serde(default)]
+    lon: Option<f64>,
+    #[serde(default)]
+    radius_km: Option<f64>,
+    #[serde(default)]
+    h3: Option<String>,
+    // ts window (unix seconds, inclusive).
+    #[serde(default)]
+    after: Option<u64>,
+    #[serde(default)]
+    before: Option<u64>,
+}
+
+/// `h3` accepts the canonical hex form (e.g. `871f1d489ffffff`) or decimal.
+fn parse_h3(raw: &str) -> Result<u64, Problem> {
+    u64::from_str_radix(raw, 16)
+        .or_else(|_| raw.parse::<u64>())
+        .map_err(|_| Problem::new(StatusCode::BAD_REQUEST, "invalid h3", "hex or decimal cell"))
+}
+
+fn parse_geo(
+    params: &SearchParams,
+) -> Result<Option<meridian_query::planner::GeoConstraint>, Problem> {
+    use meridian_query::planner::GeoConstraint;
+    match (
+        params.lat,
+        params.lon,
+        params.radius_km,
+        params.h3.as_deref(),
+    ) {
+        (None, None, None, None) => Ok(None),
+        (_, _, _, Some(h3)) if params.lat.is_none() && params.lon.is_none() => {
+            Ok(Some(GeoConstraint::Cell(parse_h3(h3)?)))
+        }
+        (Some(lat), Some(lon), radius, None) => Ok(Some(GeoConstraint::Point {
+            lat,
+            lon,
+            radius_km: radius.unwrap_or(25.0),
+        })),
+        _ => Err(Problem::new(
+            StatusCode::BAD_REQUEST,
+            "invalid geo constraint",
+            "use lat+lon(+radius_km) OR h3, not both",
+        )),
+    }
 }
 
 fn parse_lane(s: Option<&str>) -> Result<Lane, Problem> {
@@ -204,12 +254,16 @@ async fn search(
             ));
         }
     };
+    let geo = parse_geo(&params)?;
     let request = SearchRequest {
         q: params.q,
         mode,
         scope,
         lane: parse_lane(params.lane.as_deref())?,
         limit: params.limit.unwrap_or(state.config.search.default_limit),
+        geo,
+        after: params.after,
+        before: params.before,
     };
     let response = state
         .planner
@@ -386,15 +440,218 @@ async fn lanes(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     Json(serde_json::json!(lanes))
 }
 
-async fn forget(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Problem {
-    if let Err(p) = bearer_ok(&state, &headers) {
-        return p;
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HeatmapParams {
+    #[serde(default)]
+    q: Option<String>,
+    #[serde(default)]
+    res: Option<u8>,
+    /// Window like "7d" / "24h"; default 7d. Docs without a ts are excluded
+    /// only when a window narrower than "all" is requested.
+    #[serde(default)]
+    window: Option<String>,
+}
+
+fn parse_window(raw: Option<&str>) -> Result<Option<u64>, Problem> {
+    let raw = raw.unwrap_or("7d");
+    if raw == "all" {
+        return Ok(None);
     }
-    Problem::new(
-        StatusCode::NOT_IMPLEMENTED,
-        "not implemented",
-        "POST /v1/forget arrives in Phase 5",
-    )
+    let (num, unit) = raw.split_at(raw.len().saturating_sub(1));
+    let n: u64 = num.parse().map_err(|_| {
+        Problem::new(
+            StatusCode::BAD_REQUEST,
+            "invalid window",
+            "e.g. 7d, 24h, all",
+        )
+    })?;
+    let secs = match unit {
+        "d" => n * 86_400,
+        "h" => n * 3_600,
+        _ => {
+            return Err(Problem::new(
+                StatusCode::BAD_REQUEST,
+                "invalid window",
+                "e.g. 7d, 24h, all",
+            ));
+        }
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    Ok(Some(now.saturating_sub(secs)))
+}
+
+/// SPEC §10 `GET /v1/geo/heatmap`: `{cells:[{h3,count,lat,lon}]}`.
+async fn heatmap(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<HeatmapParams>,
+) -> Result<Json<serde_json::Value>, Problem> {
+    let res = params.res.unwrap_or(5);
+    let after_ts = parse_window(params.window.as_deref())?;
+    let cells = state
+        .planner
+        .heatmap(params.q.clone(), res, after_ts)
+        .await
+        .map_err(problem::plan_error)?;
+    let cells: Vec<serde_json::Value> = cells
+        .into_iter()
+        .map(|(cell, count)| {
+            let centroid = meridian_geo::h3::cell_to_latlng(cell);
+            serde_json::json!({
+                "h3": format!("{cell:x}"),
+                "count": count,
+                "lat": centroid.map(|c| c.0),
+                "lon": centroid.map(|c| c.1),
+            })
+        })
+        .collect();
+    Ok(Json(serde_json::json!({ "res": res, "cells": cells })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TrendsParams {
+    /// GDELT EventRootCode (1..=20).
+    #[serde(default)]
+    topic: Option<u8>,
+    /// H3 res-5 cell (hex or decimal).
+    #[serde(default)]
+    h3: Option<String>,
+    #[serde(default)]
+    window: Option<String>,
+}
+
+/// SPEC §10 `GET /v1/trends`: time series + top movers from the analytics
+/// counters. 404 when analytics is disabled (nothing exists to query).
+async fn trends(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<TrendsParams>,
+) -> Result<Json<meridian_analytics::TrendsReport>, Problem> {
+    let Some(analytics) = &state.analytics else {
+        return Err(Problem::new(
+            StatusCode::NOT_FOUND,
+            "analytics disabled",
+            "enable [analytics] in config",
+        ));
+    };
+    let after_ts = parse_window(params.window.as_deref())?;
+    let now_day = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+        / 86_400) as u32;
+    let from_day = after_ts.map(|t| (t / 86_400) as u32).unwrap_or(0);
+    let h3_r5 = params.h3.as_deref().map(parse_h3).transpose()?;
+    let store = analytics.store().clone();
+    let report = tokio::task::spawn_blocking(move || {
+        meridian_analytics::trends(&store, from_day, now_day, params.topic, h3_r5)
+    })
+    .await
+    .map_err(|_| {
+        Problem::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "trends failed",
+            "internal",
+        )
+    })?
+    .map_err(|e| {
+        Problem::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "trends failed",
+            e.to_string(),
+        )
+    })?;
+    Ok(Json(report))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ForgetBody {
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    domain: Option<String>,
+    #[serde(default)]
+    content_hash: Option<String>,
+    #[serde(default)]
+    purge_caches: Option<bool>,
+}
+
+/// SPEC §10 `POST /v1/forget`: operator deletion path. Removes matching docs
+/// from Tantivy + USearch, tombstones content hashes (re-ingest refused), and
+/// optionally drops the caches (default true — cached SERPs may embed the
+/// forgotten snippet).
+async fn forget(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<ForgetBody>,
+) -> Result<Json<serde_json::Value>, Problem> {
+    bearer_ok(&state, &headers)?;
+    let selectors =
+        body.url.is_some() as u8 + body.domain.is_some() as u8 + body.content_hash.is_some() as u8;
+    if selectors != 1 {
+        return Err(Problem::new(
+            StatusCode::BAD_REQUEST,
+            "invalid forget request",
+            "exactly one of url | domain | content_hash",
+        ));
+    }
+    let ingestor = state.ingestor.clone();
+    let forget_result = tokio::task::spawn_blocking(move || {
+        if let Some(url) = body.url {
+            let key = meridian_index::lexical::url_key(&url);
+            ingestor.forget_keys(&[key])
+        } else if let Some(domain) = body.domain {
+            ingestor.forget_domain(&domain)
+        } else {
+            let raw = body.content_hash.unwrap_or_default();
+            let bytes = (0..raw.len().saturating_sub(1))
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&raw[i..i + 2], 16))
+                .collect::<Result<Vec<u8>, _>>();
+            match bytes {
+                Ok(hash) if hash.len() == 16 => ingestor.forget_content_hash(&hash),
+                _ => Err(meridian_query::ingest::IngestError::Dedup(
+                    "content_hash must be 32 hex chars (16 bytes)".to_owned(),
+                )),
+            }
+        }
+    })
+    .await
+    .map_err(|_| {
+        Problem::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "forget failed",
+            "internal",
+        )
+    })?;
+
+    let removed = forget_result.map_err(|e| match e {
+        meridian_query::ingest::IngestError::Dedup(msg) if msg.contains("hex") => {
+            Problem::new(StatusCode::BAD_REQUEST, "invalid content_hash", msg)
+        }
+        other => Problem::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "forget failed",
+            other.to_string(),
+        ),
+    })?;
+
+    let purge = body.purge_caches.unwrap_or(true);
+    if purge {
+        state.planner.purge_caches();
+        state.fetcher.purge_cache();
+    }
+    // Deletion is an operator action worth an audit line — but the SELECTOR is
+    // user data and never logged (SPEC §13.4).
+    tracing::info!(removed, caches_purged = purge, "forget executed");
+    Ok(Json(serde_json::json!({
+        "removed": removed,
+        "caches_purged": purge,
+    })))
 }
 
 async fn healthz(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {

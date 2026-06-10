@@ -71,6 +71,7 @@ struct Components {
     fetcher: Arc<Fetcher>,
     shed: Arc<ShedState>,
     lanes: Arc<LaneRegistry>,
+    analytics: Option<Arc<meridian_analytics::Analytics>>,
 }
 
 fn build_components(config: MeridianConfig) -> Result<Components, String> {
@@ -89,6 +90,17 @@ fn build_components(config: MeridianConfig) -> Result<Components, String> {
         VectorStore::open_or_create(&config.index.data_dir, embedder.dims(), &config.vector)
             .map_err(|e| e.to_string())?,
     );
+    // Gazetteer (SPEC §3 geo-tagging): optional artifact; absence = geo off.
+    let gazetteer = match meridian_geo::Gazetteer::open(&config.models.gazetteer_path()) {
+        Ok(g) => {
+            tracing::info!(places = g.len(), "gazetteer loaded; ingest geo-tagging on");
+            Some(Arc::new(g))
+        }
+        Err(_) => {
+            tracing::info!("no gazetteer artifact; ingest geo-tagging off");
+            None
+        }
+    };
     let ingestor = Arc::new(
         Ingestor::new(
             index.clone(),
@@ -96,6 +108,7 @@ fn build_components(config: MeridianConfig) -> Result<Components, String> {
             embedder.clone(),
             vectors.clone(),
             &config.index.data_dir,
+            gazetteer,
             &config.ingest,
             &config.vector,
         )
@@ -130,6 +143,24 @@ fn build_components(config: MeridianConfig) -> Result<Components, String> {
     } else {
         None
     };
+    // Analytics (SPEC §9.4): operator opt-in. When on, the store also feeds the
+    // LTR domain_prior; when off, the prior is the cold default (0 everywhere).
+    let analytics = if config.analytics.enabled {
+        Some(Arc::new(
+            meridian_analytics::Analytics::open(
+                &config.index.data_dir,
+                config.analytics.retention_days,
+                config.analytics.max_edges,
+            )
+            .map_err(|e| e.to_string())?,
+        ))
+    } else {
+        None
+    };
+    let priors: Arc<dyn meridian_common::prior::DomainPriorSource> = match &analytics {
+        Some(a) => Arc::new(meridian_analytics::StorePrior(a.store().clone())),
+        None => Arc::new(meridian_common::prior::NoPrior),
+    };
     // Deep reranker: real on the gnu/ort image; inert (degrades mode=deep) on the
     // musl image or if the model is absent.
     let reranker = Arc::new(Reranker::load(&config.models.dir).unwrap_or_else(|e| {
@@ -147,6 +178,7 @@ fn build_components(config: MeridianConfig) -> Result<Components, String> {
         lanes.clone(),
         shed.clone(),
         config.lanes.anon.max_concurrent_searches,
+        priors,
         &config.search,
         &config.vector,
     ));
@@ -157,6 +189,7 @@ fn build_components(config: MeridianConfig) -> Result<Components, String> {
         fetcher,
         shed,
         lanes,
+        analytics,
     })
 }
 
@@ -224,6 +257,70 @@ fn serve() -> ExitCode {
             tracing::error!(error = %e, "egress lane startup failed");
             return ExitCode::FAILURE;
         }
+        // Retention observability (SPEC §6.1 caps): per-store disk gauges every
+        // 30 min. The ACTING sweeps live with their stores (analytics daily
+        // compaction below; geocode sweep when the geocoder is wired); dedup
+        // hashes + forget tombstones are deliberately permanent (correctness).
+        {
+            let data_dir = components.config.index.data_dir.clone();
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(std::time::Duration::from_secs(30 * 60));
+                loop {
+                    tick.tick().await;
+                    for store in ["dedup.redb", "egress.redb", "geo.redb", "analytics.redb"] {
+                        let bytes = std::fs::metadata(data_dir.join(store))
+                            .map(|m| m.len())
+                            .unwrap_or(0);
+                        metrics::gauge!("meridian_store_bytes", "store" => store).set(bytes as f64);
+                    }
+                }
+            });
+        }
+        // Analytics jobs (SPEC §9.4): 15-min GDELT pull on the direct lane;
+        // daily retention compaction + PageRank → domain_prior.
+        if let Some(analytics) = components.analytics.clone() {
+            let lanes = components.lanes.clone();
+            let cfg = components.config.analytics.clone();
+            tokio::spawn(async move {
+                let mut tick =
+                    tokio::time::interval(std::time::Duration::from_secs(cfg.pull_interval_secs));
+                loop {
+                    tick.tick().await;
+                    match lanes.resolve(&meridian_egress::Lane::Direct) {
+                        Ok(client) => match analytics.pull_once(&client, &cfg.gdelt_base).await {
+                            Ok(rows) if rows > 0 => {
+                                tracing::info!(rows, "gdelt slice applied");
+                            }
+                            Ok(_) => {}
+                            Err(e) => tracing::warn!(error = %e, "gdelt pull failed"),
+                        },
+                        Err(e) => tracing::warn!(error = %e, "gdelt pull: no direct lane: {e}"),
+                    }
+                }
+            });
+            let analytics = components.analytics.clone().expect("checked above");
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(std::time::Duration::from_secs(24 * 60 * 60));
+                tick.tick().await; // first tick is immediate; jobs run at startup
+                loop {
+                    match analytics.compact() {
+                        Ok((c, e)) => {
+                            tracing::info!(
+                                counters_dropped = c,
+                                edges_dropped = e,
+                                "analytics retention"
+                            )
+                        }
+                        Err(e) => tracing::warn!(error = %e, "analytics retention failed"),
+                    }
+                    match analytics.recompute_priors() {
+                        Ok(n) => tracing::info!(domains = n, "domain priors recomputed"),
+                        Err(e) => tracing::warn!(error = %e, "pagerank failed"),
+                    }
+                    tick.tick().await;
+                }
+            });
+        }
         let ingestor_for_shutdown = components.ingestor.clone();
         let state = AppState::new(
             components.config,
@@ -231,6 +328,7 @@ fn serve() -> ExitCode {
             components.ingestor,
             components.fetcher,
             components.shed,
+            components.analytics.clone(),
             bearer,
             metrics_handle,
         );

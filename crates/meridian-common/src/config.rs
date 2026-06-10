@@ -26,6 +26,7 @@ pub struct MeridianConfig {
     pub ingest: IngestConfig,
     pub models: ModelsConfig,
     pub vector: VectorConfig,
+    pub analytics: AnalyticsConfig,
 }
 
 impl MeridianConfig {
@@ -325,12 +326,54 @@ impl Default for FetchConfig {
 #[serde(deny_unknown_fields, default)]
 pub struct ModelsConfig {
     pub dir: PathBuf,
+    /// Gazetteer fst for ingest geo-tagging. Default: `<dir>/gazetteer.fst`,
+    /// loaded only if present (geo-tagging silently off otherwise).
+    pub gazetteer_file: Option<PathBuf>,
 }
 
 impl Default for ModelsConfig {
     fn default() -> Self {
         Self {
             dir: PathBuf::from("models"),
+            gazetteer_file: None,
+        }
+    }
+}
+
+impl ModelsConfig {
+    /// The gazetteer path to probe: explicit config, or `<dir>/gazetteer.fst`.
+    pub fn gazetteer_path(&self) -> PathBuf {
+        self.gazetteer_file
+            .clone()
+            .unwrap_or_else(|| self.dir.join("gazetteer.fst"))
+    }
+}
+
+/// GDELT analytics (SPEC §9.4). OFF by default — pulling third-party feeds is
+/// an operator choice, not a surprise (SPEC §13.4 no-phone-home posture).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct AnalyticsConfig {
+    pub enabled: bool,
+    /// Plain HTTP by upstream necessity (ADR-15: invalid TLS cert; manifest
+    /// MD5 verifies integrity).
+    pub gdelt_base: String,
+    /// GDELT publishes every 15 minutes.
+    pub pull_interval_secs: u64,
+    /// Counter TTL (SPEC §9.4: 90 days).
+    pub retention_days: u32,
+    /// Co-occurrence edge cap (PageRank substrate size bound).
+    pub max_edges: usize,
+}
+
+impl Default for AnalyticsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            gdelt_base: "http://data.gdeltproject.org/gdeltv2".to_owned(),
+            pull_interval_secs: 900,
+            retention_days: 90,
+            max_edges: 200_000,
         }
     }
 }
