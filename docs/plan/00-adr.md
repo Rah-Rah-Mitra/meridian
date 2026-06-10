@@ -80,6 +80,14 @@ requires either an upstream fix to tract-linalg's probe/flags (small,
 upstreamable) or a vendored build.rs patch; otherwise Plan B (gnu + distroless)
 absorbs this too. Logged as risk #2/#3 adjunct.
 
+**On-device run evidence (2026-06-10):** tract 0.23 additionally **fails to load
+the official `model_qint8_arm64.onnx` CE export** ("Failed analyse for node #379
+/bert/Unsqueeze (Unsqueeze13)") at every batch size — an op/shape-inference
+coverage gap on this particular INT8 graph. Plan A therefore needs a
+tract-friendly (re-)export or our own quantization in `train/` before it can be
+benchmarked at all; Plan B (ort + gnu/distroless) remains fully viable. The
+Phase-3 bake-off starts from this position.
+
 ## ADR-03 — Extraction bake-off: dom_smoothie presumed winner
 
 **Decision.** Phase-1 bake-off proceeds per spec, but between **`dom_smoothie`**
