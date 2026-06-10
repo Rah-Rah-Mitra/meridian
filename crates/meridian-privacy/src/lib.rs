@@ -6,8 +6,14 @@
 //! `secrecy`/`zeroize` secret types. Phase-5 adds retention TTL sweeps and the
 //! `/v1/forget` deletion jobs.
 //!
-//! Status: Phase-0 scaffold — only the `Redacted<T>` wrapper is real, because every
-//! other crate's structs need it from day one.
+//! Phase-1 surface: [`Redacted`] (call-site ring), [`redact::RedactLayer`] +
+//! [`telemetry::init`] (output ring), [`iphash::IpHasher`] (rate-limit keys),
+//! [`secret`] (secrecy/zeroize handling). Retention/forget jobs land in Phase 5.
+
+pub mod iphash;
+pub mod redact;
+pub mod secret;
+pub mod telemetry;
 
 /// Wrapper for any field carrying user input (query text, client IP, fetched URL).
 ///

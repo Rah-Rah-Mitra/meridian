@@ -23,8 +23,30 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 libc = "0.2"
+# --- Phase 1: runtime / http / telemetry ---
+axum = "0.8"
+tower = { version = "0.5", features = ["timeout", "limit", "load-shed", "util"] }
+tower-http = { version = "0.6", features = ["compression-gzip", "limit"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-tls", "json", "stream", "gzip"] }
+figment = { version = "0.10", features = ["toml", "env"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "registry"] }
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.18", default-features = false }
+governor = "0.10"
+texting_robots = "0.2"
+dom_smoothie = "0.18"
+whichlang = "0.1"
+redb = "4"
+blake3 = "1"
+secrecy = "0.10"
+zeroize = "1"
+url = "2"
+getrandom = "0.3"
+futures-util = { version = "0.3", default-features = false }
+rayon = "1"
 # --- bench-only (meridian-eval features; versions verified 2026-06-10) ---
-tantivy = "0.26"
+tantivy = { version = "0.26", features = ["zstd-compression"] }
 usearch = "2.25"
 cxx = "1"
 model2vec-rs = { version = "0.2", default-features = false, features = ["fancy-regex", "local-only"] }

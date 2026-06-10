@@ -11,6 +11,12 @@ publish.workspace = true
 
 [dependencies]
 meridian-common.workspace = true
+blake3.workspace = true
+getrandom.workspace = true
+secrecy.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true
