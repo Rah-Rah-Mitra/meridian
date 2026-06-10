@@ -14,6 +14,7 @@
 use meridian_eval::metrics::{mrr_at, ndcg_at, recall_at};
 use meridian_eval::qrels;
 use meridian_eval::stats::Rng;
+use meridian_rank::{Features, LinearLtr, Scorer, title_match_ratio};
 use std::collections::HashSet;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
@@ -281,6 +282,8 @@ fn run(data: &str, models: &str, queries: &str, qrels_path: &str) -> ExitCode {
     // Per-system accumulators: (ndcg@10, mrr@10, recall@100)
     let mut bm25_scores = (0.0, 0.0, 0.0);
     let mut hybrid_scores = (0.0, 0.0, 0.0);
+    let mut ltr_scores = (0.0, 0.0, 0.0);
+    let scorer = LinearLtr::default();
     let mut evaluated = 0usize;
 
     for (qid, query) in &set.queries {
@@ -300,6 +303,7 @@ fn run(data: &str, models: &str, queries: &str, qrels_path: &str) -> ExitCode {
         // Hybrid: RRF over {bm25 top-1000, ann top-200} — the planner's exact
         // local fusion (same rrf_fuse, same url_key identity).
         let bm25_full = index.search(query, 1000).unwrap_or_default();
+        let bm25_full_for_ltr = bm25_full.clone();
         let qv = embedder.embed_query(query);
         let ann = vectors.search(&qv, 200).unwrap_or_default();
         let lists: Vec<Vec<u64>> = vec![
@@ -324,12 +328,54 @@ fn run(data: &str, models: &str, queries: &str, qrels_path: &str) -> ExitCode {
             .take(100)
             .collect();
 
+        // hybrid + LTR re-score (the planner's rank stage): same fused list,
+        // re-ordered by the cold-start linear model over the top-100.
+        let ann_sim: std::collections::HashMap<u64, f32> = ann.iter().copied().collect();
+        let bm25_by_key: std::collections::HashMap<u64, f32> = bm25_full_for_ltr
+            .iter()
+            .map(|h| (h.url_key, h.bm25))
+            .collect();
+        let title_by_key: std::collections::HashMap<u64, String> = bm25_full_for_ltr
+            .iter()
+            .map(|h| (h.url_key, h.title.clone()))
+            .collect();
+        let mut ltr_ranked_keyed: Vec<(u64, f32)> = fused
+            .iter()
+            .take(100)
+            .map(|(k, rrf)| {
+                let f = Features {
+                    rrf: *rrf,
+                    bm25: bm25_by_key.get(k).copied().unwrap_or(0.0),
+                    ann: ann_sim.get(k).copied().unwrap_or(0.0),
+                    title_match_ratio: title_by_key
+                        .get(k)
+                        .map(|t| title_match_ratio(query, t))
+                        .unwrap_or(0.0),
+                    source_count: bm25_by_key.contains_key(k) as u8 as f32
+                        + ann_sim.contains_key(k) as u8 as f32,
+                    snippet_len_norm: 0.5,
+                    freshness: 0.5,
+                    domain_prior: 0.0,
+                    geo: 0.0,
+                };
+                (*k, scorer.score(&f))
+            })
+            .collect();
+        ltr_ranked_keyed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        let ltr_ranked: Vec<String> = ltr_ranked_keyed
+            .iter()
+            .filter_map(|(k, _)| url_by_key.get(k).cloned())
+            .collect();
+
         bm25_scores.0 += ndcg_at(10, &bm25_ranked, judgments);
         bm25_scores.1 += mrr_at(10, &bm25_ranked, judgments);
         bm25_scores.2 += recall_at(100, &bm25_ranked, judgments);
         hybrid_scores.0 += ndcg_at(10, &hybrid_ranked, judgments);
         hybrid_scores.1 += mrr_at(10, &hybrid_ranked, judgments);
         hybrid_scores.2 += recall_at(100, &hybrid_ranked, judgments);
+        ltr_scores.0 += ndcg_at(10, &ltr_ranked, judgments);
+        ltr_scores.1 += mrr_at(10, &ltr_ranked, judgments);
+        ltr_scores.2 += recall_at(100, &ltr_ranked, judgments);
     }
 
     let n = evaluated.max(1) as f64;
@@ -342,17 +388,29 @@ fn run(data: &str, models: &str, queries: &str, qrels_path: &str) -> ExitCode {
         bm25_scores.2 / n
     );
     println!(
-        "| hybrid | {:.4} | {:.4} | {:.4} |",
+        "| hybrid     | {:.4} | {:.4} | {:.4} |",
         hybrid_scores.0 / n,
         hybrid_scores.1 / n,
         hybrid_scores.2 / n
     );
-    let pass = hybrid_scores.0 >= bm25_scores.0;
+    println!(
+        "| hybrid+ltr | {:.4} | {:.4} | {:.4} |",
+        ltr_scores.0 / n,
+        ltr_scores.1 / n,
+        ltr_scores.2 / n
+    );
+    let hybrid_beats_bm25 = hybrid_scores.0 >= bm25_scores.0;
+    // LTR no-regression (SPEC §16 Phase-3 exit): within 1% of hybrid nDCG@10.
+    let ltr_no_regression = ltr_scores.0 >= hybrid_scores.0 - 0.01 * hybrid_scores.0.max(1e-9);
     println!(
         "\nGATE hybrid nDCG@10 >= BM25: {}",
-        if pass { "PASS" } else { "FAIL" }
+        if hybrid_beats_bm25 { "PASS" } else { "FAIL" }
     );
-    if pass {
+    println!(
+        "GATE hybrid+ltr no regression vs hybrid: {}",
+        if ltr_no_regression { "PASS" } else { "FAIL" }
+    );
+    if hybrid_beats_bm25 && ltr_no_regression {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE

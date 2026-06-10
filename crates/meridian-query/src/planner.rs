@@ -3,6 +3,7 @@
 //! → RRF(k=60) → domain-diversity cap → results with rank_signals + timings.
 //! ANN joins the fusion in Phase 2; LTR/rerank in Phase 3.
 
+use crate::intent;
 use crate::rrf::{RRF_K, rrf_fuse};
 use crate::{Scope, SearchMode};
 use meridian_common::config::{SearchConfig, VectorConfig};
@@ -10,6 +11,7 @@ use meridian_common::shed::ShedState;
 use meridian_egress::{Lane, LaneRegistry};
 use meridian_embed::Embedder;
 use meridian_index::lexical::{LexicalIndex, url_key};
+use meridian_rank::{Features, LinearLtr, Scorer, title_match_ratio};
 use meridian_searx::client::SearxClient;
 use meridian_vector::VectorStore;
 use std::collections::HashMap;
@@ -45,6 +47,8 @@ pub struct RankSignals {
     pub ann: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub searx_rank: Option<usize>,
+    /// LTR re-score (SPEC §11). Always set after the rank stage.
+    pub ltr: f32,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -82,6 +86,7 @@ pub struct Planner {
     searx: Option<Arc<SearxClient>>,
     lanes: Arc<LaneRegistry>,
     shed: Arc<ShedState>,
+    scorer: Arc<dyn Scorer>,
     cache: moka::sync::Cache<[u8; 32], Arc<CachedSearch>>,
     cfg: SearchConfig,
     vector_cfg: VectorConfig,
@@ -119,6 +124,7 @@ impl Planner {
             searx,
             lanes,
             shed,
+            scorer: Arc::new(LinearLtr::default()),
             cache,
             cfg: cfg.clone(),
             vector_cfg: vector_cfg.clone(),
@@ -152,6 +158,9 @@ impl Planner {
         let mut timings: HashMap<&'static str, u64> = HashMap::new();
         let mut degraded: Vec<&'static str> = Vec::new();
         let limit = req.limit.clamp(1, self.cfg.max_limit);
+        // Intent: µs heuristic; keys the bandit (Phase-3) and is surfaced in the
+        // response for explainability. Never logged with the query text.
+        let query_intent = intent::classify(&req.q);
 
         // Query cache (direct lane only; anon results must never share state —
         // SPEC §8.4/§12.4). Shedding stage 2 drops + bypasses it.
@@ -311,6 +320,7 @@ impl Planner {
                     bm25: Some(hit.bm25),
                     ann: None,
                     searx_rank: None,
+                    ltr: 0.0,
                 },
                 source: "local",
             });
@@ -343,6 +353,7 @@ impl Planner {
                                 bm25: None,
                                 ann: Some(*sim),
                                 searx_rank: None,
+                                ltr: 0.0,
                             },
                             source: "local",
                         });
@@ -383,6 +394,7 @@ impl Planner {
                             bm25: None,
                             ann: None,
                             searx_rank: Some(hit.rank),
+                            ltr: 0.0,
                         },
                         source: "web",
                     });
@@ -394,10 +406,37 @@ impl Planner {
         let fused = rrf_fuse(&lists, RRF_K);
         timings.insert("fuse_ms", fuse_start.elapsed().as_millis() as u64);
 
+        // LTR re-score the top-100 fused candidates (SPEC §11). Cold-start linear
+        // model (ADR-02); RRF-dominant so order is preserved unless a secondary
+        // signal is decisive. `mode=deep` adds the CE rerank stage AFTER this.
+        let rank_start = Instant::now();
+        let mut scored: Vec<(u64, f32, f32)> = Vec::new(); // (key, rrf, ltr)
+        for (key, rrf_score) in fused.iter().take(100) {
+            let Some(r) = by_key.get(key) else { continue };
+            let sig = &r.rank_signals;
+            let source_count = sig.bm25.is_some() as u8 as f32
+                + sig.ann.is_some() as u8 as f32
+                + sig.searx_rank.is_some() as u8 as f32;
+            let features = Features {
+                rrf: *rrf_score,
+                bm25: sig.bm25.unwrap_or(0.0),
+                ann: sig.ann.unwrap_or(0.0),
+                title_match_ratio: title_match_ratio(&req.q, &r.title),
+                source_count,
+                snippet_len_norm: (r.snippet.len() as f32 / 240.0).min(1.0),
+                freshness: 0.5,    // neutral until ts plumbing (static corpus)
+                domain_prior: 0.0, // Phase-5 analytics PageRank
+                geo: 0.0,          // Phase-5 geo
+            };
+            scored.push((*key, *rrf_score, self.scorer.score(&features)));
+        }
+        scored.sort_unstable_by(|a, b| b.2.partial_cmp(&a.2).unwrap().then(a.0.cmp(&b.0)));
+        timings.insert("ltr_ms", rank_start.elapsed().as_millis() as u64);
+
         // Domain-diversity cap (SPEC §11: ≤3 per domain), then cut to limit.
         let mut per_domain: HashMap<String, usize> = HashMap::new();
         let mut results = Vec::with_capacity(limit);
-        for (key, rrf_score) in fused {
+        for (key, rrf_score, ltr_score) in scored {
             let Some(mut r) = by_key.remove(&key) else {
                 continue;
             };
@@ -410,8 +449,9 @@ impl Planner {
                 continue;
             }
             *count += 1;
-            r.score = rrf_score;
+            r.score = ltr_score;
             r.rank_signals.rrf = rrf_score;
+            r.rank_signals.ltr = ltr_score;
             results.push(r);
             if results.len() >= limit {
                 break;
@@ -433,6 +473,7 @@ impl Planner {
             );
         }
 
+        tracing::debug!(intent = query_intent.key(), "query planned");
         Ok(SearchResponse {
             results,
             timings,

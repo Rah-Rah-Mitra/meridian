@@ -26,6 +26,7 @@ meridian-common.workspace = true
 meridian-embed.workspace = true
 meridian-index.workspace = true
 meridian-query.workspace = true
+meridian-rank.workspace = true
 meridian-vector.workspace = true
 serde.workspace = true
 serde_json.workspace = true

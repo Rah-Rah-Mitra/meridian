@@ -3131,6 +3131,7 @@ dependencies = [
  "meridian-embed",
  "meridian-index",
  "meridian-query",
+ "meridian-rank",
  "meridian-vector",
  "model2vec-rs",
  "rustls",

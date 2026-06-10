@@ -6,6 +6,7 @@
 //! fusion in Phase 2, LTR/rerank in Phase 3.
 
 pub mod ingest;
+pub mod intent;
 pub mod planner;
 pub mod rrf;
 

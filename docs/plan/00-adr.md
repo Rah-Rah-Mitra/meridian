@@ -67,7 +67,28 @@ inference runtime) recoverable. ONNX Runtime's aarch64 INT8 kernels use
 NEON+dotprod (sdot/udot) at runtime — the A76 qualifies (no i8mm/SVE, so no i8mm
 fast path on either plan).
 
-**Status: CHALLENGE → staged resolution APPROVED** (operator sign-off 2026-06-10).
+**Status: CHALLENGE → RESOLVED at Phase-3 entry (2026-06-10).**
+
+**Phase-3 resolution (the bake-off, decided):**
+- **LTR + intent classifier ship as pure Rust, no inference runtime.** The spec
+  itself defines cold-start LTR as "hand-tuned linear weights behind the same
+  ONNX interface (single Gemm)" — we implement that Gemm in Rust behind a
+  `Scorer` trait, and intent as a µs-scale heuristic ("no neural cost"). There is
+  no training data yet (no click logs, only a synthetic eval set), so the GBDT
+  upgrade is premature regardless of runtime. This keeps the default musl/scratch
+  image neural-free.
+- **Deep cross-encoder rerank uses `ort` on the gnu target, feature-gated.**
+  Evidence: tract 0.23 cannot load the official `model_qint8_arm64.onnx`
+  (Unsqueeze13) AND cannot build under zigbuild/musl (fp16, same family as
+  numkong/risk-3); ort loads the INT8 export with full op coverage and this Pi
+  runs glibc 2.41 (≥2.39 → ort prebuilts work natively on aarch64-gnu). The
+  default scratch/musl image degrades `mode=deep` to LTR order with
+  `degraded:["rerank_unavailable"]`; a gnu image variant carries the `rerank`
+  feature. This is the §7.1-sanctioned "gnu/distroless fallback for ort."
+- tract is NOT dead: if a tract-friendly CE re-export materializes it can replace
+  ort behind the same `Reranker` trait. Not worth blocking Phase 3 on it.
+
+**Original staged plan (superseded by the above):**
 
 **Post-sign-off evidence (Phase-0 bench build):** tract-linalg 0.23's build script
 compiles SVE f16 C kernels with `-march=armv8.2-a+sve+fp16` — a GCC extension
@@ -226,7 +247,8 @@ now ships a ready **`onnx/model_qint8_arm64.onnx` (23.2MB INT8)** — no custom
 quantization needed for v1; `train/` quantization tooling becomes contingency.
 Inference runtime per ADR-02's bake-off.
 
-**Status: CONFIRMED.**
+**Status: CONFIRMED — Phase-3 note:** LTR cold-start is the pure-Rust linear
+scorer (ADR-02 resolution); GBDT→ONNX awaits training data. Deep CE via ort/gnu.
 
 ## ADR-10 — Geo: h3o, gazetteer fst, remote geocoder, optional GeoLite2
 
