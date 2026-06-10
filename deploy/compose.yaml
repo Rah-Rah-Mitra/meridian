@@ -24,8 +24,14 @@ volumes:
 
 services:
   meridiand:
-    # Pinned by digest once the first GHCR image is published (Phase-0 exit gate)
-    image: ghcr.io/rah-rah-mitra/meridian/meridiand:0.0.1
+    image: ghcr.io/rah-rah-mitra/meridian/meridiand:latest
+    environment:
+      # Container-internal bind; the host only ever sees 127.0.0.1 via `ports`
+      MERIDIAN_SERVER__BIND: 0.0.0.0
+      MERIDIAN_INDEX__DATA_DIR: /data
+      MERIDIAN_SEARX__URL: http://searxng:8080
+      # Operator sets this in .env (never committed); compose interpolates
+      MERIDIAN_BEARER_TOKEN: ${MERIDIAN_BEARER_TOKEN:?set MERIDIAN_BEARER_TOKEN in .env}
     read_only: true
     security_opt:
       - no-new-privileges:true
@@ -54,8 +60,8 @@ services:
       start_period: 10s
 
   searxng:
-    # TODO(phase-1): pin by digest (SPEC §13.2)
-    image: searxng/searxng:latest
+    # Digest-pinned (SPEC §13.2); bump deliberately via the monthly chore
+    image: searxng/searxng@sha256:02d441bbb647b7be422d21041420115cddadac4644368f67c7c7f407bbe72e22
     read_only: true
     security_opt:
       - no-new-privileges:true
@@ -78,7 +84,7 @@ services:
 
   searxng-anon:
     profiles: [anon]
-    image: searxng/searxng:latest
+    image: searxng/searxng@sha256:02d441bbb647b7be422d21041420115cddadac4644368f67c7c7f407bbe72e22
     read_only: true
     security_opt:
       - no-new-privileges:true

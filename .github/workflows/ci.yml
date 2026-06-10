@@ -96,6 +96,20 @@ jobs:
           path: target/aarch64-unknown-linux-musl/release/meridiand
           retention-days: 14
 
+  privacy-smoke:
+    # SPEC §13.4/§15: canary query + canary client IP driven through the real
+    # binary; zero occurrences allowed in logs, /metrics, or /data. Merge-blocking.
+    name: privacy smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: privacy-smoke
+      - run: cargo build -p meridiand
+      - run: bash deploy/privacy-smoke.sh target/debug/meridiand
+
   bench-build:
     # GNU (not musl) deliberately: tract-linalg's SVE f16 kernels pass `-march=
     # armv8.2-a+sve+fp16` — a GCC extension spelling that zig's clang rejects
