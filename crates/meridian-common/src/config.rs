@@ -57,7 +57,10 @@ pub struct ServerConfig {
     pub port: u16,
     /// In-flight request cap; queueing beyond it sheds with 429 (SPEC §7.2).
     pub concurrency_limit: usize,
-    /// Whole-request timeout — must exceed the metasearch deadline.
+    /// Whole-request ceiling — a last-resort guard, NOT the enforcement
+    /// mechanism (per-stage deadlines are). Must exceed the SLOWEST lane
+    /// budget: anon metasearch is 8s (SPEC §6.3), so 3s (the Phase-1 fast-path
+    /// value) clipped legitimate anon searches with API-level 504s.
     pub request_timeout_ms: u64,
     /// Request body cap (SPEC §13.2: 1MB).
     pub body_limit_bytes: usize,
@@ -72,7 +75,7 @@ impl Default for ServerConfig {
             bind: "127.0.0.1".to_owned(),
             port: 8080,
             concurrency_limit: 8,
-            request_timeout_ms: 3_000,
+            request_timeout_ms: 12_000,
             body_limit_bytes: 1_048_576,
             rate_limit_per_sec: 5,
             rate_limit_burst: 20,
