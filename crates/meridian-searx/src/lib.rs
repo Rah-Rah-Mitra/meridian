@@ -4,4 +4,7 @@
 //! arms persisted in redb. Anon-lane outcomes never feed shared bandit state
 //! (SPEC §12.4 cache isolation).
 //!
-//! Status: Phase-0 scaffold — lands in Phase 1 (direct) / Phase 4 (anon endpoint).
+//! Status: Phase 1 — direct instance client live; anon endpoint + bandit
+//! routing arrive in Phases 3–4.
+
+pub mod client;

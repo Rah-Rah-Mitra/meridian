@@ -19,6 +19,19 @@ meridian-rerank.workspace = true
 meridian-fetch.workspace = true
 meridian-searx.workspace = true
 meridian-geo.workspace = true
+# §5 lists query's deps without egress, but also assigns query "lane selection" —
+# which needs the Lane types. Recorded in 01-wbs.md §0 alongside the other two
+# §5 dependency-rule corrections.
+meridian-egress.workspace = true
+blake3.workspace = true
+rayon.workspace = true
+redb.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }
+tracing.workspace = true
+url.workspace = true
+whichlang.workspace = true
 
 [lints]
 workspace = true

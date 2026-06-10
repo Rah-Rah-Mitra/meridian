@@ -2,9 +2,11 @@
 //! egress-lane selection, local/metasearch fan-out with deadlines (hedging on the
 //! direct lane ONLY), RRF fusion (k=60), MMR-lite domain diversity.
 //!
-//! Status: Phase-0 scaffold — planner lands in Phase 1 (lexical), fusion over ANN in
-//! Phase 2. RRF is implemented now (pure function, exercised by `meridian-bench`).
+//! Status: Phase 1 — lexical planner + ingest pipeline live; ANN joins the
+//! fusion in Phase 2, LTR/rerank in Phase 3.
 
+pub mod ingest;
+pub mod planner;
 pub mod rrf;
 
 /// Search execution mode (SPEC §10). `Deep` adds the INT8 cross-encoder rerank stage.

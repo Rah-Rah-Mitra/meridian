@@ -3062,7 +3062,9 @@ dependencies = [
 name = "meridian-query"
 version = "0.0.1"
 dependencies = [
+ "blake3",
  "meridian-common",
+ "meridian-egress",
  "meridian-embed",
  "meridian-fetch",
  "meridian-geo",
@@ -3071,6 +3073,14 @@ dependencies = [
  "meridian-rerank",
  "meridian-searx",
  "meridian-vector",
+ "rayon",
+ "redb",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "url",
+ "whichlang",
 ]
 
 [[package]]
@@ -3093,6 +3103,11 @@ version = "0.0.1"
 dependencies = [
  "meridian-common",
  "meridian-egress",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -4191,6 +4206,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d92195228612ac8eed47adbc2ed0f04e513a4ccb98175b6f2bd04d963b533655"
 dependencies = [
  "rand_core 0.6.4",
+]
+
+[[package]]
+name = "redb"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e925444704b5f17d32bf42f5b6e2df050bceebc3dcd6e71cc73dafe8092e839"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
@@ -7497,6 +7521,12 @@ checksum = "f31141ce3fc3e300ae89b78c0dd67f9708061d1d2eda54b8209346fd6be9a92c"
 dependencies = [
  "rustls-pki-types",
 ]
+
+[[package]]
+name = "whichlang"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b9aa3ad29c3d08283ac6b769e3ec15ad1ddb88af7d2e9bc402c574973b937e7"
 
 [[package]]
 name = "winapi"
