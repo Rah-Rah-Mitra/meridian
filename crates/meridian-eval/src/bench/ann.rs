@@ -2,8 +2,10 @@
 //! ADR-01 16K-page mmap `view()` smoke test (SPEC §15.2).
 //! Gates: p99 <40ms @ ef=64 AND recall@10 ≥0.95 AND view() works on this kernel.
 //!
-//! Recall is measured against exact brute-force over the same int8 quantization the
-//! reference copy uses (graph recall, not quantization loss — noted in the report).
+//! Recall is measured against exact brute-force over usearch's OWN int8
+//! representation (unit vector × 127) — i.e. pure graph recall over exactly what
+//! the index stores and compares. End-to-end quantization loss vs f32 is a
+//! ranking-quality question, owned by the Phase-2 eval harness (nDCG hybrid≥BM25).
 
 use super::{BenchConfig, SuiteResult};
 use crate::probe::rss_bytes;
@@ -30,12 +32,15 @@ fn unit_gaussian(seed: u64) -> Vec<f32> {
 /// Real embeddings live on low-dimensional manifolds; on uniformly random 256-d
 /// vectors all distances concentrate and HNSW recall is meaningless (measured:
 /// recall@10 = 0.012 on the first run — the methodology bug this fixes).
-/// centroid(key % 4096) + ~0.5 relative Gaussian noise → within-cluster cosine
-/// ≈ 0.89, cross-cluster ≈ 0, ~244 vectors/cluster at 1M.
+/// centroid(key % 4096) + per-vector noise scale drawn from [0.3, 1.2] relative —
+/// varied distances give real nearest-neighbor structure with margins (uniform-σ
+/// clusters put ~244 near-equidistant candidates on a knife edge and recall
+/// measures tie-breaking, not the graph).
 fn unit_vector(key: u64) -> Vec<f32> {
     let centroid = unit_gaussian(0xC0DE_0000 + (key % 4096));
     let mut rng = Rng::new(key.wrapping_mul(0x9E37_79B9) ^ 0x5EED);
-    let sigma = 0.5 / (DIMS as f32).sqrt();
+    let rel_noise = 0.3 + 0.9 * rng.next_f32();
+    let sigma = rel_noise / (DIMS as f32).sqrt();
     let mut v: Vec<f32> = centroid
         .iter()
         .map(|c| c + sigma * rng.next_gaussian())
@@ -45,15 +50,13 @@ fn unit_vector(key: u64) -> Vec<f32> {
     v
 }
 
-fn quantize(v: &[f32]) -> (Vec<i8>, f32) {
-    let max_abs = v.iter().fold(0.0f32, |m, x| m.max(x.abs())).max(1e-9);
-    let scale = max_abs / 127.0;
-    (
-        v.iter()
-            .map(|x| (x / scale).round().clamp(-127.0, 127.0) as i8)
-            .collect(),
-        scale,
-    )
+/// usearch's i8 scheme for cosine: unit-normalized components × 127. Using the
+/// identical representation makes the brute-force reference rank with exactly
+/// the values the index stores — recall then isolates graph quality.
+fn quantize_usearch(v: &[f32]) -> Vec<i8> {
+    v.iter()
+        .map(|x| (x * 127.0).round().clamp(-127.0, 127.0) as i8)
+        .collect()
 }
 
 fn options() -> IndexOptions {
@@ -79,12 +82,9 @@ pub fn run(cfg: &BenchConfig) -> SuiteResult {
 
         // Reference int8 copy for brute-force recall (256MB at 1M — bounded).
         let mut ref_i8: Vec<i8> = Vec::with_capacity(n * DIMS);
-        let mut ref_scale: Vec<f32> = Vec::with_capacity(n);
         for key in 0..n as u64 {
             let v = unit_vector(key);
-            let (q, s) = quantize(&v);
-            ref_i8.extend_from_slice(&q);
-            ref_scale.push(s);
+            ref_i8.extend_from_slice(&quantize_usearch(&v));
         }
 
         let rss0 = rss_bytes();
@@ -136,9 +136,9 @@ pub fn run(cfg: &BenchConfig) -> SuiteResult {
         let mut hits = 0usize;
         for qi in 0..RECALL_QUERIES as u64 {
             let qf = unit_vector(0xFFFF_0000 + qi);
-            let (qq, _) = quantize(&qf);
-            // Exact top-K by int8 dot × per-vector scale.
-            let mut scored: Vec<(f32, u64)> = (0..n)
+            let qq = quantize_usearch(&qf);
+            // Exact top-K by i8 dot over the index's own representation.
+            let mut scored: Vec<(i32, u64)> = (0..n)
                 .map(|i| {
                     let row = &ref_i8[i * DIMS..(i + 1) * DIMS];
                     let dot: i32 = row
@@ -146,10 +146,10 @@ pub fn run(cfg: &BenchConfig) -> SuiteResult {
                         .zip(qq.iter())
                         .map(|(a, b)| *a as i32 * *b as i32)
                         .sum();
-                    (dot as f32 * ref_scale[i], i as u64)
+                    (dot, i as u64)
                 })
                 .collect();
-            scored.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+            scored.sort_unstable_by(|a, b| b.0.cmp(&a.0));
             let truth: std::collections::HashSet<u64> =
                 scored[..TOP_K].iter().map(|p| p.1).collect();
             let matches = index.search(&qf, TOP_K).map_err(err)?;
