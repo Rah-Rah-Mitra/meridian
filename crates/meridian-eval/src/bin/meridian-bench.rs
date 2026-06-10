@@ -1,79 +1,221 @@
 //! `meridian-bench` — the SPEC §15 on-device benchmark suite.
 //!
-//! Phase-0 stub: enumerates the suite and exits non-zero for unimplemented benches so
-//! it can never masquerade as a passed gate. Implementations land right after the
-//! planning sign-off; every SPEC §6.3 latency number stays provisional until this has
-//! run on the Pi 5 and `docs/plan/02-budgets.md` is updated with measured values.
+//! Suites are feature-gated (see meridian-eval's Cargo features); a suite that is
+//! requested but not compiled in, or that fails its gate, makes the run exit
+//! non-zero — a partial run can never masquerade as a passed gate.
+//!
+//! Usage:
+//!   meridian-bench list
+//!   meridian-bench <suite>|all [--models-dir D] [--corpus F] [--docs N]
+//!                  [--ann-vectors N] [--scratch D] [--thermal-secs S] [--out D]
 
+use meridian_eval::bench::{BenchConfig, Report, SuiteResult};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
-/// (name, gate, description) — SPEC §15 items 1–8.
-const BENCHES: &[(&str, &str, &str)] = &[
+const SUITES: &[(&str, &str)] = &[
     (
         "embed",
-        ">2k docs/s",
-        "model2vec embed throughput at batch 1/32/256",
+        "model2vec throughput at batch 1/32/256 — gate >2k docs/s",
     ),
     (
         "ann",
-        "p99 < 40ms @ ef=64",
-        "USearch build 1M synthetic 256-d int8; RAM, recall@10",
+        "USearch 1M×256d int8 build + search + recall + 16K mmap view — gate p99 <40ms",
     ),
     (
         "lexical",
-        "BM25 top-1000 p50 < 30ms",
-        "Tantivy index 1M docs; docs/s, bytes, query p50/p99",
+        "tantivy index + BM25 top-1000 latency curve — gate p50 <30ms",
     ),
     (
         "rerank",
-        "sets batch/depth",
-        "ort INT8 cross-encoder ms/pair at batch 1/4/8",
+        "INT8 cross-encoder ms/pair at batch 1/4/8 (tract) — informational",
     ),
-    (
-        "fusion",
-        "<2ms / 1000+200",
-        "RRF + LTR criterion microbench",
-    ),
+    ("fusion", "RRF + linear LTR microbench — gate <2ms p50"),
     (
         "thermal",
-        "no throttle flags",
-        "10-min all-stage loop, vcgencmd temp + throttle",
+        "sustained all-stage loop, temp + throttle flags — gate: no throttling",
     ),
     (
         "disk",
-        "scratch >= 1.0GB",
-        "merge amplification: peak transient bytes during force-merge",
+        "merge amplification during lexical suite — gate transient ≤0.75GB",
     ),
     (
         "anon",
-        "leak test passes",
-        "Arti bootstrap time, circuit p50/p99, anon RSS delta, Tor-only egress",
+        "Arti bootstrap + isolated circuit timing + RSS delta — informational",
     ),
 ];
 
 fn main() -> ExitCode {
-    let arg = std::env::args().nth(1).unwrap_or_else(|| "list".to_owned());
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut suite = String::from("list");
+    let mut cfg = BenchConfig::default();
+    let mut out_dir = PathBuf::from("bench-out");
 
-    match arg.as_str() {
-        "list" | "--help" | "-h" => {
-            println!(
-                "meridian-bench — on-device suite (SPEC §15). Usage: meridian-bench <name|all>\n"
-            );
-            for (name, gate, desc) in BENCHES {
-                println!("  {name:<8} gate: {gate:<28} {desc}");
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+        let take = |i: &mut usize| -> Option<String> {
+            *i += 1;
+            args.get(*i).cloned()
+        };
+        match arg.as_str() {
+            "--models-dir" => cfg.models_dir = take(&mut i).map(PathBuf::from).unwrap_or_default(),
+            "--corpus" => cfg.corpus = take(&mut i).map(PathBuf::from),
+            "--docs" => cfg.max_docs = take(&mut i).and_then(|v| v.parse().ok()).unwrap_or(100_000),
+            "--ann-vectors" => {
+                cfg.ann_vectors = take(&mut i)
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(1_000_000);
             }
-            ExitCode::SUCCESS
-        }
-        name => {
-            let known = BENCHES.iter().any(|(n, ..)| *n == name) || name == "all";
-            if known {
-                eprintln!(
-                    "bench '{name}' is not implemented yet (Phase 0 pending planning sign-off)"
-                );
-            } else {
-                eprintln!("unknown bench '{name}' — run `meridian-bench list`");
+            "--scratch" => cfg.scratch_dir = take(&mut i).map(PathBuf::from).unwrap_or_default(),
+            "--thermal-secs" => {
+                cfg.thermal_secs = take(&mut i).and_then(|v| v.parse().ok()).unwrap_or(600);
             }
-            ExitCode::FAILURE
+            "--out" => out_dir = take(&mut i).map(PathBuf::from).unwrap_or_default(),
+            s if !s.starts_with("--") => suite = s.to_owned(),
+            s => {
+                eprintln!("unknown flag {s}");
+                return ExitCode::FAILURE;
+            }
         }
+        i += 1;
     }
+
+    if suite == "list" || suite == "--help" {
+        println!("meridian-bench — on-device suite (SPEC §15). Usage: meridian-bench <name|all>\n");
+        for (name, desc) in SUITES {
+            println!("  {name:<8} {desc}");
+        }
+        return ExitCode::SUCCESS;
+    }
+    if suite != "all" && !SUITES.iter().any(|(n, _)| *n == suite) {
+        eprintln!("unknown suite '{suite}' — run `meridian-bench list`");
+        return ExitCode::FAILURE;
+    }
+
+    let mut report = Report::new();
+    let wants = |name: &str| suite == "all" || suite == name;
+    // disk is produced by the lexical pass; requesting either runs both.
+    let wants_lexical = wants("lexical") || wants("disk");
+
+    println!(
+        ">> meridian-bench v{} — kernel {}, page size {}, {} cores",
+        report.version, report.kernel, report.page_size, report.nproc
+    );
+
+    if wants("fusion") {
+        run_and_print(&mut report, meridian_eval::bench::fusion::run(&cfg));
+    }
+
+    if wants("embed") {
+        #[cfg(feature = "bench-embed")]
+        run_and_print(&mut report, meridian_eval::bench::embed::run(&cfg));
+        #[cfg(not(feature = "bench-embed"))]
+        run_and_print(
+            &mut report,
+            SuiteResult::skipped("embed", "not compiled in (bench-embed)"),
+        );
+    }
+
+    if wants("rerank") {
+        #[cfg(feature = "bench-rerank")]
+        run_and_print(&mut report, meridian_eval::bench::rerank::run(&cfg));
+        #[cfg(not(feature = "bench-rerank"))]
+        run_and_print(
+            &mut report,
+            SuiteResult::skipped("rerank", "not compiled in (bench-rerank)"),
+        );
+    }
+
+    if wants("ann") {
+        #[cfg(feature = "bench-ann")]
+        run_and_print(&mut report, meridian_eval::bench::ann::run(&cfg));
+        #[cfg(not(feature = "bench-ann"))]
+        run_and_print(
+            &mut report,
+            SuiteResult::skipped("ann", "not compiled in (bench-ann)"),
+        );
+    }
+
+    if wants_lexical {
+        #[cfg(feature = "bench-lexical")]
+        for r in meridian_eval::bench::lexical::run(&cfg) {
+            run_and_print(&mut report, r);
+        }
+        #[cfg(not(feature = "bench-lexical"))]
+        run_and_print(
+            &mut report,
+            SuiteResult::skipped("lexical", "not compiled in (bench-lexical)"),
+        );
+    }
+
+    if wants("thermal") {
+        #[cfg(feature = "bench-embed")]
+        run_and_print(&mut report, meridian_eval::bench::thermal::run(&cfg));
+        #[cfg(not(feature = "bench-embed"))]
+        run_and_print(
+            &mut report,
+            SuiteResult::skipped("thermal", "not compiled in (needs bench-embed)"),
+        );
+    }
+
+    if wants("anon") {
+        #[cfg(feature = "bench-anon")]
+        run_and_print(&mut report, meridian_eval::bench::anon::run(&cfg));
+        #[cfg(not(feature = "bench-anon"))]
+        run_and_print(
+            &mut report,
+            SuiteResult::skipped("anon", "not compiled in (bench-anon)"),
+        );
+    }
+
+    // Emit report (md + json).
+    if let Err(e) = std::fs::create_dir_all(&out_dir) {
+        eprintln!("cannot create out dir: {e}");
+        return ExitCode::FAILURE;
+    }
+    let md = report.to_markdown();
+    let json = serde_json::to_string_pretty(&report).unwrap_or_default();
+    let md_path = out_dir.join("report.md");
+    let json_path = out_dir.join("report.json");
+    if std::fs::write(&md_path, &md).is_err() || std::fs::write(&json_path, &json).is_err() {
+        eprintln!("failed writing report files");
+        return ExitCode::FAILURE;
+    }
+    println!(
+        "\n>> report: {} / {}",
+        md_path.display(),
+        json_path.display()
+    );
+
+    let skipped_requested = report.suites.iter().any(|s| s.skipped);
+    if report.all_gates_pass() && !skipped_requested {
+        println!(">> all gates passed");
+        ExitCode::SUCCESS
+    } else {
+        println!(">> GATE FAILURES or skipped suites — see report");
+        ExitCode::FAILURE
+    }
+}
+
+fn run_and_print(report: &mut Report, result: SuiteResult) {
+    let verdict = match (result.skipped, result.gate_passed) {
+        (true, _) => "SKIPPED",
+        (_, Some(true)) => "gate PASS",
+        (_, Some(false)) => "gate FAIL",
+        (_, None) => "info",
+    };
+    println!(
+        ">> suite {:<8} {} ({:.1}s)",
+        result.name,
+        verdict,
+        result.duration_ms / 1e3
+    );
+    for (k, v) in &result.metrics {
+        println!("     {k}: {v}");
+    }
+    for n in &result.notes {
+        println!("     note: {n}");
+    }
+    report.suites.push(result);
 }

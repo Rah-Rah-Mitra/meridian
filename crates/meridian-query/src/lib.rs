@@ -3,7 +3,9 @@
 //! direct lane ONLY), RRF fusion (k=60), MMR-lite domain diversity.
 //!
 //! Status: Phase-0 scaffold — planner lands in Phase 1 (lexical), fusion over ANN in
-//! Phase 2.
+//! Phase 2. RRF is implemented now (pure function, exercised by `meridian-bench`).
+
+pub mod rrf;
 
 /// Search execution mode (SPEC §10). `Deep` adds the INT8 cross-encoder rerank stage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

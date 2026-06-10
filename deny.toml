@@ -19,6 +19,13 @@ allow = [
     # blake3 ships CC0-1.0 OR Apache-2.0; fst ships Unlicense OR MIT (verified 2026-06-10)
     "CC0-1.0",
     "Unlicense",
+    # ADR-04 license election: arti's graph includes priority-queue
+    # (LGPL-3.0-or-later OR MPL-2.0) and r-efi (triple incl. MIT) — we elect
+    # MPL-2.0 / MIT respectively. MPL-2.0 is file-level copyleft; the core stays
+    # MIT/Apache-clean. AGPL/LGPL/GPL remain denied (not on this list).
+    "MPL-2.0",
+    # Some transitive deps still declare the older Unicode license id
+    "Unicode-DFS-2016",
 ]
 # NOTE: webpki-roots (MPL-2.0) may arrive with reqwest/rustls in Phase 1. Decision
 # deferred to the Phase-1 ADR: either allow MPL-2.0 (file-level copyleft, core stays

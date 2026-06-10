@@ -19,3 +19,6 @@
 __pycache__/
 *.pyc
 train/.venv/
+deploy/stage/
+bench-scratch/
+bench-out/

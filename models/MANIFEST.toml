@@ -13,7 +13,10 @@ source = "https://huggingface.co/minishlab/potion-base-8M"
 files = ["model.safetensors", "tokenizer.json", "config.json"]
 approx_size_mb = 31
 license = "MIT"
-sha256 = "TBD"
+# sha256 per file (pinned 2026-06-10; enforced by deploy/fetch-models.sh)
+sha256_model = "f65d0f325faadc1e121c319e2faa41170d3fa07d8c89abd48ca5358d9a223de2"
+sha256_tokenizer = "e67e803f624fb4d67dea1c730d06e1067e1b14d830e2c2202569e3ef0f70bb50"
+sha256_config = "2a6ac0e9aaa356a68a5688070db78fc3a464fefe85d2f06a1905ce3718687553"
 
 [[model]]
 name = "ms-marco-MiniLM-L-6-v2-qint8-arm64"
@@ -23,7 +26,9 @@ source = "https://huggingface.co/cross-encoder/ms-marco-MiniLM-L-6-v2"
 files = ["onnx/model_qint8_arm64.onnx", "tokenizer.json"]
 approx_size_mb = 24
 license = "Apache-2.0"
-sha256 = "TBD"
+# sha256 per file (pinned 2026-06-10; enforced by deploy/fetch-models.sh)
+sha256_model = "3573b6b9593cb2f75987a31815d409ca3dd8808629118fd20451bb1a5d90cec7"
+sha256_tokenizer = "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66"
 
 [[model]]
 name = "meridian-ltr-gbdt"

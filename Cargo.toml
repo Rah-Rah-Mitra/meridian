@@ -17,10 +17,22 @@ repository = "https://github.com/Rah-Rah-Mitra/meridian"
 authors = ["Rahul Mitra <mitrarahul2002@gmail.com>"]
 
 [workspace.dependencies]
-# External (kept minimal at scaffold stage; heavy deps — tantivy, usearch, ort, arti —
-# enter per phase, see docs/plan/01-wbs.md)
+# External (heavy deps enter per phase, see docs/plan/01-wbs.md; bench-only deps are
+# feature-gated inside meridian-eval so default `cargo check` stays light, ADR-D1)
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 thiserror = "2"
+libc = "0.2"
+# --- bench-only (meridian-eval features; versions verified 2026-06-10) ---
+tantivy = "0.26"
+usearch = "2.25"
+cxx = "1"
+model2vec-rs = { version = "0.2", default-features = false, features = ["fancy-regex", "local-only"] }
+tract-onnx = "0.23"
+tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
+tokio = { version = "1", default-features = false }
+arti-client = { version = "0.43", default-features = false }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
 # Internal crates
 meridian-common = { path = "crates/meridian-common" }
@@ -53,3 +65,12 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = "symbols"
+
+# Bench builds: same opt-level/target-cpu, thin LTO so CI cross-builds of the heavy
+# bench dep set stay tractable. Divergence from the product profile is recorded in
+# every bench report header; key gates are re-validated under the full release
+# profile at Phase-1 exit (docs/plan/04-bench-plan.md).
+[profile.release-bench]
+inherits = "release"
+lto = "thin"
+codegen-units = 16
