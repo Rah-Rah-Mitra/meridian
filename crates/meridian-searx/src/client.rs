@@ -87,16 +87,23 @@ impl SearxClient {
         &self,
         client: &LaneClient,
         query: &str,
+        engines: &[&str],
         hedge: bool,
     ) -> Result<Vec<WebResult>, SearxError> {
+        let engines_csv = engines.join(",");
         let request = || async {
             let mut url = self
                 .base
                 .join("search")
                 .map_err(|_| SearxError::BadResponse)?;
-            url.query_pairs_mut()
-                .append_pair("q", query)
-                .append_pair("format", "json");
+            {
+                let mut q = url.query_pairs_mut();
+                q.append_pair("q", query).append_pair("format", "json");
+                // Empty subset → SearXNG defaults; otherwise route the bandit arm.
+                if !engines_csv.is_empty() {
+                    q.append_pair("engines", &engines_csv);
+                }
+            }
             let response = client
                 .get(url)
                 .send()

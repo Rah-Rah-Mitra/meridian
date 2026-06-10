@@ -87,6 +87,7 @@ pub struct Planner {
     lanes: Arc<LaneRegistry>,
     shed: Arc<ShedState>,
     scorer: Arc<dyn Scorer>,
+    bandit: Option<Arc<meridian_searx::bandit::Bandit>>,
     cache: moka::sync::Cache<[u8; 32], Arc<CachedSearch>>,
     cfg: SearchConfig,
     vector_cfg: VectorConfig,
@@ -99,6 +100,7 @@ impl Planner {
         embedder: Arc<Embedder>,
         vectors: Arc<VectorStore>,
         searx: Option<Arc<SearxClient>>,
+        bandit: Option<Arc<meridian_searx::bandit::Bandit>>,
         lanes: Arc<LaneRegistry>,
         shed: Arc<ShedState>,
         cfg: &SearchConfig,
@@ -125,6 +127,7 @@ impl Planner {
             lanes,
             shed,
             scorer: Arc::new(LinearLtr::default()),
+            bandit,
             cache,
             cfg: cfg.clone(),
             vector_cfg: vector_cfg.clone(),
@@ -253,15 +256,31 @@ impl Planner {
             rx
         });
 
-        // SearXNG fan-out, concurrent with the local stage.
+        // SearXNG fan-out, concurrent with the local stage. The bandit picks the
+        // engine subset for this intent (ε-greedy); the chosen arm is rewarded
+        // below if its web results reach the final top-10 (SPEC §11).
+        let mut chosen_arm: Option<&'static str> = None;
         let searx_handle = match (&self.searx, lane_client) {
             (Some(searx), Some(client)) if wants_web && metasearch_ok => {
+                // Per-request exploration salt without a global RNG.
+                let salt = blake3::hash(req.q.as_bytes()).as_bytes()[0] as u64
+                    ^ (timings.len() as u64)
+                    ^ (req.q.len() as u64).wrapping_mul(0x9E37);
+                let engines: Vec<String> = match &self.bandit {
+                    Some(b) => {
+                        let arm = b.choose(query_intent.key(), salt);
+                        chosen_arm = Some(arm.id);
+                        arm.engines.iter().map(|e| e.to_string()).collect()
+                    }
+                    None => Vec::new(),
+                };
                 let searx = searx.clone();
                 let q = req.q.clone();
                 let hedge = matches!(req.lane, Lane::Direct);
                 Some(tokio::spawn(async move {
                     let started = Instant::now();
-                    let r = searx.search(&client, &q, hedge).await;
+                    let engine_refs: Vec<&str> = engines.iter().map(String::as_str).collect();
+                    let r = searx.search(&client, &q, &engine_refs, hedge).await;
                     (r, started.elapsed().as_millis() as u64)
                 }))
             }
@@ -456,6 +475,18 @@ impl Planner {
             if results.len() >= limit {
                 break;
             }
+        }
+
+        // Bandit reward (SPEC §11): chosen arm "appeared" if any web-sourced
+        // result is in the final top-10. Direct lane only — anon never updates
+        // shared routing state (SPEC §12.4); anon also never reaches this branch
+        // because the anon lane isn't wired until Phase 4.
+        if let (Some(bandit), Some(arm_id)) = (&self.bandit, chosen_arm) {
+            let appeared = results
+                .iter()
+                .take(10)
+                .any(|r| matches!(r.source, "web" | "both"));
+            let _ = bandit.reward(query_intent.key(), arm_id, appeared);
         }
 
         if cacheable

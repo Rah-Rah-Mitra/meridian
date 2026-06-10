@@ -3240,6 +3240,7 @@ version = "0.0.1"
 dependencies = [
  "meridian-common",
  "meridian-egress",
+ "redb",
  "reqwest",
  "serde",
  "serde_json",

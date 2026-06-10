@@ -7,4 +7,5 @@
 //! Status: Phase 1 — direct instance client live; anon endpoint + bandit
 //! routing arrive in Phases 3–4.
 
+pub mod bandit;
 pub mod client;

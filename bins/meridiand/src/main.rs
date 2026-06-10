@@ -13,6 +13,7 @@ use meridian_fetch::Fetcher;
 use meridian_index::lexical::LexicalIndex;
 use meridian_query::ingest::{IngestText, Ingestor};
 use meridian_query::planner::Planner;
+use meridian_searx::bandit::Bandit;
 use meridian_searx::client::SearxClient;
 use meridian_vector::VectorStore;
 use std::process::ExitCode;
@@ -108,11 +109,20 @@ fn build_components(config: MeridianConfig) -> Result<Components, String> {
     } else {
         None
     };
+    // ε-greedy engine-routing bandit (SPEC §11), persisted in egress.redb.
+    let bandit = if config.searx.enabled {
+        Some(Arc::new(
+            Bandit::open(&config.index.data_dir, 0.1).map_err(|e| e.to_string())?,
+        ))
+    } else {
+        None
+    };
     let planner = Arc::new(Planner::new(
         index,
         embedder,
         vectors,
         searx,
+        bandit,
         lanes,
         shed.clone(),
         &config.search,
