@@ -117,6 +117,6 @@ Phase-1+ deps stay feature-scoped where possible.
 | 1 | **DONE 2026-06-10 ✓** — 100k docs, disk 57.5MB, RSS 97.6MB, end-to-end p50 10.6ms ([exit note](phase-exits/p1.md)) |
 | 2 | **DONE 2026-06-10 ✓** — hybrid nDCG@10 0.42 > BM25 0.38; vectors 405MB disk / 506MB RAM @1M (extrapolated); hybrid p50 14.5ms ([exit note](phase-exits/p2.md)) |
 | 3 | **DONE 2026-06-10 ✓** — deep p50 204ms (CE rerank, gnu/ort image), cache-hit 0.47ms, LTR no-regression ([exit note](phase-exits/p3.md)) |
-| 4 | anon p50 ≤8s; Arti RSS delta ≤150MB; zero direct-lane egress under Arti-down |
+| 4 | **DONE 2026-06-11 ✓** — anon metasearch cold p50 1.34s (≤8s), Arti RSS delta +47MB (≤150MB), zero direct egress proven hermetically + live bootstrap windows; image 74.7MB ([exit note](phase-exits/p4.md)) |
 | 5 | analytics ≤700MB steady; heatmap ≤150ms; every store under its cap |
 | 6 | 24h soak: RSS slope <1MB/h, temp <80°C, p99 stable |
