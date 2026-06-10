@@ -29,6 +29,8 @@ confidence-threshold = 0.8
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Internal path deps carry no version requirement; that's fine for a private workspace
+allow-wildcard-paths = true
 
 [advisories]
 version = 2

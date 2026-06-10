@@ -1,0 +1,34 @@
+# 03 — Risk Register
+
+> SPEC §1.4. Top 15 risks. Likelihood (L) / Impact (I) on a 1–5 scale; every risk
+> has a **tripwire metric** that is observable (in CI, `/metrics`, or a bench
+> report) — a risk without a tripwire is a wish, not a plan. Reviewed at every
+> phase exit.
+
+| # | Risk | L | I | Mitigation | Tripwire |
+|---|---|---|---|---|---|
+| 1 | **Anon lane fail-open**: a code path retries an anon request over direct, silently breaking the core anonymity promise | 2 | 5 | Type-level `AnonClient` with no direct transport; planner returns degraded errors; topology fail-closure (searxng-anon on internal-only net); §12.5 invariant tests run on every PR touching egress | Invariant test 1 (Arti-down ⇒ zero direct egress) red ⇒ merge blocked; release blocked until green |
+| 2 | **ONNX runtime on musl** stalls Phase 3: ort has no musl prebuilts; source-building ORT is heavy; tract may be too slow | 4 | 3 | ADR-02 staged plan: musl through Phase 2; tract-vs-ort(gnu/distroless) bake-off with a decision rule (1.5× CE ms/pair) at Phase-3 entry; both paths keep the ort API (`ort-tract`) | Bake-off: tract >1.5× slower AND gnu image >80MB ⇒ escalate to operator; CI cross job >30min ⇒ drop source-built-ORT option |
+| 3 | **usearch C++ musl cross-build fails** (no upstream musl CI; cxx + zig untested combo) | 3 | 3 | zigbuild specializes in C/C++ cross-linking; `openmp` off; fallback ladder: usearch portable-C++ → hnsw_rs offset-u8 (ADR-07) | Phase-2 entry: cross-aarch64 CI job red on the usearch commit ⇒ activate ladder step 2 within 2 days |
+| 4 | **16K-page incompatibility** surfaces late (usearch mmap `view()`, mlock granularity, some transitive allocator) | 2 | 4 | ADR-01: bench suite 2 includes view-mode smoke on-device BEFORE Phase 2 depends on it; jemalloc banned in deny.toml; mlock deferred + page-granularity-checked (Phase 5) | Bench-2 view smoke fails ⇒ pivot: RAM-resident only (520MB fits) or 4K-kernel fallback documented in pi-setup.sh |
+| 5 | **RSS creep / Arti circuit leaks** push meridiand past its 3GB cgroup → OOM-kill | 3 | 4 | Ordered shed ladder (2.5/2.7/2.9GB) wired to `/metrics`; Moka weighers; 24h soak with anon churn component (SPEC §8.7) | Soak RSS slope >1MB/h ⇒ release blocked; prod RSS >2.5GB ⇒ shed stage 1 fires (observable flag) |
+| 6 | **Shared-card disk exhaustion** (dev artifacts + other tenants + Meridian on one 29.7GB SD) corrupts ingest or neighbors | 4 | 4 | Profile R budgets; `statvfs` pause-ingest gate keyed on DEVICE-global free space; dev target dir capped 1.5GB; one merge at a time | Free <1.5GB ⇒ warning metric; <0.75GB ⇒ ingest paused + compaction (gate tested in chaos drill "fill disk") |
+| 7 | **SD-card write endurance**: merge amplification + analytics compaction wear out the only disk | 3 | 4 | Nightly (not idle-triggered) merges on Profile R; zstd snippets; bench suite 7 measures bytes-written/doc; dirty-page tuning §7.3 | Bench-7 write amplification >5× ingested bytes ⇒ re-tune merge policy before Phase 1 exit; smartctl-equivalent wear check each phase exit |
+| 8 | **Latency estimates miss on the A76** (BM25 30ms, ANN 20ms, CE 1.5s are educated guesses) | 3 | 3 | Bench-first protocol: suites 1–5 run before any budget is treated as real; budgets doc re-issued with measured numbers; knobs identified per measurement (ef_search, top-k, rerank depth/batch) | Any §15 gate fails ⇒ budgets + knobs re-derived within the Phase-0 exit doc, NOT silently absorbed |
+| 9 | **Arti 0.x API churn** (monthly breaking releases) breaks Phase-4+ builds repeatedly | 4 | 2 | Pin exact arti-client version; isolate ALL arti types behind `meridian-egress::anon` (nothing else may import arti crates — enforced by cargo-deny bans + review); monthly dep-bump chore | Two consecutive monthly bumps fail to compile in <1day of work ⇒ freeze version for the release train, schedule a dedicated upgrade task |
+| 10 | **Thermal throttling** under sustained hybrid load + ingest (SD card and CPU share a small enclosure) | 3 | 3 | Active cooling verified in bench suite 6; thermal shed ladder (78/82°C) in `/metrics`; ingest niced and ticket-capped | Bench-6 records any throttle bit ⇒ revisit enclosure/duty-cycle before Phase 1 exit; prod temp >78°C ⇒ shed fires |
+| 11 | **Privacy leak ships**: a future log line / metric label / error message carries query text or an IP | 3 | 5 | `Redacted<T>` + secret types at call sites; redaction layer at the export boundary; **privacy smoke test (canary grep) in CI on every PR**; access-log format frozen in code review checklist | Canary found in logs/metrics/disk ⇒ CI red, merge blocked; smoke test itself failing to run counts as red |
+| 12 | **SearXNG upstream drift**: engine breakage, JSON schema changes, image CVEs | 4 | 2 | Image digest-pinned; ≤30-engine trim reduces surface; bandit demotes failing engines automatically; healthcheck + chaos drill "kill searxng" proves graceful partials | Engine-class error rate >50% over 1h ⇒ alert metric; digest bump monthly chore with diff review |
+| 13 | **GDELT integrity/format**: no valid TLS upstream (verified); CSV format drift; surprise volume spikes | 3 | 2 | HTTP + manifest-MD5 (ADR-15); stream-parse with hard per-slice caps; counters only — never raw retention; puller is feature-gated off by default until Phase 5 | MD5 mismatch streak >4 slices OR slice >50MB ⇒ puller self-disables + alert metric |
+| 14 | **License drift**: a future dep (or feature flip) drags GPL/LGPL/unknown licenses into the core graph; MPL-2.0 election misunderstood | 2 | 4 | cargo-deny licenses+bans+sources on every push (already green-path); allowlist additions require an ADR note (MPL-2.0 election pre-recorded in ADR-04); SBOM at release | cargo-deny red on any PR ⇒ merge blocked; allowlist diff without an ADR reference fails review checklist |
+| 15 | **Single-maintainer/dormant deps** in load-bearing spots (usearch, fst, texting_robots, whichlang, figment) | 3 | 2 | Format-frozen domains (fst, robots RFC 9309) tolerate dormancy; pin + vendor-on-need policy; quarterly `cargo audit`/activity review; SegmentStore/VectorIndex traits keep swaps localized | A pinned dep gains a CVE with no upstream fix in 14 days ⇒ vendor + patch in-tree; trait seam makes replacement a scoped task |
+
+## Standing tripwires already wired into process
+
+- **CI**: fmt, clippy `-D warnings`, tests, cargo-deny, cargo-audit, gitleaks,
+  aarch64-musl cross-build — all must be green to merge (operational since
+  scaffold day 1; cargo-deny path-wildcard config fixed same day).
+- **Phase exits**: each SPEC §16 exit criterion doubles as a tripwire review point
+  for this register; the register is re-prioritized in the exit note.
+- **Budgets**: every §6 ceiling has its alert threshold in `02-budgets.md`;
+  `/metrics` exposes shed states so tripwires are observable, not aspirational.
