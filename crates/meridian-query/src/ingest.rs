@@ -256,7 +256,7 @@ mod tests {
             merge_max_docs: 100_000,
         };
         let index = Arc::new(LexicalIndex::open_or_create(&index_cfg).unwrap());
-        let lanes = Arc::new(LaneRegistry::new(&LanesConfig::default()).unwrap());
+        let lanes = Arc::new(LaneRegistry::new(&LanesConfig::default(), &dir).unwrap());
         let fetcher = Arc::new(Fetcher::new(lanes, &FetchConfig::default(), false));
         let vector_cfg = meridian_common::config::VectorConfig::default();
         let embedder = Arc::new(Embedder::test_stub(64));

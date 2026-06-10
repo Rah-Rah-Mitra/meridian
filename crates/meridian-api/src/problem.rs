@@ -47,6 +47,11 @@ pub fn plan_error(e: meridian_query::planner::PlanError) -> Problem {
             "lane unavailable",
             e.to_string(),
         ),
+        PlanError::AnonBusy => Problem::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "anon lane busy",
+            e.to_string(),
+        ),
         PlanError::Index(_) => Problem::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "index error",

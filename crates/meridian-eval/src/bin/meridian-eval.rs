@@ -190,8 +190,11 @@ fn build(corpus: &str, data: &str, models: &str, max_docs: usize) -> ExitCode {
         }
     };
     let lanes = Arc::new(
-        meridian_query::LaneRegistry::new(&meridian_common::config::LanesConfig::default())
-            .expect("lanes"),
+        meridian_query::LaneRegistry::new(
+            &meridian_common::config::LanesConfig::default(),
+            std::path::Path::new(data),
+        )
+        .expect("lanes"),
     );
     let fetcher = Arc::new(meridian_query::Fetcher::new(
         lanes,

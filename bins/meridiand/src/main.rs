@@ -70,10 +70,13 @@ struct Components {
     ingestor: Arc<Ingestor>,
     fetcher: Arc<Fetcher>,
     shed: Arc<ShedState>,
+    lanes: Arc<LaneRegistry>,
 }
 
 fn build_components(config: MeridianConfig) -> Result<Components, String> {
-    let lanes = Arc::new(LaneRegistry::new(&config.lanes).map_err(|e| e.to_string())?);
+    let lanes = Arc::new(
+        LaneRegistry::new(&config.lanes, &config.index.data_dir).map_err(|e| e.to_string())?,
+    );
     let shed = Arc::new(ShedState::default());
     let fetcher = Arc::new(Fetcher::new(
         lanes.clone(),
@@ -110,6 +113,15 @@ fn build_components(config: MeridianConfig) -> Result<Components, String> {
     } else {
         None
     };
+    // Tor-proxied metasearch backend (SPEC §12.4): generous deadline, no hedging
+    // EVER (single attempt per request is part of anon citizenship).
+    let searx_anon = match (config.searx.enabled, &config.searx.anon_url) {
+        (true, Some(url)) => Some(Arc::new(
+            SearxClient::new(url, config.search.anon_searx_deadline_ms, None)
+                .map_err(|e| e.to_string())?,
+        )),
+        _ => None,
+    };
     // ε-greedy engine-routing bandit (SPEC §11), persisted in egress.redb.
     let bandit = if config.searx.enabled {
         Some(Arc::new(
@@ -129,10 +141,12 @@ fn build_components(config: MeridianConfig) -> Result<Components, String> {
         embedder,
         vectors,
         searx,
+        searx_anon,
         reranker,
         bandit,
-        lanes,
+        lanes.clone(),
         shed.clone(),
+        config.lanes.anon.max_concurrent_searches,
         &config.search,
         &config.vector,
     ));
@@ -142,6 +156,7 @@ fn build_components(config: MeridianConfig) -> Result<Components, String> {
         ingestor,
         fetcher,
         shed,
+        lanes,
     })
 }
 
@@ -202,6 +217,13 @@ fn serve() -> ExitCode {
             components.shed.clone(),
             components.config.index.data_dir.clone(),
         );
+        // Bring up anon (Arti bootstrap + SOCKS listener) / region (verification
+        // loops) when enabled. Failure here is fatal: an operator who turned a
+        // lane on must not get a process that silently lacks it (fail-visible).
+        if let Err(e) = components.lanes.start().await {
+            tracing::error!(error = %e, "egress lane startup failed");
+            return ExitCode::FAILURE;
+        }
         let ingestor_for_shutdown = components.ingestor.clone();
         let state = AppState::new(
             components.config,

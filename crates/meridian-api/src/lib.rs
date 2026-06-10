@@ -362,14 +362,24 @@ async fn fetch(
 }
 
 async fn lanes(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    use meridian_query::LaneStatus;
     let lanes: Vec<serde_json::Value> = state
         .planner
         .lane_statuses()
         .into_iter()
         .map(|(id, status)| {
+            // Stable machine-readable status + optional human detail (SPEC §10).
+            let (name, detail) = match &status {
+                LaneStatus::Up => ("up", None),
+                LaneStatus::Bootstrapping(pct) => ("bootstrapping", Some(format!("{pct}%"))),
+                LaneStatus::Degraded(reason) => ("degraded", Some(reason.clone())),
+                LaneStatus::Down => ("down", None),
+                LaneStatus::Disabled => ("disabled", None),
+            };
             serde_json::json!({
                 "id": id,
-                "status": format!("{status:?}"),
+                "status": name,
+                "detail": detail,
             })
         })
         .collect();

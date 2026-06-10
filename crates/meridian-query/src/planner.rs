@@ -23,6 +23,9 @@ use std::time::Instant;
 pub enum PlanError {
     #[error("lane unavailable: {0}")]
     Lane(#[from] meridian_egress::EgressError),
+    /// The anon search admission budget (SPEC §12.4 citizenship) is exhausted.
+    #[error("anon lane is at its concurrent-search budget")]
+    AnonBusy,
     #[error("index: {0}")]
     Index(String),
     #[error("internal: {0}")]
@@ -75,12 +78,22 @@ pub struct SearchResponse {
     pub degraded: Vec<&'static str>,
 }
 
-/// Cached fusion output (SPEC §8.4 query cache: 256MB weighted, TTI 15m, TTL 2h;
-/// direct-lane results only — the anon cache is separate and arrives in Phase 4).
+/// Cached fusion output (SPEC §8.4 query cache: 256MB weighted, TTI 15m, TTL 2h
+/// for the shared direct-lane cache; the anon cache is a separate ephemeral
+/// 32MB/TTL-5m instance — anon results never touch shared state, SPEC §12.4).
 #[derive(Clone)]
 struct CachedSearch {
     results: Vec<SearchResult>,
     degraded: Vec<&'static str>,
+}
+
+fn cached_search_weight(v: &Arc<CachedSearch>) -> u32 {
+    let bytes: usize = v
+        .results
+        .iter()
+        .map(|r| r.url.len() + r.title.len() + r.snippet.len() + 64)
+        .sum();
+    (bytes + 64) as u32
 }
 
 pub struct Planner {
@@ -88,12 +101,19 @@ pub struct Planner {
     embedder: Arc<Embedder>,
     vectors: Arc<VectorStore>,
     searx: Option<Arc<SearxClient>>,
+    /// Tor-proxied `searxng-anon` backend; anon searches fail closed without it.
+    searx_anon: Option<Arc<SearxClient>>,
     lanes: Arc<LaneRegistry>,
     shed: Arc<ShedState>,
     scorer: Arc<dyn Scorer>,
     reranker: Arc<Reranker>,
     bandit: Option<Arc<meridian_searx::bandit::Bandit>>,
     cache: moka::sync::Cache<[u8; 32], Arc<CachedSearch>>,
+    /// Ephemeral anon cache (SPEC §8.4): in-memory only, never persisted, never
+    /// shared with the direct cache (lane isolation, §12.4).
+    anon_cache: moka::sync::Cache<[u8; 32], Arc<CachedSearch>>,
+    /// Anon concurrent-search admission (SPEC §12.4 rate-limit citizenship).
+    anon_permits: Arc<tokio::sync::Semaphore>,
     cfg: SearchConfig,
     vector_cfg: VectorConfig,
 }
@@ -105,37 +125,40 @@ impl Planner {
         embedder: Arc<Embedder>,
         vectors: Arc<VectorStore>,
         searx: Option<Arc<SearxClient>>,
+        searx_anon: Option<Arc<SearxClient>>,
         reranker: Arc<Reranker>,
         bandit: Option<Arc<meridian_searx::bandit::Bandit>>,
         lanes: Arc<LaneRegistry>,
         shed: Arc<ShedState>,
+        anon_max_searches: usize,
         cfg: &SearchConfig,
         vector_cfg: &VectorConfig,
     ) -> Self {
         let cache = moka::sync::Cache::builder()
             .max_capacity(256 * 1024 * 1024)
-            .weigher(|_k, v: &Arc<CachedSearch>| {
-                let bytes: usize = v
-                    .results
-                    .iter()
-                    .map(|r| r.url.len() + r.title.len() + r.snippet.len() + 64)
-                    .sum();
-                (bytes + 64) as u32
-            })
+            .weigher(|_k, v: &Arc<CachedSearch>| cached_search_weight(v))
             .time_to_idle(std::time::Duration::from_secs(15 * 60))
             .time_to_live(std::time::Duration::from_secs(2 * 60 * 60))
+            .build();
+        let anon_cache = moka::sync::Cache::builder()
+            .max_capacity(32 * 1024 * 1024)
+            .weigher(|_k, v: &Arc<CachedSearch>| cached_search_weight(v))
+            .time_to_live(std::time::Duration::from_secs(5 * 60))
             .build();
         Self {
             index,
             embedder,
             vectors,
             searx,
+            searx_anon,
             lanes,
             shed,
             scorer: Arc::new(LinearLtr::default()),
             reranker,
             bandit,
             cache,
+            anon_cache,
+            anon_permits: Arc::new(tokio::sync::Semaphore::new(anon_max_searches.max(1))),
             cfg: cfg.clone(),
             vector_cfg: vector_cfg.clone(),
         }
@@ -172,9 +195,11 @@ impl Planner {
         // response for explainability. Never logged with the query text.
         let query_intent = intent::classify(&req.q);
 
-        // Query cache (direct lane only; anon results must never share state —
-        // SPEC §8.4/§12.4). Shedding stage 2 drops + bypasses it.
+        // Query caches (SPEC §8.4): the shared one serves direct only; anon has
+        // its own ephemeral instance (lane isolation, §12.4); region results are
+        // vantage-dependent and never cached. Shedding stage 2 drops + bypasses.
         let cacheable = matches!(req.lane, Lane::Direct);
+        let anon_cacheable = matches!(req.lane, Lane::Anon);
         let key = Self::cache_key(&req, limit);
         if self
             .shed
@@ -182,8 +207,14 @@ impl Planner {
             .load(std::sync::atomic::Ordering::Relaxed)
         {
             self.cache.invalidate_all();
-        } else if cacheable {
-            if let Some(hit) = self.cache.get(&key) {
+            self.anon_cache.invalidate_all();
+        } else if cacheable || anon_cacheable {
+            let hit = if cacheable {
+                self.cache.get(&key)
+            } else {
+                self.anon_cache.get(&key)
+            };
+            if let Some(hit) = hit {
                 timings.insert("cache", 1);
                 return Ok(SearchResponse {
                     results: hit.results.clone(),
@@ -195,21 +226,59 @@ impl Planner {
             }
         }
 
+        let wants_web_scope = matches!(req.scope, Scope::Web | Scope::Both);
+
+        // Anon admission budget (SPEC §12.4): bounded concurrent anon searches,
+        // held for the whole request. Cache hits above don't consume it.
+        let _anon_permit = if wants_web_scope && matches!(req.lane, Lane::Anon) {
+            match Arc::clone(&self.anon_permits).try_acquire_owned() {
+                Ok(permit) => Some(permit),
+                Err(_) => return Err(PlanError::AnonBusy),
+            }
+        } else {
+            None
+        };
+
+        // Metasearch backend is lane-dependent: direct uses the `searxng`
+        // sidecar; anon uses the Tor-proxied `searxng-anon` and fails CLOSED
+        // when it isn't configured (no quiet local-only serving under an anon
+        // label); region lanes have no metasearch backend at all — routing
+        // their fan-out through the direct sidecar would break §12.5 inv. 1.
+        let backend = match &req.lane {
+            Lane::Anon => &self.searx_anon,
+            _ => &self.searx,
+        };
+        if wants_web_scope {
+            match &req.lane {
+                Lane::Region(_) => {
+                    return Err(PlanError::Lane(meridian_egress::EgressError::NotReady(
+                        "region lanes serve fetch/ingest only; metasearch is direct or anon".into(),
+                    )));
+                }
+                Lane::Anon if backend.is_none() => {
+                    return Err(PlanError::Lane(meridian_egress::EgressError::NotReady(
+                        "anon metasearch backend (searx.anon_url) is not configured".into(),
+                    )));
+                }
+                _ => {}
+            }
+        }
+
         // Lane resolution is fail-closed: whenever the scope would touch the
         // network, the requested lane must resolve — even if the metasearch
-        // backend is off — so a requested anon/region NEVER quietly yields a
-        // result it didn't govern (SPEC §12.1). Local-only scope needs no
-        // egress at all; lanes govern network only.
-        let wants_web_scope = matches!(req.scope, Scope::Web | Scope::Both);
+        // backend is off — so a requested anon NEVER quietly yields a result it
+        // didn't govern (SPEC §12.1). For anon this is also the Arti readiness
+        // gate (bootstrapping/down ⇒ error, never direct). Local-only scope
+        // needs no egress at all; lanes govern network only.
         let lane_client = if wants_web_scope {
-            if self.searx.is_none() {
+            if backend.is_none() {
                 degraded.push("searx_disabled");
             }
             Some(self.lanes.resolve(&req.lane)?)
         } else {
             None
         };
-        let wants_web = wants_web_scope && self.searx.is_some();
+        let wants_web = wants_web_scope && backend.is_some();
 
         // Metasearch thermal shed (SPEC §8.6: >82°C → local-only).
         let metasearch_ok = self.shed.metasearch_allowed();
@@ -221,8 +290,9 @@ impl Planner {
         // BM25 top-1000 ∥-ish embed→ANN top-200 → resolve ANN-only docs.
         let wants_local = matches!(req.scope, Scope::Local | Scope::Both)
             // Web-only scope with the backend off: local is the honest fallback,
-            // flagged via `degraded` above.
-            || (wants_web_scope && self.searx.is_none());
+            // flagged via `degraded` above (direct lane only — anon without a
+            // backend already failed closed).
+            || (wants_web_scope && backend.is_none());
         let local_handle = wants_local.then(|| {
             let index = self.index.clone();
             let embedder = self.embedder.clone();
@@ -263,27 +333,39 @@ impl Planner {
             rx
         });
 
-        // SearXNG fan-out, concurrent with the local stage. The bandit picks the
-        // engine subset for this intent (ε-greedy); the chosen arm is rewarded
-        // below if its web results reach the final top-10 (SPEC §11).
+        // SearXNG fan-out, concurrent with the local stage. On the direct lane
+        // the bandit picks the engine subset for this intent (ε-greedy) and is
+        // rewarded below if its web results reach the final top-10 (SPEC §11).
+        // The anon lane is firewalled from the bandit BOTH ways (SPEC §12.4):
+        // it neither reads shared routing state (engine choice = instance
+        // defaults) nor writes rewards (`chosen_arm` stays None).
+        let is_direct = matches!(req.lane, Lane::Direct);
         let mut chosen_arm: Option<&'static str> = None;
-        let searx_handle = match (&self.searx, lane_client) {
+        let searx_handle = match (backend, lane_client) {
             (Some(searx), Some(client)) if wants_web && metasearch_ok => {
                 // Per-request exploration salt without a global RNG.
                 let salt = blake3::hash(req.q.as_bytes()).as_bytes()[0] as u64
                     ^ (timings.len() as u64)
                     ^ (req.q.len() as u64).wrapping_mul(0x9E37);
-                let engines: Vec<String> = match &self.bandit {
-                    Some(b) => {
+                let engines: Vec<String> = match (&self.bandit, is_direct) {
+                    (Some(b), true) => {
                         let arm = b.choose(query_intent.key(), salt);
                         chosen_arm = Some(arm.id);
                         arm.engines.iter().map(|e| e.to_string()).collect()
                     }
-                    None => Vec::new(),
+                    _ => Vec::new(),
+                };
+                // The anon hop to `searxng-anon` rides the internal back-network
+                // pool — actual EGRESS happens at the sidecar, through this
+                // process's Tor SOCKS listener (fail-closed by topology). The
+                // resolved `client` above already proved the anon lane is ready.
+                let client = match &req.lane {
+                    Lane::Anon => self.lanes.sidecar(Lane::Anon),
+                    _ => client,
                 };
                 let searx = searx.clone();
                 let q = req.q.clone();
-                let hedge = matches!(req.lane, Lane::Direct);
+                let hedge = is_direct;
                 Some(tokio::spawn(async move {
                     let started = Instant::now();
                     let engine_refs: Vec<&str> = engines.iter().map(String::as_str).collect();
@@ -552,9 +634,9 @@ impl Planner {
         }
 
         // Bandit reward (SPEC §11): chosen arm "appeared" if any web-sourced
-        // result is in the final top-10. Direct lane only — anon never updates
-        // shared routing state (SPEC §12.4); anon also never reaches this branch
-        // because the anon lane isn't wired until Phase 4.
+        // result is in the final top-10. Direct lane only by construction —
+        // `chosen_arm` is only ever set on the direct branch above, so anon
+        // traffic can never warm shared routing state (SPEC §12.4 firewall).
         if let (Some(bandit), Some(arm_id)) = (&self.bandit, chosen_arm) {
             let appeared = results
                 .iter()
@@ -563,19 +645,22 @@ impl Planner {
             let _ = bandit.reward(query_intent.key(), arm_id, appeared);
         }
 
-        if cacheable
-            && !self
-                .shed
-                .caches_dropped
-                .load(std::sync::atomic::Ordering::Relaxed)
+        if !self
+            .shed
+            .caches_dropped
+            .load(std::sync::atomic::Ordering::Relaxed)
         {
-            self.cache.insert(
-                key,
+            let entry = || {
                 Arc::new(CachedSearch {
                     results: results.clone(),
                     degraded: degraded.clone(),
-                }),
-            );
+                })
+            };
+            if cacheable {
+                self.cache.insert(key, entry());
+            } else if anon_cacheable {
+                self.anon_cache.insert(key, entry());
+            }
         }
 
         tracing::debug!(intent = query_intent.key(), "query planned");
