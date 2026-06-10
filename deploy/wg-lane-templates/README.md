@@ -4,8 +4,9 @@ Each `region:<id>` lane = one operator-managed host WireGuard interface with its
 source IP. `meridiand` (host-network `regions` profile) binds outbound sockets to
 that source IP via reqwest `local_address`; Linux policy routing steers the traffic.
 
-**Meridian never auto-mutates host routing.** This directory will generate scripts
-the operator reviews and runs. Shape of the recipe per region:
+**Meridian never auto-mutates host routing.** `make-region.sh` generates the
+`region-<id>-{up,down}.sh` scripts; the operator reviews and runs them. Shape of
+the recipe per region:
 
 ```sh
 # 1. Operator's wg interface (they bring their own endpoint + keys):
@@ -28,3 +29,8 @@ limits apply identically (SPEC §12.5).
 
 Keys stay in the operator's wg config under /etc/wireguard — outside Meridian's
 /data volume and outside this repo.
+
+Deployment: `compose.regions.yaml` overlay (host networking — required for the
+source-IP bind; see its header for the documented tradeoffs, including that it
+is incompatible with the anon profile in v0.x). A lane refuses traffic until
+its bring-up egress-IP verification passes, and re-verifies every 30 minutes.

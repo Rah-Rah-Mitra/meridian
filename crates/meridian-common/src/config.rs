@@ -122,6 +122,72 @@ pub struct LanesConfig {
     /// `.onion` rejected on every lane while false (SPEC §12.4).
     pub allow_onion: bool,
     pub direct: DirectLaneConfig,
+    pub anon: AnonLaneConfig,
+    /// `region:<id>` lanes, keyed by id (SPEC §12.3). Each is an operator-managed
+    /// WireGuard interface's source IP; see `deploy/wg-lane-templates/`.
+    pub regions: std::collections::BTreeMap<String, RegionConfig>,
+}
+
+/// Anon lane (Tor via embedded Arti) settings — SPEC §12.4. The lane is OFF by
+/// default; these keys only take effect with `anon_enabled = true`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct AnonLaneConfig {
+    /// In-process SOCKS5 listener for `searxng-anon` AND Meridian's own anon
+    /// fetches. Default loopback; the compose anon profile widens it to the
+    /// container's `back`-network interface (never published to the host).
+    pub socks_listen: String,
+    /// Concurrent Tor circuit cap (SPEC §12.4 rate-limit citizenship).
+    pub max_circuits: usize,
+    /// Concurrent anon *searches* admitted by the planner (excess → 503).
+    pub max_concurrent_searches: usize,
+    pub connect_timeout_ms: u64,
+    /// Generous total deadline (SPEC §13.1: 30s on anon).
+    pub total_timeout_ms: u64,
+    /// Arti state+cache root. Defaults to `<index.data_dir>/arti` (the single
+    /// mutable volume, SPEC §9.7).
+    pub state_dir: Option<PathBuf>,
+}
+
+impl Default for AnonLaneConfig {
+    fn default() -> Self {
+        Self {
+            socks_listen: "127.0.0.1:9150".to_owned(),
+            max_circuits: 6,
+            max_concurrent_searches: 2,
+            connect_timeout_ms: 10_000,
+            total_timeout_ms: 30_000,
+            state_dir: None,
+        }
+    }
+}
+
+/// One `region:<id>` lane (SPEC §12.3): bind outbound sockets to the WireGuard
+/// interface's source IP; policy routing (operator-applied) does the steering.
+/// Meridian never sees WireGuard keys — only this source address.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct RegionConfig {
+    /// Source IP of the operator's wg interface for this region.
+    pub source_ip: std::net::IpAddr,
+    /// IP-echo endpoint fetched through the lane on bring-up; the observed
+    /// egress IP must match `expected_ip` or the lane goes Degraded and refuses
+    /// traffic (routing-leak tripwire, SPEC §12.3).
+    pub verify_url: String,
+    /// Expected egress IP. Exact match, or prefix match when the value ends in
+    /// `.` or `:` (e.g. `203.0.113.` for a /24). `None` = only verify the lane
+    /// can egress at all (the echo fetch must succeed).
+    pub expected_ip: Option<String>,
+}
+
+impl Default for RegionConfig {
+    fn default() -> Self {
+        Self {
+            source_ip: std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+            verify_url: "https://checkip.amazonaws.com/".to_owned(),
+            expected_ip: None,
+        }
+    }
 }
 
 /// Direct-lane client settings (SPEC §12.2, §13.2 honest UA).
@@ -183,6 +249,9 @@ pub struct SearchConfig {
     pub bm25_top_k: usize,
     /// SearXNG fan-out deadline on the direct lane (SPEC §6.3: 800ms).
     pub searx_deadline_ms: u64,
+    /// SearXNG-anon fan-out deadline — generous, Tor circuits add seconds
+    /// (SPEC §6.3 / Phase-4 exit gate: anon metasearch p50 ≤8s).
+    pub anon_searx_deadline_ms: u64,
     /// Domain diversity cap in the final ranking (SPEC §11: 3).
     pub max_per_domain: usize,
 }
@@ -194,6 +263,7 @@ impl Default for SearchConfig {
             max_limit: 50,
             bm25_top_k: 1_000,
             searx_deadline_ms: 800,
+            anon_searx_deadline_ms: 8_000,
             max_per_domain: 3,
         }
     }
@@ -206,6 +276,10 @@ pub struct SearxConfig {
     pub enabled: bool,
     /// Direct instance, reachable on the `back` network only.
     pub url: String,
+    /// Tor-proxied instance (`searxng-anon`, compose anon profile). `None` =
+    /// anon searches fail closed with "no metasearch backend" even when the
+    /// anon lane itself is up.
+    pub anon_url: Option<String>,
 }
 
 impl Default for SearxConfig {
@@ -213,6 +287,7 @@ impl Default for SearxConfig {
         Self {
             enabled: true,
             url: "http://searxng:8080".to_owned(),
+            anon_url: None,
         }
     }
 }
@@ -318,5 +393,11 @@ mod tests {
         assert!(!c.lanes.anon_enabled);
         assert!(!c.lanes.regions_enabled);
         assert!(!c.lanes.allow_onion);
+        // Anon defaults: loopback-only SOCKS, modest circuit + search budgets.
+        assert_eq!(c.lanes.anon.socks_listen, "127.0.0.1:9150");
+        assert_eq!(c.lanes.anon.max_circuits, 6);
+        assert_eq!(c.lanes.anon.max_concurrent_searches, 2);
+        assert!(c.lanes.regions.is_empty());
+        assert!(c.searx.anon_url.is_none());
     }
 }

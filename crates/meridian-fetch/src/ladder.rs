@@ -63,14 +63,15 @@ impl Fetcher {
         }
     }
 
-    /// Fetch + extract one URL on the given lane. Phase 1: direct lane only —
-    /// other lanes fail closed in `LaneRegistry`.
+    /// Fetch + extract one URL on the given lane. All three lanes; each fails
+    /// closed in `LaneRegistry` when disabled/unready (SPEC §12.1).
     pub async fn fetch_extract(
         &self,
         raw_url: &str,
         lane: &Lane,
     ) -> Result<FetchedDoc, FetchError> {
-        // Ladder rung 1: cache (direct lane only — SPEC §8.4 lane isolation).
+        // Ladder rung 1: cache (direct lane only — SPEC §8.4 lane isolation:
+        // neither anon nor region results may seed or read shared state).
         let cacheable = matches!(lane, Lane::Direct);
         if cacheable {
             if let Some(hit) = self.cache.get(raw_url) {
@@ -82,28 +83,43 @@ impl Fetcher {
                 });
             }
         }
+        // One anon transport per logical fetch: robots + every redirect hop ride
+        // the same isolation username = one circuit family (SPEC §12.4 —
+        // per-request isolation, and no parallel duplicate circuits).
+        let anon_client = match lane {
+            Lane::Anon => Some(self.lanes.resolve(lane).map_err(FetchError::Lane)?),
+            _ => None,
+        };
         let mut current = raw_url.to_owned();
         for _hop in 0..=self.cfg.max_redirects {
-            // 1. SSRF vet: static checks + resolve-all + deny ranges + pin addr.
-            let target = ssrf::vet(&current, self.allow_onion).await?;
+            // 1. SSRF vet (SPEC §13.1): resolve-all + deny ranges + pin on
+            //    direct/region; on anon, resolution happens inside Tor, so the
+            //    static destination policy is the enforceable surface (the
+            //    shared deny table also runs in the SOCKS front-end).
+            let (target_url, host, client) = if let Some(client) = &anon_client {
+                let url = ssrf::check_url(&current, self.allow_onion)?;
+                let host = url.host_str().ok_or(FetchError::BadUrl)?.to_owned();
+                (url, host, client.clone())
+            } else {
+                let target = ssrf::vet(&current, self.allow_onion).await?;
+                let client = self
+                    .lanes
+                    .pinned(lane, &target.host, target.addr)
+                    .map_err(FetchError::Lane)?;
+                (target.url, target.host, client)
+            };
 
             // 2. Per-domain budget — global across lanes (SPEC §12.5 inv. 4).
-            self.budget.acquire(&target.host).await;
+            self.budget.acquire(&host).await;
 
-            // 3. Pinned, lane-bound client (no TOCTOU re-resolution).
-            let client = self
-                .lanes
-                .pinned(lane, &target.host, target.addr)
-                .map_err(FetchError::Lane)?;
-
-            // 4. robots.txt on the same lane + same pinned address.
-            if !self.robots.allows(&client, &target.url).await? {
+            // 3. robots.txt on the same lane (same pinned address / same circuit).
+            if !self.robots.allows(&client, &target_url).await? {
                 return Err(FetchError::RobotsDenied);
             }
 
-            // 5. GET with streamed size cap.
+            // 4. GET with streamed size cap.
             let response = client
-                .get(target.url.clone())
+                .get(target_url.clone())
                 .send()
                 .await
                 .map_err(|e| FetchError::Network(redact_reqwest_error(&e)))?;
@@ -117,8 +133,7 @@ impl Fetcher {
                     .ok_or(FetchError::BadRedirect)?;
                 // Relative redirects resolve against the current URL; the next
                 // loop iteration re-vets from scratch.
-                current = target
-                    .url
+                current = target_url
                     .join(location)
                     .map_err(|_| FetchError::BadRedirect)?
                     .to_string();
@@ -153,9 +168,9 @@ impl Fetcher {
             let body_text = String::from_utf8_lossy(&body).into_owned();
             drop(body); // raw bytes end here (SPEC §6.1)
 
-            // 6. Extract; raw HTML is dropped with `body_text` on return.
+            // 5. Extract; raw HTML is dropped with `body_text` on return.
             let Extracted { title, text } = if is_html || content_type.is_empty() {
-                extract_html(&body_text, target.url.as_str())
+                extract_html(&body_text, target_url.as_str())
                     .map_err(|e| FetchError::Extract(e.to_string()))?
             } else {
                 extract_plaintext(&body_text)
@@ -165,7 +180,7 @@ impl Fetcher {
                 self.cache.insert(
                     raw_url.to_owned(),
                     Arc::new(CachedFetch {
-                        url: target.url.to_string(),
+                        url: target_url.to_string(),
                         title: title.clone(),
                         text: text.clone(),
                         http_status: status.as_u16(),
@@ -173,7 +188,7 @@ impl Fetcher {
                 );
             }
             return Ok(FetchedDoc {
-                url: target.url,
+                url: target_url,
                 title,
                 text,
                 http_status: status.as_u16(),

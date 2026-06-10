@@ -14,6 +14,28 @@ meridian-common.workspace = true
 meridian-privacy.workspace = true
 reqwest.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
+# Anon lane (SPEC §12.4, ADR-04): embedded Arti on the shared Tokio runtime.
+# rustls (ring provider installed at lane start) + bundled sqlite for musl.
+arti-client = { workspace = true, features = [
+    "tokio",
+    "rustls",
+    "static-sqlite",
+    "compression",
+] }
+tor-rtcompat.workspace = true
+rustls.workspace = true
+tokio = { workspace = true, features = ["net", "io-util", "sync", "time", "rt"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = [
+    "net",
+    "io-util",
+    "sync",
+    "time",
+    "rt-multi-thread",
+    "macros",
+] }
 
 [lints]
 workspace = true

@@ -28,7 +28,8 @@ moka = { version = "0.12", features = ["sync"] }
 axum = "0.8"
 tower = { version = "0.5", features = ["timeout", "limit", "load-shed", "util"] }
 tower-http = { version = "0.6", features = ["compression-gzip", "limit"] }
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "stream", "gzip"] }
+# socks: the anon lane's only transport is socks5h via the in-process listener
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "stream", "gzip", "socks"] }
 figment = { version = "0.10", features = ["toml", "env"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "registry"] }
@@ -57,6 +58,8 @@ ndarray = "0.17"
 tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
 tokio = { version = "1", default-features = false }
 arti-client = { version = "0.43", default-features = false }
+# Runtime type names only (PreferredRuntime); features unify with arti-client's
+tor-rtcompat = { version = "0.43", default-features = false }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
 # Internal crates

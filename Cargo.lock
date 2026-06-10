@@ -3142,10 +3142,15 @@ dependencies = [
 name = "meridian-egress"
 version = "0.0.1"
 dependencies = [
+ "arti-client",
  "meridian-common",
  "meridian-privacy",
  "reqwest",
+ "rustls",
  "thiserror 2.0.18",
+ "tokio",
+ "tor-rtcompat",
+ "tracing",
 ]
 
 [[package]]

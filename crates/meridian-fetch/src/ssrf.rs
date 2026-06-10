@@ -9,6 +9,11 @@
 use std::net::{IpAddr, SocketAddr};
 use url::Url;
 
+// The ONE deny table, shared with the anon SOCKS destination policy
+// (meridian-egress) — §12.5 invariant 3. Re-exported to keep this module the
+// fetch-side façade.
+pub use meridian_common::netpolicy::{ALLOWED_PORTS, ip_denied};
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum SsrfError {
     #[error("invalid url")]
@@ -24,8 +29,6 @@ pub enum SsrfError {
     #[error("hostname did not resolve")]
     ResolutionFailed,
 }
-
-const ALLOWED_PORTS: &[u16] = &[80, 443, 8080, 8443];
 
 /// A validated fetch target: original URL + the pinned, vetted socket address.
 #[derive(Debug, Clone)]
@@ -91,81 +94,9 @@ pub async fn vet(raw: &str, allow_onion: bool) -> Result<VettedTarget, SsrfError
     })
 }
 
-/// SPEC §13.1 deny ranges. Everything not globally routable is denied.
-pub fn ip_denied(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            let o = v4.octets();
-            v4.is_loopback()                      // 127/8
-                || v4.is_private()                // RFC1918
-                || v4.is_link_local()             // 169.254/16 (cloud metadata)
-                || v4.is_unspecified()            // 0.0.0.0
-                || o[0] == 0                      // 0.0.0.0/8
-                || (o[0] == 100 && (o[1] & 0xC0) == 64) // 100.64/10 CGNAT
-                || (o[0] == 192 && o[1] == 0 && o[2] == 0) // 192.0.0.0/24 IETF
-                || (o[0] == 192 && o[1] == 0 && o[2] == 2) // 192.0.2/24 TEST-NET-1
-                || (o[0] == 198 && (o[1] & 0xFE) == 18) // 198.18/15 benchmarking
-                || (o[0] == 198 && o[1] == 51 && o[2] == 100) // TEST-NET-2
-                || (o[0] == 203 && o[1] == 0 && o[2] == 113) // TEST-NET-3
-                || v4.is_multicast()              // 224/4
-                || o[0] >= 240 // 240/4 reserved + broadcast
-        }
-        IpAddr::V6(v6) => {
-            let seg = v6.segments();
-            v6.is_loopback()                       // ::1
-                || v6.is_unspecified()             // ::
-                || (seg[0] & 0xffc0) == 0xfe80     // fe80::/10 link-local
-                || (seg[0] & 0xfe00) == 0xfc00     // fc00::/7 ULA
-                || (seg[0] & 0xff00) == 0xff00     // ff00::/8 multicast
-                || (seg[0] == 0x2001 && seg[1] == 0xdb8) // 2001:db8::/32 doc
-                || v6.to_ipv4_mapped().is_some_and(|v4| ip_denied(IpAddr::V4(v4)))
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn denied(s: &str) -> bool {
-        ip_denied(s.parse().unwrap())
-    }
-
-    #[test]
-    fn deny_ranges_cover_spec_13_1() {
-        for ip in [
-            "127.0.0.1",
-            "127.8.8.8",
-            "10.0.0.1",
-            "172.16.0.1",
-            "172.31.255.255",
-            "192.168.1.1",
-            "169.254.169.254", // cloud metadata
-            "100.64.0.1",
-            "100.127.255.254",
-            "0.0.0.0",
-            "0.1.2.3",
-            "224.0.0.1",
-            "239.255.255.255",
-            "240.0.0.1",
-            "255.255.255.255",
-            "198.18.0.1",
-            "192.0.2.1",
-            "::1",
-            "::",
-            "fe80::1",
-            "fc00::1",
-            "fdff::1",
-            "ff02::1",
-            "::ffff:10.0.0.1",  // v4-mapped private
-            "::ffff:127.0.0.1", // v4-mapped loopback
-        ] {
-            assert!(denied(ip), "{ip} must be denied");
-        }
-        for ip in ["93.184.216.34", "1.1.1.1", "2606:4700::1111", "8.8.8.8"] {
-            assert!(!denied(ip), "{ip} must be allowed");
-        }
-    }
 
     #[test]
     fn scheme_port_and_onion_rules() {
