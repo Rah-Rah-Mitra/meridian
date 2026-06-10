@@ -75,7 +75,7 @@ shed ladder (SPEC §8.6) starts early at RSS >2.3GB.
 | fast, metasearch, direct | ≤900ms | ≤900ms (network-bound, Phase-1 load test) | §15.3 + load |
 | fast, metasearch, anon | ≤8s, no hedging | **connect p50 1.10s / p99 2.29s post-bootstrap ✓** — 8s holds; cold bootstrap 14.7s happens at lane-enable, never inside a request | §15.8 ✓ |
 | deep, direct | ≤2.5s | **UNMEASURED** — tract cannot load the INT8 CE (ADR-02); re-measure at Phase-3 entry | §15.4 (blocked) |
-| /geo/heatmap | ≤150ms | ≤100ms | Phase-5 bench |
+| /geo/heatmap | ≤150ms | 27ms ✓ (res 5, 100k docs, on-device) | Phase-5 exit |
 | Ingest sustained | ≥50 docs/s | **index-side 15,021 docs/s ✓** (300×) — fetch/extract-bound as designed | §15.3, 7 ✓ |
 
 Measured stage numbers (fast/local, Profile R): BM25 top-1000 **0.48ms p50 @100k ✓**
@@ -118,5 +118,5 @@ Phase-1+ deps stay feature-scoped where possible.
 | 2 | **DONE 2026-06-10 ✓** — hybrid nDCG@10 0.42 > BM25 0.38; vectors 405MB disk / 506MB RAM @1M (extrapolated); hybrid p50 14.5ms ([exit note](phase-exits/p2.md)) |
 | 3 | **DONE 2026-06-10 ✓** — deep p50 204ms (CE rerank, gnu/ort image), cache-hit 0.47ms, LTR no-regression ([exit note](phase-exits/p3.md)) |
 | 4 | **DONE 2026-06-11 ✓** — anon metasearch cold p50 1.34s (≤8s), Arti RSS delta +47MB (≤150MB), zero direct egress proven hermetically + live bootstrap windows; image 74.7MB ([exit note](phase-exits/p4.md)) |
-| 5 | analytics ≤700MB steady; heatmap ≤150ms; every store under its cap |
+| 5 | **DONE 2026-06-11 ✓** — heatmap p50 27ms; analytics 128MB/14 simulated days; stores: index 47.6MB, vectors 38.6MB, dedup 9.6MB; search p50 12ms on schema v3 ([exit note](phase-exits/p5.md)) |
 | 6 | 24h soak: RSS slope <1MB/h, temp <80°C, p99 stable |

@@ -60,31 +60,33 @@ echo "trailing-7d results: $WEEK_N (corpus ts spread over 14d)"
 echo "== /v1/forget end-to-end (gate: erased + re-ingest refused) =="
 : "${MERIDIAN_BEARER_TOKEN:?need bearer for forget drill}"
 AUTH=(-H "Authorization: Bearer $MERIDIAN_BEARER_TOKEN")
-CANARY_URL="https://gate.invalid/p5-forget-canary"
-CANARY_TEXT="The zylkophant grazes only in the Brandenburg lowlands near Berlin p5canary."
+# Random suffix: tombstones are permanent, so each run needs a fresh canary.
+NONCE="$RANDOM$RANDOM"
+CANARY_URL="https://gate.invalid/p5-forget-canary-$NONCE"
+CANARY_TEXT="The zylkophant grazes only in the Brandenburg lowlands near Berlin canary$NONCE."
 ing() {
   curl -s "${AUTH[@]}" -H 'Content-Type: application/json' -X POST "$BASE/v1/ingest" \
-    -d "[{\"text\": \"$CANARY_TEXT\", \"title\": \"Zylkophant\", \"url\": \"$CANARY_URL\", \"ts\": $(date +%s)}]"
+    -d "[{\"text\": \"$CANARY_TEXT\", \"title\": \"Zylkophant $NONCE\", \"url\": \"$CANARY_URL\", \"ts\": $(date +%s)}]"
+}
+# ANN returns nearest neighbors for ANY query, so result COUNT proves nothing:
+# the assertion is the canary URL's presence in the result list.
+canary_hit() {
+  curl -s --get --data-urlencode "q=zylkophant canary$NONCE" --data-urlencode "scope=local" "$BASE/v1/search" \
+    | python3 -c "import json,sys; print(int(any('p5-forget-canary-$NONCE' in r['url'] for r in json.load(sys.stdin)['results'])))"
 }
 R1=$(ing); echo "ingest #1: $R1"
 sleep 2
-HITS=$(curl -s --get --data-urlencode "q=zylkophant" --data-urlencode "scope=local" "$BASE/v1/search" \
-  | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["results"]))')
-[[ "$HITS" -ge 1 ]] && echo "ok: canary searchable" || { echo "FAIL: canary not found pre-forget"; fail=1; }
+[[ "$(canary_hit)" == 1 ]] && echo "ok: canary searchable" || { echo "FAIL: canary not found pre-forget"; fail=1; }
 FORGET=$(curl -s "${AUTH[@]}" -H 'Content-Type: application/json' -X POST "$BASE/v1/forget" \
   -d "{\"url\": \"$CANARY_URL\"}")
 echo "forget: $FORGET"
 echo "$FORGET" | grep -q '"removed":1' || { echo "FAIL: forget removed != 1"; fail=1; }
 sleep 2
-HITS=$(curl -s --get --data-urlencode "q=zylkophant" --data-urlencode "scope=local" "$BASE/v1/search" \
-  | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["results"]))')
-[[ "$HITS" -eq 0 ]] && echo "ok: erased from results (caches purged)" || { echo "FAIL: still searchable post-forget"; fail=1; }
+[[ "$(canary_hit)" == 0 ]] && echo "ok: erased from results (caches purged)" || { echo "FAIL: still searchable post-forget"; fail=1; }
 R2=$(ing); echo "re-ingest: $R2"
 echo "$R2" | grep -q '"accepted":0' && echo "ok: re-ingest refused (tombstone)" || { echo "FAIL: tombstone did not refuse"; fail=1; }
 sleep 2
-HITS=$(curl -s --get --data-urlencode "q=zylkophant" --data-urlencode "scope=local" "$BASE/v1/search" \
-  | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["results"]))')
-[[ "$HITS" -eq 0 ]] && echo "ok: still gone after re-ingest attempt" || { echo "FAIL: re-ingest resurrected doc"; fail=1; }
+[[ "$(canary_hit)" == 0 ]] && echo "ok: still gone after re-ingest attempt" || { echo "FAIL: re-ingest resurrected doc"; fail=1; }
 
 echo "== store sizes under §6.1 caps =="
 curl -s "$BASE/metrics" | grep "^meridian_store_bytes" || echo "(sweep runs every 30min — may be empty right after boot)"

@@ -4,14 +4,15 @@
 hybrid index (BM25 + dense vectors) + geo analytics, sized for a Raspberry Pi 5 and scaling to
 edge servers without redesign.
 
-> Status: **Phase 4 complete** — all three egress lanes are live. `anon` runs
-> Tor via embedded Arti behind Meridian's own SOCKS5 isolation front-end
-> (RFC1929 username → isolation token, fail-closed at four layers; anon
-> metasearch cold p50 1.34s through the real Tor network). `region:<id>` binds
-> the operator's WireGuard source IPs and refuses traffic until egress-IP
-> verification passes. The five SPEC §12.5 cross-lane invariants are enforced by
-> a hermetic test suite in CI. Phase 5 (geo + analytics + retention/forget) is
-> next. Planning artifacts: [`docs/plan/`](docs/plan/).
+> Status: **Phase 5 complete** — geo + analytics + retention/forget are live.
+> Documents are geo-tagged at ingest by an offline GeoNames gazetteer (H3
+> res-7), search takes geo/time filters, `/v1/geo/heatmap` answers in 27ms
+> p50 on a 100k-doc corpus, and opt-in GDELT analytics feed `/v1/trends` plus
+> a PageRank-derived ranking prior. `POST /v1/forget` provably erases a
+> document from lexical+vector+caches and tombstones it against re-ingest.
+> Phase 6 (hardening + v0.1.0 release) is underway. Planning artifacts:
+> [`docs/plan/`](docs/plan/); docs: [operator manual](docs/operator-manual.md)
+> · [API](docs/api.md) · [privacy](docs/privacy.md).
 
 ## What it is
 
@@ -51,8 +52,8 @@ The full, binding specification is [`docs/SPEC.md`](docs/SPEC.md) (v2.1).
 | 2 | Hybrid retrieval (embeddings + ANN) | **Done** (2026-06-10) |
 | 3 | Ranking stack (LTR, deep rerank, bandit routing) | **Done** (2026-06-10) |
 | 4 | Egress lanes: anon (Arti) + region (WireGuard) | **Done** (2026-06-11) |
-| 5 | Geo + analytics + retention/forget | — |
-| 6 | Hardening + v0.1.0 release | — |
+| 5 | Geo + analytics + retention/forget | **Done** (2026-06-11) |
+| 6 | Hardening + v0.1.0 release | In progress |
 
 ## Building
 
