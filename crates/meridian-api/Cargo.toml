@@ -13,6 +13,17 @@ publish.workspace = true
 meridian-common.workspace = true
 meridian-privacy.workspace = true
 meridian-query.workspace = true
+# Lane type flows through meridian-query's re-export; egress is NOT a direct dep
+axum = { workspace = true, features = ["tokio", "http1", "json", "query"] }
+getrandom.workspace = true
+governor.workspace = true
+metrics.workspace = true
+metrics-exporter-prometheus.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["time", "sync", "rt"] }
+tower-http.workspace = true
+tracing.workspace = true
 
 [lints]
 workspace = true

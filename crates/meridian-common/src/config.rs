@@ -32,9 +32,15 @@ impl MeridianConfig {
         use figment::Figment;
         use figment::providers::{Env, Format, Serialized, Toml};
         let path = std::env::var("MERIDIAN_CONFIG").unwrap_or_else(|_| "meridian.toml".to_owned());
+        // BEARER_TOKEN is a secret and must never transit the config layer
+        // (SPEC §13.5); CONFIG/LOG steer the loader itself.
         Figment::from(Serialized::defaults(Self::default()))
             .merge(Toml::file(path))
-            .merge(Env::prefixed("MERIDIAN_").split("__"))
+            .merge(
+                Env::prefixed("MERIDIAN_")
+                    .ignore(&["bearer_token", "config", "log"])
+                    .split("__"),
+            )
             .extract()
             .map_err(|e| crate::MeridianError::Config(e.to_string()))
     }

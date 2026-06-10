@@ -12,6 +12,19 @@ publish.workspace = true
 [dependencies]
 meridian-common.workspace = true
 meridian-api.workspace = true
+meridian-egress.workspace = true
+meridian-fetch.workspace = true
+meridian-index.workspace = true
+meridian-privacy.workspace = true
+meridian-query.workspace = true
+meridian-searx.workspace = true
+axum.workspace = true
+libc.workspace = true
+metrics-exporter-prometheus.workspace = true
+rayon.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "signal", "macros"] }
+tracing.workspace = true
 
 [lints]
 workspace = true

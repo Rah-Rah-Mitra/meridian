@@ -84,23 +84,47 @@ impl Planner {
         }
     }
 
+    /// Lane observability for `GET /v1/lanes` (SPEC §10).
+    pub fn lane_statuses(&self) -> Vec<(String, meridian_egress::LaneStatus)> {
+        self.lanes.statuses()
+    }
+
+    /// Aggregate per-engine counters for `/metrics` (no user data).
+    pub fn engine_health(
+        &self,
+    ) -> std::collections::HashMap<String, meridian_searx::client::EngineHealth> {
+        self.searx
+            .as_ref()
+            .map(|s| s.engine_health())
+            .unwrap_or_default()
+    }
+
     pub async fn search(&self, req: SearchRequest) -> Result<SearchResponse, PlanError> {
         let mut timings: HashMap<&'static str, u64> = HashMap::new();
         let mut degraded: Vec<&'static str> = Vec::new();
         let limit = req.limit.clamp(1, self.cfg.max_limit);
 
-        // Lane resolution is fail-closed: a requested lane that cannot be
-        // served is an error — never a silent direct fallback (SPEC §12.1).
-        let wants_web = matches!(req.scope, Scope::Web | Scope::Both) && self.searx.is_some();
-        let lane_client = if wants_web {
+        // Lane resolution is fail-closed: whenever the scope would touch the
+        // network, the requested lane must resolve — even if the metasearch
+        // backend is off — so a requested anon/region NEVER quietly yields a
+        // result it didn't govern (SPEC §12.1). Local-only scope needs no
+        // egress at all; lanes govern network only.
+        let wants_web_scope = matches!(req.scope, Scope::Web | Scope::Both);
+        let lane_client = if wants_web_scope {
+            if self.searx.is_none() {
+                degraded.push("searx_disabled");
+            }
             Some(self.lanes.resolve(&req.lane)?)
         } else {
-            // Local-only search needs no egress; lanes govern network only.
             None
         };
+        let wants_web = wants_web_scope && self.searx.is_some();
 
         // Local BM25 on the rayon pool (SPEC §7.2: no CPU work on tokio).
-        let wants_local = matches!(req.scope, Scope::Local | Scope::Both);
+        let wants_local = matches!(req.scope, Scope::Local | Scope::Both)
+            // Web-only scope with the backend off: local is the honest fallback,
+            // flagged via `degraded` above.
+            || (wants_web_scope && self.searx.is_none());
         let local_handle = wants_local.then(|| {
             let index = self.index.clone();
             let q = req.q.clone();
@@ -246,7 +270,13 @@ impl Planner {
             results,
             timings,
             lane_requested: lane_name(&req.lane),
-            lane_effective: lane_name(&req.lane),
+            // Effective = the lane that actually carried traffic; a local-only
+            // request used none.
+            lane_effective: if wants_web_scope {
+                lane_name(&req.lane)
+            } else {
+                "local-only".to_owned()
+            },
             degraded,
         })
     }
