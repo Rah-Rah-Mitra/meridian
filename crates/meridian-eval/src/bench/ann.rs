@@ -3,10 +3,12 @@
 //! plus the ADR-01 16K-page mmap `view()` smoke test.
 //! Gate: some swept ef reaches recall@10 ≥0.95 with p99 <40ms (and view() works).
 //!
-//! Recall is measured against exact brute-force over usearch's OWN int8
-//! representation (unit vector × 127) — i.e. pure graph recall over exactly what
-//! the index stores and compares. End-to-end quantization loss vs f32 is a
-//! ranking-quality question, owned by the Phase-2 eval harness (nDCG hybrid≥BM25).
+//! Recall truth comes from `Index::exact_search` — usearch's brute force over its
+//! OWN stored vectors and distance kernel, so HNSW and truth share the identical
+//! representation by construction (a hand-rolled i8 reference plateaued recall at
+//! 0.884 across the whole ef sweep — the signature of representation mismatch,
+//! not graph quality). End-to-end quantization loss vs f32 is a ranking-quality
+//! question, owned by the Phase-2 eval harness (nDCG hybrid ≥ BM25).
 
 use super::{BenchConfig, SuiteResult};
 use crate::probe::rss_bytes;
@@ -52,15 +54,6 @@ fn unit_vector(key: u64) -> Vec<f32> {
     v
 }
 
-/// usearch's i8 scheme for cosine: unit-normalized components × 127. Using the
-/// identical representation makes the brute-force reference rank with exactly
-/// the values the index stores — recall then isolates graph quality.
-fn quantize_usearch(v: &[f32]) -> Vec<i8> {
-    v.iter()
-        .map(|x| (x * 127.0).round().clamp(-127.0, 127.0) as i8)
-        .collect()
-}
-
 fn options() -> IndexOptions {
     IndexOptions {
         dimensions: DIMS,
@@ -81,13 +74,6 @@ pub fn run(cfg: &BenchConfig) -> SuiteResult {
 
     let run_inner = (|| -> Result<(), String> {
         let err = |e: cxx::Exception| format!("usearch: {e}");
-
-        // Reference int8 copy for brute-force recall (256MB at 1M — bounded).
-        let mut ref_i8: Vec<i8> = Vec::with_capacity(n * DIMS);
-        for key in 0..n as u64 {
-            let v = unit_vector(key);
-            ref_i8.extend_from_slice(&quantize_usearch(&v));
-        }
 
         let rss0 = rss_bytes();
         let index = Index::new(&options()).map_err(err)?;
@@ -120,26 +106,14 @@ pub fn run(cfg: &BenchConfig) -> SuiteResult {
         result.metric("index_size", index.size());
         result.metric("memory_usage_mb", index.memory_usage() / (1024 * 1024));
 
-        // Exact truth sets (i8 brute force over the index's own representation) —
-        // independent of ef, so computed once for the whole sweep.
-        let truths: Vec<std::collections::HashSet<u64>> = (0..RECALL_QUERIES as u64)
-            .map(|qi| {
-                let qq = quantize_usearch(&unit_vector(0xFFFF_0000 + qi));
-                let mut scored: Vec<(i32, u64)> = (0..n)
-                    .map(|i| {
-                        let row = &ref_i8[i * DIMS..(i + 1) * DIMS];
-                        let dot: i32 = row
-                            .iter()
-                            .zip(qq.iter())
-                            .map(|(a, b)| *a as i32 * *b as i32)
-                            .sum();
-                        (dot, i as u64)
-                    })
-                    .collect();
-                scored.sort_unstable_by_key(|p| std::cmp::Reverse(p.0));
-                scored[..TOP_K].iter().map(|p| p.1).collect()
-            })
-            .collect();
+        // Exact truth sets via usearch's own brute force (`exact_search`) — same
+        // stored vectors, same kernel; independent of ef, computed once per sweep.
+        let mut truths: Vec<std::collections::HashSet<u64>> = Vec::with_capacity(RECALL_QUERIES);
+        for qi in 0..RECALL_QUERIES as u64 {
+            let qf = unit_vector(0xFFFF_0000 + qi);
+            let exact = index.exact_search(&qf, TOP_K).map_err(err)?;
+            truths.push(exact.keys.iter().copied().collect());
+        }
 
         // ef_search sweep: latency (1k queries, single-threaded) + recall@10 per ef.
         let mut derived_ef = None;
