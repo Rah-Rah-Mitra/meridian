@@ -1,0 +1,17 @@
+[package]
+name = "meridian-fetch"
+description = "Fetch ladder: SSRF guard on every lane, robots.txt, per-domain token buckets shared across lanes, readability extraction"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+meridian-common.workspace = true
+meridian-egress.workspace = true
+meridian-privacy.workspace = true
+
+[lints]
+workspace = true

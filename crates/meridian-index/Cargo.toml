@@ -1,0 +1,15 @@
+[package]
+name = "meridian-index"
+description = "Tantivy lexical index: schema, IndexWriter mgmt, merge policy, snippets, fast fields, H3 pruning, SegmentStore trait (v2 seam)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+meridian-common.workspace = true
+
+[lints]
+workspace = true

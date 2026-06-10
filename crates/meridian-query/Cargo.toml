@@ -1,0 +1,23 @@
+[package]
+name = "meridian-query"
+description = "Query planner & orchestrator: intent, budgets, lane selection, fan-out + deadlines, RRF fusion, MMR diversity"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+meridian-common.workspace = true
+meridian-index.workspace = true
+meridian-vector.workspace = true
+meridian-embed.workspace = true
+meridian-rank.workspace = true
+meridian-rerank.workspace = true
+meridian-fetch.workspace = true
+meridian-searx.workspace = true
+meridian-geo.workspace = true
+
+[lints]
+workspace = true

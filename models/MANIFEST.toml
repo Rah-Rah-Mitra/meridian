@@ -1,0 +1,53 @@
+# Model artifact manifest — SPEC §9.6 / §17.
+# Artifacts are fetched AT BUILD TIME by the image build script with these pinned
+# SHA256s and baked into the meridiand image. The device NEVER downloads models at
+# runtime, and binaries are NEVER committed to git.
+#
+# sha256 = "TBD" entries are placeholders until the Phase-0 build script pins them
+# against the exact artifact revisions. Total budget: ≤80MB (SPEC §6.1).
+
+[[model]]
+name = "potion-base-8M"
+purpose = "dense embeddings (model2vec static, 256-dim)"
+source = "https://huggingface.co/minishlab/potion-base-8M"
+files = ["model.safetensors", "tokenizer.json", "config.json"]
+approx_size_mb = 31
+license = "MIT"
+sha256 = "TBD"
+
+[[model]]
+name = "ms-marco-MiniLM-L-6-v2-qint8-arm64"
+purpose = "deep rerank cross-encoder (INT8 ONNX, aarch64)"
+# Official repo ships onnx/model_qint8_arm64.onnx (~23.2MB) — verified 2026-06-10
+source = "https://huggingface.co/cross-encoder/ms-marco-MiniLM-L-6-v2"
+files = ["onnx/model_qint8_arm64.onnx", "tokenizer.json"]
+approx_size_mb = 24
+license = "Apache-2.0"
+sha256 = "TBD"
+
+[[model]]
+name = "meridian-ltr-gbdt"
+purpose = "learning-to-rank (LightGBM -> ONNX, trained in train/)"
+source = "train/ (offline pipeline output)"
+files = ["ltr.onnx"]
+approx_size_mb = 8
+license = "MIT OR Apache-2.0 (first-party)"
+sha256 = "TBD"
+
+[[model]]
+name = "meridian-intent-gbdt"
+purpose = "query intent classifier (GBDT -> ONNX, trained in train/)"
+source = "train/ (offline pipeline output)"
+files = ["intent.onnx"]
+approx_size_mb = 2
+license = "MIT OR Apache-2.0 (first-party)"
+sha256 = "TBD"
+
+[[model]]
+name = "gazetteer-fst"
+purpose = "GeoNames cities15000 + admin1 compiled to fst"
+source = "https://download.geonames.org/export/dump/cities15000.zip"
+files = ["gazetteer.fst"]
+approx_size_mb = 10
+license = "CC-BY-4.0 (GeoNames; attribution in docs)"
+sha256 = "TBD"

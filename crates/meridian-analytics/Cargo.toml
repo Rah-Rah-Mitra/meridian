@@ -1,0 +1,18 @@
+[package]
+name = "meridian-analytics"
+description = "GDELT slice puller (stream-parse, never store raw), H3 x topic x day counters, TTL compaction, nightly PageRank"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+meridian-common.workspace = true
+meridian-geo.workspace = true
+meridian-fetch.workspace = true
+meridian-privacy.workspace = true
+
+[lints]
+workspace = true

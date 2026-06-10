@@ -1,0 +1,53 @@
+# Meridian workspace — SPEC §5 (layout) and §7.1 (release profile).
+# One binary (bins/meridiand), fifteen library crates. Crate boundaries == module ownership.
+
+[workspace]
+resolver = "3"
+members = ["crates/*", "bins/meridiand"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+# tantivy 0.26 requires 1.86 (verified 2026-06-10); keep in lockstep with the heaviest dep
+rust-version = "1.86"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Rah-Rah-Mitra/meridian"
+authors = ["Rahul Mitra <mitrarahul2002@gmail.com>"]
+
+[workspace.dependencies]
+# External (kept minimal at scaffold stage; heavy deps — tantivy, usearch, ort, arti —
+# enter per phase, see docs/plan/01-wbs.md)
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+# Internal crates
+meridian-common = { path = "crates/meridian-common" }
+meridian-api = { path = "crates/meridian-api" }
+meridian-query = { path = "crates/meridian-query" }
+meridian-index = { path = "crates/meridian-index" }
+meridian-vector = { path = "crates/meridian-vector" }
+meridian-embed = { path = "crates/meridian-embed" }
+meridian-rank = { path = "crates/meridian-rank" }
+meridian-rerank = { path = "crates/meridian-rerank" }
+meridian-egress = { path = "crates/meridian-egress" }
+meridian-privacy = { path = "crates/meridian-privacy" }
+meridian-fetch = { path = "crates/meridian-fetch" }
+meridian-searx = { path = "crates/meridian-searx" }
+meridian-geo = { path = "crates/meridian-geo" }
+meridian-analytics = { path = "crates/meridian-analytics" }
+meridian-eval = { path = "crates/meridian-eval" }
+
+[workspace.lints.rust]
+unsafe_code = "warn"
+
+[workspace.lints.clippy]
+# SPEC §8.5 zero-copy discipline
+redundant_clone = "deny"
+
+# SPEC §7.1 — maximum performance-per-watt release profile
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

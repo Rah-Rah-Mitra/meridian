@@ -1,0 +1,17 @@
+[package]
+name = "meridian-egress"
+description = "Egress lane layer: Direct / Region (WireGuard source-IP bind) / Anon (embedded Arti, fail-closed). The most security-sensitive crate"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+meridian-common.workspace = true
+meridian-privacy.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

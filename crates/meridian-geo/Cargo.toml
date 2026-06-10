@@ -1,0 +1,15 @@
+[package]
+name = "meridian-geo"
+description = "Geo: H3 ops (h3o), gazetteer fst, remote geocode client + redb cache, heatmap aggregation, optional maxminddb"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+meridian-common.workspace = true
+
+[lints]
+workspace = true

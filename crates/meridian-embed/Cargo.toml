@@ -1,0 +1,15 @@
+[package]
+name = "meridian-embed"
+description = "model2vec static-embedding runtime: tokenizer, batch embed, int8 output"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+meridian-common.workspace = true
+
+[lints]
+workspace = true
