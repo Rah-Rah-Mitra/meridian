@@ -1,0 +1,19 @@
+# SearXNG (direct instance) — trimmed config, SPEC §4.
+# Phase-1 finalizes the ≤30-engine list; JSON format is what meridian-searx consumes.
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: "meridian-searxng"
+
+search:
+  formats: [json]          # meridian-searx speaks JSON only; html UI never published
+  safe_search: 0
+
+server:
+  secret_key: "CHANGE_ME_AT_DEPLOY"   # pi-setup.sh generates a random one
+  limiter: false                       # internal-only network; meridiand rate-limits
+  image_proxy: false
+
+# Engine trim happens in Phase 1 (bake-off vs. latency budget). Placeholder:
+# keep defaults minus heavy/irrelevant categories.

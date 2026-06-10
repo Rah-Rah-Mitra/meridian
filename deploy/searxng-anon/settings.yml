@@ -1,0 +1,25 @@
+# SearXNG (anon instance) — Tor-proxied, SPEC §4 / §12.4.
+# Lives on the internal `back` network: its ONLY egress is the Arti SOCKS5 listener
+# meridiand exposes. socks5h => DNS resolves through Tor (no DNS leaks).
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: "meridian-searxng-anon"
+
+search:
+  formats: [json]
+  safe_search: 0
+
+server:
+  secret_key: "CHANGE_ME_AT_DEPLOY"
+  limiter: false
+  image_proxy: false
+
+outgoing:
+  proxies:
+    all://:
+      - socks5h://meridiand:9150
+  # Generous timeouts: Tor circuits add seconds (SPEC §6.3 anon budget)
+  request_timeout: 20.0
+  max_request_timeout: 30.0

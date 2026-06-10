@@ -1,0 +1,104 @@
+# Meridian container topology — SPEC §4.
+# Default profile: meridiand + searxng (direct lane only).
+#   --profile anon    adds the Tor-proxied searxng-anon instance (egress only via
+#                     the Arti SOCKS port meridiand serves on `back` — fail-closed
+#                     by topology).
+#   --profile regions is a SEPARATE compose file (compose.regions.yaml, Phase 4):
+#                     host networking for WireGuard source-IP binding; documented
+#                     tradeoff, never required for direct/anon users.
+#
+# Phase-0 skeleton: shapes, networks, hardening and healthchecks are final; image
+# references activate once the Phase-0 GHCR image exists.
+
+name: meridian
+
+networks:
+  front:
+    driver: bridge
+  back:
+    driver: bridge
+    internal: true
+
+volumes:
+  meridian-data:
+
+services:
+  meridiand:
+    # Pinned by digest once the first GHCR image is published (Phase-0 exit gate)
+    image: ghcr.io/rah-rah-mitra/meridian/meridiand:0.0.1
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    mem_limit: 3g
+    cpus: 4.0
+    networks: [front, back]
+    ports:
+      # Loopback only — exposing beyond localhost is an explicit operator choice
+      # gated behind "enable auth + TLS first" (SPEC §13.4)
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - meridian-data:/data
+    tmpfs:
+      - /tmp
+    logging: &logcap
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "/meridiand", "--healthcheck"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  searxng:
+    # TODO(phase-1): pin by digest (SPEC §13.2)
+    image: searxng/searxng:latest
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    mem_limit: 512m
+    cpus: 1.5
+    # back + default bridge for engine egress; UI is NEVER published to the host
+    networks: [back, default]
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    tmpfs:
+      - /tmp
+    logging: *logcap
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+
+  searxng-anon:
+    profiles: [anon]
+    image: searxng/searxng:latest
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    mem_limit: 384m
+    cpus: 1.0
+    # back is internal:true — the ONLY route to the internet is the Tor SOCKS
+    # listener meridiand serves on this network. Arti down => no egress at all.
+    networks: [back]
+    volumes:
+      - ./searxng-anon/settings.yml:/etc/searxng/settings.yml:ro
+    tmpfs:
+      - /tmp
+    logging: *logcap
+    depends_on:
+      meridiand:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
