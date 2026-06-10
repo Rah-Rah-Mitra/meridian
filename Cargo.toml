@@ -48,7 +48,7 @@ futures-util = { version = "0.3", default-features = false }
 rayon = "1"
 # --- bench-only (meridian-eval features; versions verified 2026-06-10) ---
 tantivy = { version = "0.26", features = ["zstd-compression"] }
-usearch = "2.25"
+usearch = { version = "2.25", default-features = false }
 cxx = "1"
 model2vec-rs = { version = "0.2", default-features = false, features = ["fancy-regex", "local-only"] }
 tract-onnx = "0.23"

@@ -191,7 +191,20 @@ M=16/efc=128/ef=64, serialization + mmap `view()`.
   portable-C++ (drop the SIMD feature, keep i8) → (3) hnsw_rs with offset-u8
   quantization, accepted as degraded-perf last resort.
 
-**Status: CONFIRMED with fallback-ladder amendment.**
+**Status: CONFIRMED — fallback ladder RUNG 2 ACTIVATED (2026-06-10).**
+
+**Risk #3 tripwire fired (Phase 2):** usearch's default `numkong` SIMD backend
+compiles SVE/SME C kernels (`-DNK_TARGET_SVE=1 -DNK_TARGET_SME=1 …`) that zig's
+clang rejects under `aarch64-unknown-linux-musl` — the same toolchain-gap family
+as tract's fp16 (ADR-02). The product image is musl, so this blocked the build.
+**Resolution: `usearch = { default-features = false }`** → rung 2 (portable
+auto-vectorized C++, keeps i8 + cosine + serialization + view). One code path for
+both the musl product and the gnu bench. The A76 still auto-vectorizes the int8
+kernels; the §15.2 gate (p99 <40ms) has ~42× headroom over the measured 0.95ms,
+so the perf loss is immaterial — but the Phase-0 ANN numbers were numkong, so the
+Phase-2 exit note re-validates the portable path on-device. numkong's NEON-dotprod
+kernels remain available on gnu if a future need justifies a per-target feature
+split; not worth the complexity now.
 
 ## ADR-08 — mimalloc global allocator
 

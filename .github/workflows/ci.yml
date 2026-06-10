@@ -107,8 +107,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: privacy-smoke
+      - run: bash deploy/fetch-models.sh models
       - run: cargo build -p meridiand
-      - run: bash deploy/privacy-smoke.sh target/debug/meridiand
+      - run: MERIDIAN_MODELS__DIR=models bash deploy/privacy-smoke.sh target/debug/meridiand
 
   bench-build:
     # GNU (not musl) deliberately: tract-linalg's SVE f16 kernels pass `-march=
