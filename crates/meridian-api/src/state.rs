@@ -1,6 +1,7 @@
 //! Shared application state for the router.
 
 use meridian_common::config::MeridianConfig;
+use meridian_common::shed::ShedState;
 use meridian_privacy::iphash::{IpHasher, RateKey};
 use meridian_privacy::secret::SecretString;
 use meridian_query::Fetcher;
@@ -20,6 +21,7 @@ pub struct AppState {
     pub planner: Arc<Planner>,
     pub ingestor: Arc<Ingestor>,
     pub fetcher: Arc<Fetcher>,
+    pub shed: Arc<ShedState>,
     /// None = no token configured → mutating endpoints refuse outright.
     pub bearer: Option<SecretString>,
     pub iphash: IpHasher,
@@ -37,6 +39,7 @@ impl AppState {
         planner: Arc<Planner>,
         ingestor: Arc<Ingestor>,
         fetcher: Arc<Fetcher>,
+        shed: Arc<ShedState>,
         bearer: Option<SecretString>,
         metrics: metrics_exporter_prometheus::PrometheusHandle,
     ) -> Arc<Self> {
@@ -48,6 +51,7 @@ impl AppState {
             planner,
             ingestor,
             fetcher,
+            shed,
             bearer,
             iphash: IpHasher::new(),
             ip_limiter: governor::RateLimiter::keyed(quota),

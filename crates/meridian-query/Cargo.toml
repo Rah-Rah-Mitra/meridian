@@ -24,6 +24,7 @@ meridian-geo.workspace = true
 # §5 dependency-rule corrections.
 meridian-egress.workspace = true
 blake3.workspace = true
+moka.workspace = true
 rayon.workspace = true
 redb.workspace = true
 serde.workspace = true

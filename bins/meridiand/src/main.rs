@@ -6,12 +6,15 @@
 
 use meridian_api::state::AppState;
 use meridian_common::MeridianConfig;
+use meridian_common::shed::ShedState;
 use meridian_egress::LaneRegistry;
+use meridian_embed::Embedder;
 use meridian_fetch::Fetcher;
 use meridian_index::lexical::LexicalIndex;
 use meridian_query::ingest::{IngestText, Ingestor};
 use meridian_query::planner::Planner;
 use meridian_searx::client::SearxClient;
+use meridian_vector::VectorStore;
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -64,22 +67,32 @@ struct Components {
     planner: Arc<Planner>,
     ingestor: Arc<Ingestor>,
     fetcher: Arc<Fetcher>,
+    shed: Arc<ShedState>,
 }
 
 fn build_components(config: MeridianConfig) -> Result<Components, String> {
     let lanes = Arc::new(LaneRegistry::new(&config.lanes).map_err(|e| e.to_string())?);
+    let shed = Arc::new(ShedState::default());
     let fetcher = Arc::new(Fetcher::new(
         lanes.clone(),
         &config.fetch,
         config.lanes.allow_onion,
     ));
     let index = Arc::new(LexicalIndex::open_or_create(&config.index).map_err(|e| e.to_string())?);
+    let embedder = Arc::new(Embedder::load(&config.models.dir).map_err(|e| e.to_string())?);
+    let vectors = Arc::new(
+        VectorStore::open_or_create(&config.index.data_dir, embedder.dims(), &config.vector)
+            .map_err(|e| e.to_string())?,
+    );
     let ingestor = Arc::new(
         Ingestor::new(
             index.clone(),
             fetcher.clone(),
+            embedder.clone(),
+            vectors.clone(),
             &config.index.data_dir,
             &config.ingest,
+            &config.vector,
         )
         .map_err(|e| e.to_string())?,
     );
@@ -95,12 +108,22 @@ fn build_components(config: MeridianConfig) -> Result<Components, String> {
     } else {
         None
     };
-    let planner = Arc::new(Planner::new(index, searx, lanes, &config.search));
+    let planner = Arc::new(Planner::new(
+        index,
+        embedder,
+        vectors,
+        searx,
+        lanes,
+        shed.clone(),
+        &config.search,
+        &config.vector,
+    ));
     Ok(Components {
         config,
         planner,
         ingestor,
         fetcher,
+        shed,
     })
 }
 
@@ -157,11 +180,17 @@ fn serve() -> ExitCode {
             "{}:{}",
             components.config.server.bind, components.config.server.port
         );
+        meridian_common::shed::spawn_monitor(
+            components.shed.clone(),
+            components.config.index.data_dir.clone(),
+        );
+        let ingestor_for_shutdown = components.ingestor.clone();
         let state = AppState::new(
             components.config,
             components.planner,
             components.ingestor,
             components.fetcher,
+            components.shed,
             bearer,
             metrics_handle,
         );
@@ -181,7 +210,12 @@ fn serve() -> ExitCode {
             router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
         .with_graceful_shutdown(shutdown_signal());
-        match serve.await {
+        let outcome = serve.await;
+        // Vectors persist on coarse cadence during serving; flush the tail.
+        if let Err(e) = ingestor_for_shutdown.flush_vectors() {
+            tracing::warn!(error = %e, "vector flush on shutdown failed");
+        }
+        match outcome {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 tracing::error!(error = %e, "server error");
@@ -306,6 +340,10 @@ fn ingest_file(path: &str) -> ExitCode {
     }
     if let Err(e) = flush(&mut batch) {
         tracing::error!(error = %e, "ingest batch failed");
+        return ExitCode::FAILURE;
+    }
+    if let Err(e) = components.ingestor.flush_vectors() {
+        tracing::error!(error = %e, "vector flush failed");
         return ExitCode::FAILURE;
     }
     eprintln!(

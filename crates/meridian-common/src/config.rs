@@ -24,6 +24,8 @@ pub struct MeridianConfig {
     pub searx: SearxConfig,
     pub fetch: FetchConfig,
     pub ingest: IngestConfig,
+    pub models: ModelsConfig,
+    pub vector: VectorConfig,
 }
 
 impl MeridianConfig {
@@ -236,6 +238,52 @@ impl Default for FetchConfig {
             per_domain_interval_ms: 2_000,
             per_domain_burst: 2,
             robots_ttl_secs: 86_400,
+        }
+    }
+}
+
+/// Model artifact location (baked into the image at /models; SPEC §9.6).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ModelsConfig {
+    pub dir: PathBuf,
+}
+
+impl Default for ModelsConfig {
+    fn default() -> Self {
+        Self {
+            dir: PathBuf::from("models"),
+        }
+    }
+}
+
+/// ANN vector store knobs (SPEC §8.2: M=16, efc=128, ef=64, int8).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct VectorConfig {
+    pub connectivity: usize,
+    pub expansion_add: usize,
+    pub expansion_search: usize,
+    /// ANN candidate depth in the fusion (SPEC §11: top-200).
+    pub top_k: usize,
+    /// Persist the vector store after this many newly ingested docs (plus on
+    /// graceful shutdown). Full-file save — keep coarse on SD storage.
+    pub persist_every_docs: usize,
+    /// Binary-quantization + rescore path (SPEC §8.2): for >1.5M-doc corpora.
+    /// Config exists per spec; implementation deferred until a corpus needs it
+    /// (Profile R tops out at 100k — see Phase-2 exit note).
+    pub binary_quantization: bool,
+}
+
+impl Default for VectorConfig {
+    fn default() -> Self {
+        Self {
+            connectivity: 16,
+            expansion_add: 128,
+            expansion_search: 64,
+            top_k: 200,
+            persist_every_docs: 25_000,
+            binary_quantization: false,
         }
     }
 }

@@ -247,6 +247,14 @@ async fn ingest(
     Json(items): Json<Vec<IngestItem>>,
 ) -> Result<(StatusCode, Json<IngestResponse>), Problem> {
     bearer_ok(&state, &headers)?;
+    // Shedding ladder (SPEC §8.6): ingest pauses under RSS/thermal/disk stress.
+    if !state.shed.ingest_allowed() {
+        return Err(Problem::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "ingest paused",
+            "shedding under resource pressure; retry later",
+        ));
+    }
     if items.len() > state.config.ingest.batch_max {
         return Err(Problem::new(
             StatusCode::BAD_REQUEST,

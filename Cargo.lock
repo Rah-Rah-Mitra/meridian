@@ -3093,8 +3093,12 @@ name = "meridian-common"
 version = "0.0.1"
 dependencies = [
  "figment",
+ "libc",
+ "metrics",
  "serde",
  "thiserror 2.0.18",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -3112,6 +3116,8 @@ name = "meridian-embed"
 version = "0.0.1"
 dependencies = [
  "meridian-common",
+ "model2vec-rs",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -3144,6 +3150,7 @@ dependencies = [
  "meridian-common",
  "meridian-egress",
  "meridian-privacy",
+ "moka",
  "reqwest",
  "texting_robots",
  "thiserror 2.0.18",
@@ -3198,6 +3205,7 @@ dependencies = [
  "meridian-rerank",
  "meridian-searx",
  "meridian-vector",
+ "moka",
  "rayon",
  "redb",
  "serde",
@@ -3239,7 +3247,10 @@ dependencies = [
 name = "meridian-vector"
 version = "0.0.1"
 dependencies = [
+ "cxx",
  "meridian-common",
+ "thiserror 2.0.18",
+ "usearch",
 ]
 
 [[package]]
@@ -3251,11 +3262,13 @@ dependencies = [
  "meridian-api",
  "meridian-common",
  "meridian-egress",
+ "meridian-embed",
  "meridian-fetch",
  "meridian-index",
  "meridian-privacy",
  "meridian-query",
  "meridian-searx",
+ "meridian-vector",
  "metrics-exporter-prometheus",
  "rayon",
  "serde_json",
@@ -3375,6 +3388,23 @@ dependencies = [
  "serde",
  "serde_json",
  "tokenizers",
+]
+
+[[package]]
+name = "moka"
+version = "0.12.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "957228ad12042ee839f93c8f257b62b4c0ab5eaae1d4fa60de53b27c9d7c5046"
+dependencies = [
+ "crossbeam-channel",
+ "crossbeam-epoch",
+ "crossbeam-utils",
+ "equivalent",
+ "parking_lot",
+ "portable-atomic",
+ "smallvec",
+ "tagptr",
+ "uuid",
 ]
 
 [[package]]
@@ -5529,6 +5559,12 @@ dependencies = [
  "objc2-io-kit",
  "windows",
 ]
+
+[[package]]
+name = "tagptr"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
 
 [[package]]
 name = "tantivy"

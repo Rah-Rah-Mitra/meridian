@@ -24,20 +24,40 @@ pub struct FetchedDoc {
     pub http_status: u16,
 }
 
+/// Cached extraction result (the raw body was never kept — SPEC §6.1).
+#[derive(Clone)]
+struct CachedFetch {
+    url: String,
+    title: Option<String>,
+    text: String,
+    http_status: u16,
+}
+
 pub struct Fetcher {
     lanes: Arc<LaneRegistry>,
     budget: DomainBudget,
     robots: RobotsGate,
+    /// SPEC §8.4: fetch/extract cache, 96MB weighted, TTL 24h. Direct lane only
+    /// (anon fetches must not share state — Phase 4 brings the ephemeral one).
+    cache: moka::sync::Cache<String, Arc<CachedFetch>>,
     cfg: FetchConfig,
     allow_onion: bool,
 }
 
 impl Fetcher {
     pub fn new(lanes: Arc<LaneRegistry>, cfg: &FetchConfig, allow_onion: bool) -> Self {
+        let cache = moka::sync::Cache::builder()
+            .max_capacity(96 * 1024 * 1024)
+            .weigher(|k: &String, v: &Arc<CachedFetch>| {
+                (k.len() + v.url.len() + v.text.len() + 64) as u32
+            })
+            .time_to_live(std::time::Duration::from_secs(24 * 60 * 60))
+            .build();
         Self {
             lanes,
             budget: DomainBudget::new(cfg.per_domain_interval_ms, cfg.per_domain_burst),
             robots: RobotsGate::new(cfg.robots_ttl_secs),
+            cache,
             cfg: cfg.clone(),
             allow_onion,
         }
@@ -50,6 +70,18 @@ impl Fetcher {
         raw_url: &str,
         lane: &Lane,
     ) -> Result<FetchedDoc, FetchError> {
+        // Ladder rung 1: cache (direct lane only — SPEC §8.4 lane isolation).
+        let cacheable = matches!(lane, Lane::Direct);
+        if cacheable {
+            if let Some(hit) = self.cache.get(raw_url) {
+                return Ok(FetchedDoc {
+                    url: Url::parse(&hit.url).map_err(|_| FetchError::BadUrl)?,
+                    title: hit.title.clone(),
+                    text: hit.text.clone(),
+                    http_status: hit.http_status,
+                });
+            }
+        }
         let mut current = raw_url.to_owned();
         for _hop in 0..=self.cfg.max_redirects {
             // 1. SSRF vet: static checks + resolve-all + deny ranges + pin addr.
@@ -129,6 +161,17 @@ impl Fetcher {
                 extract_plaintext(&body_text)
             };
 
+            if cacheable {
+                self.cache.insert(
+                    raw_url.to_owned(),
+                    Arc::new(CachedFetch {
+                        url: target.url.to_string(),
+                        title: title.clone(),
+                        text: text.clone(),
+                        http_status: status.as_u16(),
+                    }),
+                );
+            }
             return Ok(FetchedDoc {
                 url: target.url,
                 title,

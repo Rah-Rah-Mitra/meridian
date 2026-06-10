@@ -16,6 +16,7 @@ meridian-privacy.workspace = true
 dom_smoothie.workspace = true
 futures-util.workspace = true
 governor.workspace = true
+moka.workspace = true
 reqwest.workspace = true
 texting_robots.workspace = true
 thiserror.workspace = true

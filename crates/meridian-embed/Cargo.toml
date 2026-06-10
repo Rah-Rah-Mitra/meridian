@@ -11,6 +11,8 @@ publish.workspace = true
 
 [dependencies]
 meridian-common.workspace = true
+model2vec-rs.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true

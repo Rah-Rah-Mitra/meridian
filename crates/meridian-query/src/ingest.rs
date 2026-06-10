@@ -5,12 +5,15 @@
 //! Geo-tagging (gazetteer → H3) is Phase 5; `h3_r7` is indexed as 0 until then
 //! so the schema never needs a reindex.
 
-use meridian_common::config::IngestConfig;
+use meridian_common::config::{IngestConfig, VectorConfig};
 use meridian_egress::Lane;
+use meridian_embed::Embedder;
 use meridian_fetch::Fetcher;
-use meridian_index::lexical::{IndexDoc, LexicalIndex, domain_hash};
+use meridian_index::lexical::{IndexDoc, LexicalIndex, domain_hash, url_key};
+use meridian_vector::VectorStore;
 use redb::{Database, ReadableTable, TableDefinition};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// content-hash → ingest unix-time. Tombstones (Phase 5 `/v1/forget`) will live
 /// in a sibling table.
@@ -20,6 +23,8 @@ const DEDUP_TABLE: TableDefinition<&[u8], u64> = TableDefinition::new("dedup_v1"
 pub enum IngestError {
     #[error("dedup store: {0}")]
     Dedup(String),
+    #[error("vector store: {0}")]
+    Vector(String),
     #[error("index: {0}")]
     Index(String),
     #[error("fetch: {0}")]
@@ -48,15 +53,23 @@ pub struct Ingestor {
     index: Arc<LexicalIndex>,
     dedup: Database,
     fetcher: Arc<Fetcher>,
+    embedder: Arc<Embedder>,
+    vectors: Arc<VectorStore>,
     cfg: IngestConfig,
+    persist_every: usize,
+    docs_since_persist: AtomicUsize,
 }
 
 impl Ingestor {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         index: Arc<LexicalIndex>,
         fetcher: Arc<Fetcher>,
+        embedder: Arc<Embedder>,
+        vectors: Arc<VectorStore>,
         data_dir: &std::path::Path,
         cfg: &IngestConfig,
+        vector_cfg: &VectorConfig,
     ) -> Result<Self, IngestError> {
         std::fs::create_dir_all(data_dir).map_err(|e| IngestError::Dedup(e.to_string()))?;
         let dedup = Database::create(data_dir.join("dedup.redb"))
@@ -73,8 +86,19 @@ impl Ingestor {
             index,
             dedup,
             fetcher,
+            embedder,
+            vectors,
             cfg: cfg.clone(),
+            persist_every: vector_cfg.persist_every_docs.max(1),
+            docs_since_persist: AtomicUsize::new(0),
         })
+    }
+
+    /// Persist the vector store now (graceful shutdown / end of bulk load).
+    pub fn flush_vectors(&self) -> Result<(), IngestError> {
+        self.vectors
+            .persist()
+            .map_err(|e| IngestError::Vector(e.to_string()))
     }
 
     /// Ingest a batch of text documents in ONE dedup transaction + ONE index
@@ -161,6 +185,7 @@ impl Ingestor {
         let lang = whichlang::detect_language(text) as u64;
 
         IndexDoc {
+            url_key: url_key(&url),
             url,
             title,
             snippet,
@@ -205,11 +230,17 @@ mod tests {
         let index = Arc::new(LexicalIndex::open_or_create(&index_cfg).unwrap());
         let lanes = Arc::new(LaneRegistry::new(&LanesConfig::default()).unwrap());
         let fetcher = Arc::new(Fetcher::new(lanes, &FetchConfig::default(), false));
+        let vector_cfg = meridian_common::config::VectorConfig::default();
+        let embedder = Arc::new(Embedder::test_stub(64));
+        let vectors = Arc::new(VectorStore::open_or_create(&dir, 64, &vector_cfg).unwrap());
         let ingestor = Ingestor::new(
             index,
             fetcher,
+            embedder,
+            vectors,
             &dir,
             &meridian_common::config::IngestConfig::default(),
+            &vector_cfg,
         )
         .unwrap();
         (ingestor, dir)

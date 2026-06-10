@@ -5,6 +5,8 @@
 //! - `title`  tokenized with positions, stored, boost 2.0 at query time
 //! - `body`   tokenized WITH FREQS ONLY (no positions), never stored
 //! - `snippet` stored only (generated at ingest; zstd docstore)
+//! - `url_key` u64 INDEXED|FAST — blake3(url) truncated; the shared identity
+//!   between this index and the vector store (ANN hits resolve through it)
 //! - fast fields: `h3_r7:u64`, `ts:u64`, `domain_hash:u64`, `lang:u64`,
 //!   `quality:f64`
 //!
@@ -15,12 +17,16 @@ use std::sync::Mutex;
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::{
-    FAST, Field, IndexRecordOption, STORED, STRING, Schema, TextFieldIndexing, TextOptions, Value,
+    FAST, Field, INDEXED, IndexRecordOption, STORED, STRING, Schema, TextFieldIndexing,
+    TextOptions, Value,
 };
 use tantivy::tokenizer::{Language, LowerCaser, SimpleTokenizer, Stemmer, TextAnalyzer};
 use tantivy::{Index, IndexReader, IndexWriter, TantivyDocument, doc};
 
 const TOKENIZER: &str = "en_stem_meridian";
+/// Bump on ANY schema change; `open_or_create` refuses a mismatched index
+/// (SPEC §14: versioned format, `--reindex` migration).
+const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, thiserror::Error)]
 #[error("index: {0}")]
@@ -37,6 +43,7 @@ impl From<tantivy::TantivyError> for IndexError {
 #[derive(Debug, Clone)]
 pub struct IndexDoc {
     pub url: String,
+    pub url_key: u64,
     pub title: String,
     pub snippet: String,
     pub body: String,
@@ -51,6 +58,7 @@ pub struct IndexDoc {
 #[derive(Debug, Clone)]
 pub struct LexicalHit {
     pub url: String,
+    pub url_key: u64,
     pub title: String,
     pub snippet: String,
     pub bm25: f32,
@@ -59,6 +67,7 @@ pub struct LexicalHit {
 
 struct Fields {
     url: Field,
+    url_key: Field,
     title: Field,
     body: Field,
     snippet: Field,
@@ -89,6 +98,7 @@ fn build_schema() -> (Schema, Fields) {
             .set_index_option(IndexRecordOption::WithFreqs),
     );
     let url = b.add_text_field("url", STRING | STORED);
+    let url_key = b.add_u64_field("url_key", INDEXED | FAST);
     let title = b.add_text_field("title", text_with_positions | STORED);
     let body = b.add_text_field("body", text_freqs_only);
     let snippet = b.add_text_field("snippet", STORED);
@@ -101,6 +111,7 @@ fn build_schema() -> (Schema, Fields) {
         b.build(),
         Fields {
             url,
+            url_key,
             title,
             body,
             snippet,
@@ -117,6 +128,7 @@ impl LexicalIndex {
     pub fn open_or_create(cfg: &IndexConfig) -> Result<Self, IndexError> {
         let dir = cfg.data_dir.join("index");
         std::fs::create_dir_all(&dir).map_err(|e| IndexError(e.to_string()))?;
+        let version_file = dir.join("SCHEMA_VERSION");
         let (schema, fields) = build_schema();
         let index = if Index::exists(
             &tantivy::directory::MmapDirectory::open(&dir)
@@ -124,9 +136,21 @@ impl LexicalIndex {
         )
         .map_err(|e| IndexError(e.to_string()))?
         {
+            let on_disk: u32 = std::fs::read_to_string(&version_file)
+                .ok()
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(0);
+            if on_disk != SCHEMA_VERSION {
+                return Err(IndexError(format!(
+                    "index schema v{on_disk} != v{SCHEMA_VERSION}; wipe the data dir and re-ingest                      (SPEC §14 --reindex migration arrives with the first post-1.0 format change)"
+                )));
+            }
             Index::open_in_dir(&dir)?
         } else {
-            Index::create_in_dir(&dir, schema)?
+            let index = Index::create_in_dir(&dir, schema)?;
+            std::fs::write(&version_file, SCHEMA_VERSION.to_string())
+                .map_err(|e| IndexError(e.to_string()))?;
+            index
         };
         index.tokenizers().register(
             TOKENIZER,
@@ -158,6 +182,7 @@ impl LexicalIndex {
         let writer = self.writer.lock().expect("index writer lock");
         writer.add_document(doc!(
             self.fields.url => d.url.as_str(),
+            self.fields.url_key => d.url_key,
             self.fields.title => d.title.as_str(),
             self.fields.body => d.body.as_str(),
             self.fields.snippet => d.snippet.as_str(),
@@ -202,8 +227,10 @@ impl LexicalIndex {
                 .get_first(self.fields.domain_hash)
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
+            let url = get_str(self.fields.url);
             out.push(LexicalHit {
-                url: get_str(self.fields.url),
+                url_key: url_key(&url),
+                url,
                 title: get_str(self.fields.title),
                 snippet: get_str(self.fields.snippet),
                 bm25: score,
@@ -216,6 +243,49 @@ impl LexicalIndex {
     pub fn num_docs(&self) -> u64 {
         self.reader.searcher().num_docs()
     }
+
+    /// Resolve vector-store keys to renderable docs (ANN-only fusion hits).
+    /// One term lookup per key — bounded by the ANN top-k (SPEC §11: 200).
+    pub fn docs_by_keys(&self, keys: &[u64]) -> Result<Vec<LexicalHit>, IndexError> {
+        let searcher = self.reader.searcher();
+        let mut out = Vec::with_capacity(keys.len());
+        for &key in keys {
+            let term = tantivy::Term::from_field_u64(self.fields.url_key, key);
+            let query = tantivy::query::TermQuery::new(term, IndexRecordOption::Basic);
+            let hits = searcher.search(&query, &TopDocs::with_limit(1).order_by_score())?;
+            if let Some((_, addr)) = hits.first() {
+                let stored: TantivyDocument = searcher.doc(*addr)?;
+                let get_str = |f: Field| {
+                    stored
+                        .get_first(f)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_owned()
+                };
+                let domain_hash = stored
+                    .get_first(self.fields.domain_hash)
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let url = get_str(self.fields.url);
+                out.push(LexicalHit {
+                    url_key: key,
+                    url,
+                    title: get_str(self.fields.title),
+                    snippet: get_str(self.fields.snippet),
+                    bm25: 0.0,
+                    domain_hash,
+                });
+            }
+        }
+        Ok(out)
+    }
+}
+
+/// Canonical 64-bit URL identity shared by the lexical index, the vector store,
+/// and RRF fusion: blake3(url) truncated to 8 LE bytes.
+pub fn url_key(url: &str) -> u64 {
+    let digest = blake3::hash(url.as_bytes());
+    u64::from_le_bytes(digest.as_bytes()[..8].try_into().expect("8 bytes"))
 }
 
 /// Stable 64-bit domain identity for diversity caps and facets.
@@ -248,6 +318,7 @@ mod tests {
 
     fn doc(url: &str, title: &str, body: &str) -> IndexDoc {
         IndexDoc {
+            url_key: url_key(url),
             url: url.to_owned(),
             title: title.to_owned(),
             snippet: body.chars().take(50).collect(),

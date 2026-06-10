@@ -11,6 +11,9 @@ publish.workspace = true
 
 [dependencies]
 meridian-common.workspace = true
+cxx.workspace = true
+thiserror.workspace = true
+usearch.workspace = true
 
 [lints]
 workspace = true

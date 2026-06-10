@@ -8,6 +8,8 @@
 pub mod config;
 pub mod error;
 pub mod ids;
+pub mod shed;
+pub mod sysprobe;
 
 pub use config::MeridianConfig;
 pub use error::MeridianError;
