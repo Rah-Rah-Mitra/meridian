@@ -3177,7 +3177,7 @@ checksum = "38d1115007560874e373613744c6fba374c17688327a71c1476d1a5954cc857b"
 
 [[package]]
 name = "meridian-analytics"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "blake3",
  "h3o",
@@ -3200,7 +3200,7 @@ dependencies = [
 
 [[package]]
 name = "meridian-api"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "axum",
  "getrandom 0.3.4",
@@ -3222,7 +3222,7 @@ dependencies = [
 
 [[package]]
 name = "meridian-common"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "figment",
  "libc",
@@ -3235,7 +3235,7 @@ dependencies = [
 
 [[package]]
 name = "meridian-egress"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "arti-client",
  "meridian-common",
@@ -3250,7 +3250,7 @@ dependencies = [
 
 [[package]]
 name = "meridian-embed"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "meridian-common",
  "model2vec-rs",
@@ -3259,7 +3259,7 @@ dependencies = [
 
 [[package]]
 name = "meridian-eval"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "arti-client",
  "cxx",
@@ -3284,7 +3284,7 @@ dependencies = [
 
 [[package]]
 name = "meridian-fetch"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "dom_smoothie",
  "futures-util",
@@ -3303,7 +3303,7 @@ dependencies = [
 
 [[package]]
 name = "meridian-geo"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "blake3",
  "fst",
@@ -3322,7 +3322,7 @@ dependencies = [
 
 [[package]]
 name = "meridian-index"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "blake3",
  "h3o",
@@ -3334,7 +3334,7 @@ dependencies = [
 
 [[package]]
 name = "meridian-privacy"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "blake3",
  "getrandom 0.3.4",
@@ -3347,7 +3347,7 @@ dependencies = [
 
 [[package]]
 name = "meridian-query"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "blake3",
  "meridian-common",
@@ -3373,14 +3373,14 @@ dependencies = [
 
 [[package]]
 name = "meridian-rank"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "meridian-common",
 ]
 
 [[package]]
 name = "meridian-rerank"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "meridian-common",
  "ort",
@@ -3390,7 +3390,7 @@ dependencies = [
 
 [[package]]
 name = "meridian-searx"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "meridian-common",
  "meridian-egress",
@@ -3404,7 +3404,7 @@ dependencies = [
 
 [[package]]
 name = "meridian-vector"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "cxx",
  "meridian-common",
@@ -3414,7 +3414,7 @@ dependencies = [
 
 [[package]]
 name = "meridiand"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "axum",
  "libc",

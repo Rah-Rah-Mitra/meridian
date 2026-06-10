@@ -6,8 +6,9 @@ resolver = "3"
 members = ["crates/*", "bins/meridiand"]
 
 [workspace.package]
-version = "0.0.1"
-# Crates are unpublished until v0.1.0; release flips this with real version reqs
+version = "0.1.0"
+# v0.1.0 ships images + binaries (WBS 6.6); crates.io publication is a separate
+# future decision — workspace path deps would need real version requirements
 publish = false
 edition = "2024"
 # tantivy 0.26 requires 1.86 (verified 2026-06-10); keep in lockstep with the heaviest dep

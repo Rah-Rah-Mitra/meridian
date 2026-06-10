@@ -173,8 +173,8 @@ jobs:
           RUSTFLAGS: -C target-cpu=cortex-a76
       - name: stage image contents (binary + verified models)
         run: |
-          mkdir -p deploy/stage
-          cp target/aarch64-unknown-linux-musl/release/meridiand deploy/stage/
+          mkdir -p deploy/stage/linux/arm64
+          cp target/aarch64-unknown-linux-musl/release/meridiand deploy/stage/linux/arm64/
           bash deploy/fetch-models.sh deploy/stage/models
       - name: gazetteer fst (GeoNames CC-BY; SPEC §6.1 ships it in the image)
         run: bash deploy/fetch-gazetteer.sh deploy/stage/models
