@@ -1,0 +1,21 @@
+# Rust build artifacts — never committed; release builds happen in CI only
+/target
+**/*.rs.bk
+
+# Model artifacts are fetched by the build script (pinned SHA256), never committed
+/models/*
+!/models/MANIFEST.toml
+!/models/README.md
+
+# Runtime state
+/data
+*.redb
+
+# Local scratch
+*.log
+.DS_Store
+
+# Python (train/ offline tooling)
+__pycache__/
+*.pyc
+train/.venv/
