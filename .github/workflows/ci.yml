@@ -1,0 +1,104 @@
+# Meridian CI — SPEC §14.
+# All real builds happen here: the deployment Pi never compiles anything, and the
+# dev Pi only runs cargo check/clippy locally (see docs/plan/00-adr.md, ADR-D1).
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: fmt + clippy (x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: test (x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
+  deny:
+    name: cargo-deny (licenses, bans, sources)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses bans sources
+
+  audit:
+    name: cargo-audit (advisories)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - run: cargo audit
+
+  gitleaks:
+    name: gitleaks (secret scan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  cross-aarch64:
+    name: cross-build aarch64-musl (Pi 5 target)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+      - uses: mlugg/setup-zig@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: aarch64-musl
+      # SPEC §7.1: NEON+dotprod autovectorization for the Cortex-A76
+      - run: cargo zigbuild --release --target aarch64-unknown-linux-musl --workspace
+        env:
+          RUSTFLAGS: -C target-cpu=cortex-a76
+      - name: binary report
+        run: |
+          ls -la target/aarch64-unknown-linux-musl/release/meridiand
+          file target/aarch64-unknown-linux-musl/release/meridiand
+      - uses: actions/upload-artifact@v4
+        with:
+          name: meridiand-aarch64-musl
+          path: target/aarch64-unknown-linux-musl/release/meridiand
+          retention-days: 14
+
+  # Phase-0 exit gate (SPEC §16): FROM scratch image ≤120MB pushed to GHCR.
+  # Enabled once the Dockerfile lands with the bench harness; kept as an explicit
+  # placeholder so the pipeline shape is visible from day one.
+  # image:
+  #   name: buildx scratch image -> GHCR (linux/arm64)
+  #   ...
