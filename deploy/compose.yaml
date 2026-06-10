@@ -40,6 +40,10 @@ services:
       MERIDIAN_LANES__ANON_ENABLED: ${MERIDIAN_ANON:-false}
       MERIDIAN_LANES__ANON__SOCKS_LISTEN: ${MERIDIAN_ANON_SOCKS_LISTEN:-0.0.0.0:9150}
       MERIDIAN_SEARX__ANON_URL: ${MERIDIAN_ANON_SEARX_URL:-http://searxng-anon:8080}
+      # --- analytics (SPEC §9.4) --------------------------------------------
+      # GDELT pull is an operator opt-in (third-party feed): set
+      # MERIDIAN_ANALYTICS=true in .env to enable counters + /v1/trends.
+      MERIDIAN_ANALYTICS__ENABLED: ${MERIDIAN_ANALYTICS:-false}
     read_only: true
     security_opt:
       - no-new-privileges:true
