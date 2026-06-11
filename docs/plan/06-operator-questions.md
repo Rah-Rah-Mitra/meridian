@@ -25,3 +25,20 @@
 | Q6 | **CJK search** needed (lindera, ~15–35MB dicts, feature off by default)? Note: lindera-tantivy currently lags tantivy 0.26 | No CJK at launch | index tokenizer config |
 | Q7 | **GeoLite2**: do you have/want a MaxMind account for the optional geoip feature (region-lane verification + analytics enrichment)? | No → region verification uses IP-echo only; analytics skips IP-region enrichment | Phase 4/5 features |
 | Q8 | **Geocoder**: public Nominatim at ≤1 rps (attribution, fine for Profile R volume) or an operator-supplied endpoint/key? | Public Nominatim, 1 rps, aggressive redb caching | Phase 5 (5.2) |
+
+## Answered (2026-06-11, Phases 7–9 planning)
+
+| # | Question | Answer |
+|---|---|---|
+| A5 | Evidence block default-on or flag-gated? | **Default-on** with `evidence.enabled` kill-switch; compare-vantages stays strictly flag-gated (ADR-18/22) |
+| A6 | Is a coarse-bucket per-decision routing log compatible with the "no query logging" promise? | **Yes, with safeguards** (no text/IPs, k-anon floor, 30d TTL, wipe path, anon never logged) — ADR-24 |
+| A7 | Region-lane metasearch for vantage divergence? | **Fetch-only now**; per-region SearXNG sidecars (option b) recorded as the Phase-10 architecture behind a budget row + sign-off — ADR-22 |
+| A8 | Versioning for the next phases? | One minor per phase: v0.2.0 (P7), v0.3.0 (P8), v0.4.0 (P9) |
+
+## Open (Phases 7–9; defaults assumed)
+
+| # | Question | Default assumed | Consumed by |
+|---|---|---|---|
+| Q9 | **BEIR subset** for the ranking-sanity eval (which 2–3 tasks fit Profile R's 100k-doc budget — SciFact ~5k docs and NFCorpus ~3.6k fit easily; FiQA ~57k is the stretch pick)? | SciFact + NFCorpus | Phase 8 (8.8), suite 13 eval set |
+| Q10 | **Curated region-sensitive query set** for suite 12b (news/geopolitics/local-services classes; ~50 queries): operator-supplied topics or generic defaults? | Generic defaults (news + local-services templates), operator may extend | Phase 8 divergence gate |
+| Q11 | **Compare-mode jitter window** (privacy/UX tradeoff: wider = less correlatable, slower) | 0–30s uniform, configurable; default ON | Phase 8 (8.5) |

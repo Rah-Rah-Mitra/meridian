@@ -1,6 +1,7 @@
 # 03 — Risk Register
 
-> SPEC §1.4. Top 15 risks. Likelihood (L) / Impact (I) on a 1–5 scale; every risk
+> SPEC §1.4. Top 15 risks (1–15, phases 0–6) + post-v0.1.0 risks (16–23, phases
+> 7–9, added 2026-06-11). Likelihood (L) / Impact (I) on a 1–5 scale; every risk
 > has a **tripwire metric** that is observable (in CI, `/metrics`, or a bench
 > report) — a risk without a tripwire is a wish, not a plan. Reviewed at every
 > phase exit.
@@ -22,6 +23,14 @@
 | 13 | **GDELT integrity/format**: no valid TLS upstream (verified); CSV format drift; surprise volume spikes | 3 | 2 | HTTP + manifest-MD5 (ADR-15); stream-parse with hard per-slice caps; counters only — never raw retention; puller is feature-gated off by default until Phase 5 | MD5 mismatch streak >4 slices OR slice >50MB ⇒ puller self-disables + alert metric |
 | 14 | **License drift**: a future dep (or feature flip) drags GPL/LGPL/unknown licenses into the core graph; MPL-2.0 election misunderstood | 2 | 4 | cargo-deny licenses+bans+sources on every push (already green-path); allowlist additions require an ADR note (MPL-2.0 election pre-recorded in ADR-04); SBOM at release | cargo-deny red on any PR ⇒ merge blocked; allowlist diff without an ADR reference fails review checklist |
 | 15 | **Single-maintainer/dormant deps** in load-bearing spots (usearch, fst, texting_robots, whichlang, figment) | 3 | 2 | Format-frozen domains (fst, robots RFC 9309) tolerate dormancy; pin + vendor-on-need policy; quarterly `cargo audit`/activity review; SegmentStore/VectorIndex traits keep swaps localized | A pinned dep gains a CVE with no upstream fix in 14 days ⇒ vendor + patch in-tree; trait seam makes replacement a scoped task |
+| 16 | **False merges collapse independent sources** (P7): the evidence block actively misleads — worse than no feature | 3 | 4 | Suite-9 false-merge gate <5% on BOTH generator variants; conservative cluster threshold from the sweep (ADR-18); cluster membership exposed for auditability | Suite-9 false-merge >5% ⇒ gate red, feature blocked; prod `evidence_cluster_size` p99 spike ⇒ thresholds re-swept |
+| 17 | **A sketch survives `/v1/forget`** (P7): forgotten doc resurfaces via `sketch_v1` or a cluster annotation | 2 | 5 | Sketch writes/deletes inside the existing dedup/forget txn (ADR-19); extended hermetic forget test merge-blocking in CI | Extended forget test red ⇒ merge blocked; canary doc found in sketch table post-forget ⇒ release blocked |
+| 18 | **Compare-mode deanonymization** (P8): the same query visible from direct and Tor vantages near-simultaneously is linkable upstream | 3 | 4 | Explicit flag only, never auto-triggered; randomized inter-lane jitter default-on; residual risk documented in threat model §8 + privacy.md | Invariant test: compare dispatch without jitter config ⇒ red; threat-model section absent at P8 exit ⇒ exit blocked |
+| 19 | **Region sidecar RAM blowout** (P10 candidate): per-region SearXNG cgroups don't fit the 8GB Pi beside meridiand's 3GB | 3 | 3 | ADR-22 defers implementation behind a budget row + operator sign-off; ≤1 concurrent region on Profile R if ever enabled | Compose RAM accounting >6.5GB committed ⇒ feature stays off |
+| 20 | **Decision log becomes a profiling side channel** (P9): rare bucket combos identify sessions | 2 | 5 | Coarse buckets only (no text/IP/fine timestamps); k-anonymity floor (<5/24h generalized); 30d TTL; wipe path; anon never logged (ADR-24) | Privacy-smoke canary found in the log ⇒ CI red; k-anon audit failure at P9 exit ⇒ release blocked |
+| 21 | **Statistical machinery overfits its own generators** (P7): synfarm/spike share assumptions with the detectors they gate | 3 | 3 | Held-out generator variants with different parameterizations baked into suites 9–10; small real-world spot-check set before P7 exit | F1 drop >0.15 between variants ⇒ gate red; spike FPR/TPR divergence >2× between variants ⇒ method re-design |
+| 22 | **VoI starves dissenting sources** (P9): fetch policy optimizes relevance and kills evidence diversity | 3 | 3 | Suite-15 guard: median `independent_source_count` non-degrading vs no-VoI replay (ADR-26) | Suite-15 diversity guard red ⇒ VoI stays off; prod evidence-count gauge declining 2 weeks ⇒ threshold re-tuned |
+| 23 | **OPE permanently inconclusive** (P9): 3 arms + single-operator traffic ⇒ DR CI never excludes zero | 4 | 2 | ADR-25 sunset rule: at 10k decisions or 60 days, CI straddling zero ⇒ declared inconclusive, ε-greedy retained, log TTLs out — no silent limbo | <10k decisions after 60 days ⇒ scheduled review fires; review outcome recorded in the P9 exit note either way |
 
 ## Standing tripwires already wired into process
 

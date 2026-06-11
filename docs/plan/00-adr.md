@@ -393,6 +393,223 @@ safely). Recorded in `01-wbs.md` §0.
 
 ---
 
+## Post-v0.1.0 ADRs (Phases 7–9, recorded 2026-06-11)
+
+> Strategic context: v0.1.0 ships a metasearch *fuser*; Phases 7–9 turn it into an
+> **evidence-and-uncertainty engine** (source-independence, vantage divergence,
+> statistically defensible trends, calibrated confidence). Every ADR below honors
+> the standing hard constraints: forget-correctness 100%, anon-lane firewall both
+> ways (§12.4), fail-closed lanes (§12.1), no query logging, Profile R budgets.
+> Operator decisions taken 2026-06-11 are marked as such.
+
+## ADR-18 — Near-duplicate sketching & derivation clusters (Phase 7)
+
+**Decision.** At ingest, compute per-doc **64-bit SimHash** (cheap near-dup gate)
+and a **MinHash signature** over word shingles of the clean extracted text; store
+both in a `sketch_v1` table inside `dedup.redb`, written in the SAME transaction
+as the blake3 dedup/tombstone rows. At query time (post-RRF, pre-LTR), cluster
+candidates by sketch similarity (SimHash Hamming gate → MinHash-estimated Jaccard
+threshold → union-find) into derivation clusters; emit
+`independent_source_count`, `apparent_source_count`, and per-result `cluster_id`
+in a new additive `evidence` block. **Web results without fetched text get
+`evidence: null` in v0.2.0** — snippet-only sketches are too weak to assert
+independence and would mislead (honesty over coverage); deep-mode fetched docs and
+local docs get full treatment.
+
+**Parameters are NOT hand-picked:** shingle size, permutation count, and the
+cluster threshold are fixed by the suite-9 (`synfarm`) parameter sweep on
+synthetic syndication farms with a held-out generator variant (anti-overfit,
+risk #21). Gate: pairwise F1 >0.8 AND false-merge <5% on both variants.
+
+**Tradeoff.** ≤64 B/doc disk + ≤2ms p50 query-time budget vs the false-merge rate;
+a false merge actively misleads (collapses genuinely independent sources), so the
+threshold errs conservative and cluster membership is exposed in `rank_signals`
+for auditability (risk #16).
+
+**Status: CONFIRMED — constants fixed by the suite-9 run of 2026-06-11**
+(`docs/plan/bench/2026-06-11-pi5-p7-experiments.md`): similarity =
+**containment** (|A∩B|/min(|A|,|B|), estimated from MinHash Jaccard + exact set
+sizes) — raw Jaccard fails outright on realistic truncation+boilerplate
+syndication (F1 ≈ 0.01 at τ≥0.5); **shingle k=4, 128 perms, τ=0.3** → pairwise
+F1 1.0 (primary) / 0.89 (hold-out), false-merge 0.0 on both; domain-dedup
+baseline F1 0.054. Caveat from the run: the SimHash 99%-coverage Hamming radius
+is 33/64 — too wide to be a useful general prefilter; SimHash serves only as a
+verbatim-dup fast path (Hamming ≲ 6), with MinHash-containment doing the real
+work. Evidence block default-ON with `evidence.enabled` kill-switch (operator,
+2026-06-11).
+
+## ADR-19 — Derived-structure deletability policy (standing rule)
+
+**Decision.** Any derived structure computed over **user-touchable data** (docs,
+queries, fetch results) must either (a) join the atomic forget transaction
+(delete-by-key alongside index/vector/dedup, like `sketch_v1`), or (b) be provably
+rebuildable from surviving docs on a bounded schedule. Approximate structures that
+cannot delete (plain Bloom, HyperLogLog, standard Count-Min) are permitted ONLY
+over **GDELT-derived aggregates** (no per-user data; forget-orthogonal by
+construction). Any analytic that depends on an approximate structure surfaces its
+error bound in the response.
+
+**Tradeoff.** Widening the forget transaction grows its latency/failure-atomicity
+surface vs background-rebuild complexity; (a) is preferred while the per-forget
+row count stays small (sketches: one row per doc).
+
+**Status: CONFIRMED (extends the §13.4/Phase-5 forget guarantees to all future
+analytics; tripwire = extended hermetic forget test, risk #17).**
+
+## ADR-20 — API schema evolution for analysis blocks
+
+**Decision.** The API stays `/v1`; Phases 7–9 add **additive optional blocks
+only** (`evidence`, `confidence`, `divergence`, response-level `analysis`), each
+carrying its own `schema` integer for intra-block versioning. Absent block =
+feature off/unavailable — never an error, never a placeholder object. Removing or
+re-typing an existing field requires `/v2`. (SPEC §10 amended, v2.2.)
+
+**Tradeoff.** Field accretion over time vs endpoint forking — on a
+single-operator appliance, client simplicity wins; the `schema` field gives an
+escape hatch per block without a global version bump.
+
+**Status: CONFIRMED.**
+
+## ADR-21 — Statistical trends/heatmap methodology (Phase 7)
+
+**Decision.** Replace the latest/window-mean ratio movers with: (1)
+**Gamma-Poisson empirical-Bayes shrinkage** of per-cell/per-topic rates toward
+the window mean (prior fit by method of moments across cells — stabilizes
+low-count cells); (2) **Getis-Ord Gi*** z-scores over H3 res-5 neighborhoods
+(k-ring 1–2 via `h3o` grid_disk inside `meridian-analytics`); (3)
+**Benjamini-Hochberg FDR** at q=0.05 across all scanned cells (the FDR family is
+the full scanned set, not the viewport — fixed and documented). Raw counts and
+ratios remain in the output for explainability; new additive fields: `z`,
+`q_value`, `shrunk_rate`, `significant`, plus a plain-language
+"likely low-sample noise" label when the shrunk CI overlaps baseline.
+
+**Prior + k-ring radius are fixed by the suite-10 (`spike`) injection study**
+(planted Poisson spikes; gate ≥3× false-spike reduction at equal TPR vs the
+thresholded-ratio baseline on the tuning variant, no regression with held FDR on
+an overdispersed hold-out). GDELT caveat stands (ADR-15): these are signals
+about *media coverage*, labeled as such — not ground truth about the world.
+
+**Tradeoff.** O(cells × neighbors) per trends/heatmap call (res-5 grid → ms-scale,
+budget ≤60ms R) vs the current detector firing on single-digit-count noise.
+
+**Status: CONFIRMED — constants fixed by the suite-10 run of 2026-06-11**
+(`docs/plan/bench/2026-06-11-pi5-p7-experiments.md`), with two findings the
+first run forced: (1) the z-scale must be **quasi-NB** (pooled inverse-dispersion
+1/r̂ from window moments — self-reduces to Poisson on equidispersed data); the
+pure Poisson scale FAILED the overdispersed hold-out (0.83× — worse than the
+ratio baseline). (2) **k-ring 0** (per-cell EB z + BH) for movers — Gi* k-ring-1
+smoothing dilutes isolated spikes and lost on both variants; Gi* k=1 remains the
+tool for *spatially clustered* heatmap hot-spots, applied there only. Adopted:
+EB(Gamma MoM prior) + quasi-NB z + BH q=0.05; measured 3.76× FPR reduction at
+matched TPR (Poisson), 1.81× with FDR held at 0.024 on the NB hold-out.
+
+## ADR-22 — Multi-lane fan-out & region-lane metasearch (Phase 8 / Phase 10)
+
+**Decision (operator, 2026-06-11).** `compare=vantages` (Phase 8) fans the same
+query over **{direct, anon} only**, via a post-hoc orchestrator: each lane
+resolved independently and fail-closed per §12.1; per-lane results compared AFTER
+both complete; **zero shared state** (no shared-cache write of compare responses,
+no bandit reward from the anon half, anon cache stays ephemeral); randomized
+inter-lane jitter (default-on) decorrelates timing. Region lanes **stay
+fetch-only** in v0.3.0 (planner refuses them a metasearch backend today — that
+stands). The future architecture for regional vantage search is **option (b):
+per-region SearXNG sidecars bound to WireGuard interfaces** — one cgroup
+(384–512MB) each — implemented only as a Phase-10 candidate after an explicit
+budget row and operator sign-off. **Option (a) — routing the direct sidecar's
+egress through a WG netns — is REJECTED**: it turns a routing mistake into a
+§12.5-invariant-1-class leak (wrong-lane egress), the exact failure family the
+lane design exists to prevent.
+
+**Tradeoff.** Two-lane divergence now (cheap, zero egress-architecture change) vs
+waiting for ≥3 vantages; each region sidecar costs real RAM on the 8GB Pi
+(risk #19), so scope stays closed until a region lane exists with a budget.
+
+**Status: CONFIRMED (operator).**
+
+## ADR-23 — QPP confidence methodology (Phase 8)
+
+**Decision.** Post-retrieval query-performance prediction: **NQC** (normalized
+top-k score deviation) + **Clarity** (KL divergence of the top-k language model
+vs the collection model), fused into one calibrated `confidence` block with the
+contributing signals exposed. Conformal risk control (distribution-free coverage)
+is explicitly **deferred to Phase 10** — it needs a stable calibration set that
+the Phase-8 eval extension only begins to accumulate.
+
+**Tradeoff.** Cheap (O(k), ≤1ms), well-studied predictors with modest correlation
+(gate: Spearman ρ ≥0.25 vs per-query nDCG@10) vs waiting for stronger but heavier
+calibration machinery. Modest-but-honest beats absent.
+
+**Status: CONFIRMED.**
+
+## ADR-24 — Per-decision routing log for offline policy evaluation (Phase 9)
+
+**Decision (operator, 2026-06-11 — privacy sign-off).** To enable IPS/DR offline
+evaluation of routing policies, log one redb row per **direct-lane** routing
+decision: `{intent class, query-length bucket, language, time-of-day bucket,
+geo-filter-present flag, arm, propensity, reward}`. **No query text. No IPs. No
+timestamps finer than the time-of-day bucket.** 30-day TTL sweep; k-anonymity
+floor (bucket combinations seen <5 times/24h are generalized before write); an
+operator wipe path; ≤20MB disk cap; **anon-lane decisions are never logged**
+(the §12.4 firewall extends to the log). The privacy policy is amended in Phase 9
+to disclose exactly this (bucketed routing metadata ≠ query logging — the
+"no query logging" promise refers to query text/IPs and is preserved); the
+privacy smoke canary extends to the log file.
+
+**Why now:** today's ε-greedy has **known propensities** (ε/K for explore arms,
+1−ε+ε/K for the greedy arm) — logging them makes the incumbent policy the
+logging policy for free, so candidate policies can be evaluated offline
+(doubly-robust) before any live traffic shifts.
+
+**Tradeoff.** Estimator power (coarse features, single-operator traffic — risk
+#23: OPE may stay inconclusive forever) vs the privacy surface (risk #20). The
+sunset rule lives in ADR-25.
+
+**Status: CONFIRMED (operator), implementation Phase 9.**
+
+## ADR-25 — Contextual routing policy & ship gate (Phase 9)
+
+**Decision.** Linear **Thompson sampling** over a ~20-dim coarse context vector
+(the ADR-24 buckets, one-hot), same 3 arms as today, behind the existing
+choose/reward interface; **feature-gated, default OFF**. It is enabled only if
+doubly-robust OPE on ≥10k logged decisions shows a reward uplift whose 95% CI
+excludes zero. **Explicit sunset rule:** if at the 10k-decision review (or 60
+days, whichever first) the CI straddles zero or the minimum detectable uplift
+exceeds the CI width, the experiment is declared inconclusive in the phase-exit
+note, ε-greedy is retained, and the log TTLs out. No silent limbo.
+
+**Rejected alternatives** (Pi 5 cost/assumption tests): deep/neural routers (no
+training data, no GPU, unexplainable), MCTS planning, full bandits-with-knapsacks
+(NP-hard in general; the shed ladder already gates the action set as hard
+constraints).
+
+**Tradeoff.** Exploration variance + cold-start regret vs ε-greedy's known-good
+simplicity; the honest possible outcome is "never ships," and the plan budgets
+for that.
+
+**Status: CONFIRMED (gate), implementation Phase 9.**
+
+## ADR-26 — Value-of-information fetch & stopping (Phase 9)
+
+**Decision.** Deep-mode fetch-candidate selection (and the ingest frontier)
+adopts **Pandora's-box reservation values** (Weitzman): each candidate gets a
+reservation index from (estimated marginal value, fetch cost); candidates are
+opened in decreasing index order and the walk stops when the best observed value
+exceeds the next index. Marginal value is estimated **without any generative
+model**: novelty = 1 − max MinHash similarity vs already-fetched set (Phase-7
+sketches) + embedding-coverage gain; cost = lane-aware expected latency. Emits
+`search_stopped_because` + `estimated_marginal_gain_remaining` in the `analysis`
+block. Guard: suite-15 replay must show median `independent_source_count` does
+not drop (a fetch policy that optimizes relevance by starving dissenting sources
+is a regression — risk #22).
+
+**Tradeoff.** O(n log n) candidate ranking + cheap novelty estimates vs ≥25%
+fewer fetches at equal nDCG@10 (the gate); rejected MCTS as unjustified when the
+inspection-cost structure has a provably optimal index policy.
+
+**Status: CONFIRMED (design), implementation Phase 9 behind suite-15 evidence.**
+
+---
+
 ## Environment-driven ADRs (not in the spec)
 
 ## ADR-D1 — Dev-on-target deviation: local check, CI builds
@@ -437,9 +654,24 @@ capacity knobs and tripwire thresholds differ.
 | 15 | GDELT transport | CONFIRMED (HTTP+MD5 caveat) |
 | 16 | telemetry/redaction | CONFIRMED (layered redaction architecture) |
 | 17 | 15 crates, dep-rule fix | CONFIRMED (spec-text corrections) |
+| 18 | sketching + derivation clusters | CONFIRMED (suite-9 run 2026-06-11: containment k=4/128/τ=0.3; evidence default-ON) |
+| 19 | derived-structure deletability | CONFIRMED (standing rule) |
+| 20 | additive API blocks + per-block `schema` | CONFIRMED |
+| 21 | EB + quasi-NB z + BH trends; Gi* for clustered heatmap only | CONFIRMED (suite-10 run 2026-06-11: k-ring 0 for movers) |
+| 22 | two-lane compare now; region sidecars = Phase-10 option (b); option (a) rejected | CONFIRMED (operator 2026-06-11) |
+| 23 | QPP confidence (NQC+Clarity; conformal deferred) | CONFIRMED |
+| 24 | per-decision routing log (coarse buckets, TTL, k-anon, anon never logged) | CONFIRMED (operator 2026-06-11) |
+| 25 | linear-TS routing behind DR ship gate + sunset rule | CONFIRMED (gate) |
+| 26 | Pandora's-box VoI fetch/stopping + diversity guard | CONFIRMED (design) |
 | D1 | dev-on-target | operator-approved deviation |
 | D2 | dual-profile budgets | operator-approved deviation |
 
 **Sign-off requested on:** ADR-02 (staged musl/ort), ADR-03 (dom_smoothie
 presumption), ADR-07 (fallback ladder), ADR-12 (texting_robots), and the MPL-2.0
 license election in ADR-04. Everything else implements the spec as written.
+
+**Post-v0.1.0 sign-offs already taken (2026-06-11):** ADR-18 (evidence block
+default-on), ADR-22 (two-lane compare; region metasearch deferred to Phase 10,
+option b), ADR-24 (decision log acceptable with the listed safeguards). ADR-18/21
+constants were fixed the same day by the suite-9/-10 runs
+(`bench/2026-06-11-pi5-p7-experiments.md`).

@@ -120,3 +120,24 @@ Phase-1+ deps stay feature-scoped where possible.
 | 4 | **DONE 2026-06-11 ✓** — anon metasearch cold p50 1.34s (≤8s), Arti RSS delta +47MB (≤150MB), zero direct egress proven hermetically + live bootstrap windows; image 74.7MB ([exit note](phase-exits/p4.md)) |
 | 5 | **DONE 2026-06-11 ✓** — heatmap p50 27ms; analytics 128MB/14 simulated days; stores: index 47.6MB, vectors 38.6MB, dedup 9.6MB; search p50 12ms on schema v3 ([exit note](phase-exits/p5.md)) |
 | 6 | **DONE 2026-06-11 ✓** — soak (abbreviated, see [exit note](phase-exits/p6.md)): heap slope ≤0MB/h post-warm, RSS plateau ~250MB (mimalloc), temp ≤61°C, p99 29–34ms, 100% success; drills + reviews + v0.1.0 multi-arch release |
+| 7 | evidence ≤2ms p50 added; heatmap+Gi* ≤60ms R; sketch ≤64 B/doc; ingest regression ≤10%; RSS ≤ Phase-6 plateau |
+| 8 | fast path (no compare flag): zero p50/p95 change; compare-mode ≤ slowest lane + 500ms; QPP ≤1ms |
+| 9 | decision log ≤20MB; deep p50 ≤2.5s holds; VoI replaces fetches, adds no serving RAM beyond transient |
+
+## 7. Post-v0.1.0 budget rows (Phases 7–9, ceilings — SPEC §16 P7–P9)
+
+New analytical stages are budgeted against the **measured Phase-6 baseline**
+(BM25 0.48ms p50 @100k · ANN 0.45ms · fusion 0.144ms · heatmap 27ms · serving RSS
+~250MB plateau). "No regression" means within run-to-run noise of those numbers.
+
+| Item | Profile F | Profile R | Tripwire |
+|---|---|---|---|
+| Sketch store (`sketch_v1` in dedup.redb) | ≤64MB @1M (≤64 B/doc) | ≤6.4MB @100k | alert at 80% of cap; bytes/doc reported in suite 11 |
+| Decision log (Phase 9) | ≤20MB | ≤20MB | TTL sweep keeps it bounded; hard cap refuses writes + alert metric |
+| Evidence stage (query-time, fast path) | ≤2ms p50 added | ≤2ms p50 added | suite 11 gate; p95 watched in /metrics stage timings |
+| Evidence transient RAM (clustering top-1000 candidates) | ≤32MB | ≤32MB | included in the soak RSS gate — plateau must not move |
+| Heatmap/trends + EB+Gi*+BH | ≤150ms p50 | ≤60ms p50 | re-measured at P7 exit (Phase-6 baseline 27ms) |
+| Compare-mode end-to-end (flag set) | ≤ slowest lane budget + 500ms | same (anon ≤8s binds) | suite 12 cross-lane run at P8 exit |
+| QPP confidence stage | ≤1ms | ≤1ms | suite 13 |
+| Contextual-TS state (Phase 9, feature-gated) | negligible (d≈20 matrices, <1MB) | same | noted for completeness; covered by RSS gate |
+| Region SearXNG sidecars (Phase-10 candidate, ADR-22) | NOT BUDGETED — requires its own row + operator sign-off before any compose profile lands | — | risk #19: compose RAM accounting >6.5GB committed ⇒ feature stays off |

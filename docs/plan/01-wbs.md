@@ -153,10 +153,78 @@ proves zero direct egress; region egress-IP verification passes.
 | 6.5 | Egress security review + privacy review sign-offs | 1d |
 | 6.6 | v0.1.0 multi-arch images + SBOM (syft) + flip repo public | 1d |
 
-## 9. Cross-phase engineering rules
+## 9. Phase 7 — Evidence foundations + statistical rigor (post-v0.1.0 → v0.2.0)
+
+Experiments FIRST (suites fix the ADR-18/21 constants), production code second.
+Zero egress-code changes this phase; the 13 invariant tests must merely stay green.
+
+| # | Task | Paths | Deps | Effort |
+|---|---|---|---|---|
+| 7.1 | Planning docs: ADR-18..26, SPEC §16 P7–P9 (v2.2), WBS/budgets/risks/bench amendments | `docs/SPEC.md`, `docs/plan/*` | — | 1.5d ✅ |
+| 7.2 | Suite 9 `synfarm`: syndication-farm generator (primary + held-out variant) + shingle/MinHash/SimHash parameter sweep → pairwise F1 + false-merge; fixes ADR-18 constants | `meridian-eval/src/bench/synfarm.rs` | 7.1 | 2d |
+| 7.3 | Suite 10 `spike`: planted Poisson spikes on a hex lattice; ratio baseline vs EB+Gi*+BH → FPR/TPR; fixes ADR-21 prior + k-ring | `meridian-eval/src/bench/spike.rs` | 7.1 | 1.5d |
+| 7.4 | Suite 12 probe: same-lane JSD noise floor (direct/direct, anon/anon), bootstrap CI; report → `docs/plan/bench/` (Phase-8 entry evidence) | `meridian-eval/src/bench/divergence.rs` (feature `bench-divergence`) | 7.1 | 1.5d |
+| 7.5 | Sketch module: word shingles → 64-bit SimHash + MinHash signatures (constants from 7.2) | `meridian-index/src/sketch.rs` | 7.2 | 2d |
+| 7.6 | Ingest integration: sketch rows in `sketch_v1` (dedup.redb) written in the SAME txn as dedup/tombstone; both forget paths drop them atomically (ADR-19) | `meridian-query/src/ingest.rs` | 7.5 | 1.5d |
+| 7.7 | Query-time derivation clustering + evidence assembly (post-RRF/pre-LTR slot); web results `evidence: null` | `meridian-query/src/evidence.rs`, `planner.rs` | 7.5, 7.6 | 2d |
+| 7.8 | API: `evidence` block + response `analysis` summary; `evidence.enabled` kill-switch; docs | `meridian-api/src/lib.rs`, `docs/api.md` | 7.7 | 0.5d |
+| 7.9 | Trends/heatmap statistics: EB shrinkage + Gi* (h3o grid_disk k-ring) + BH-FDR; raw values retained | `meridian-analytics/src/stats.rs` (new), `trends.rs` | 7.3 | 2.5d |
+| 7.10 | Trends/heatmap API additive fields: `z`, `q_value`, `shrunk_rate`, `significant`, noise label | `meridian-analytics`, `meridian-api`, `docs/api.md` | 7.9 | 0.5d |
+| 7.11 | Forget-correctness extension (sketch table + cluster annotations) + suite 11 `evidence-latency` micro-bench | `meridian-query` tests, `meridian-eval/src/bench/` | 7.6, 7.7 | 1d |
+| 7.12 | Exit: re-run suites 1–11 on device, re-validate budgets, `phase-exits/p7.md`, release notes, tag v0.2.0 | `docs/plan/phase-exits/p7.md`, `docs/release-notes/v0.2.0.md` | all | 1d |
+
+**Exit gate:** SPEC §16 Phase 7 (synfarm F1 >0.8 / false-merge <5% both variants;
+spike ≥3× FPR reduction; evidence ≤2ms p50; sketch ≤64 B/doc; ingest regression
+≤10%; RSS no regression; forget 100% incl. sketches; noise-floor report committed).
+≈ 17.5d.
+
+## 10. Phase 8 — Vantage divergence + confidence (v0.3.0)
+
+Entry condition: Phase-7 noise-floor report committed (the divergence gate is
+meaningless without a measured floor).
+
+| # | Task | Paths | Deps | Effort |
+|---|---|---|---|---|
+| 8.1 | ADR-22/23 finalization + threat-model §cross-lane correlation + doc amendments | `docs/plan/*` | — | 1d |
+| 8.2 | Compare orchestrator: `compare=vantages` flag; fan-out over {direct, anon}, independent fail-closed resolution; compare responses NEVER in the shared cache | `meridian-query/src/compare.rs` (new), `planner.rs` | 8.1 | 2.5d |
+| 8.3 | Divergence stats: JSD over per-lane domain distributions + bootstrap vs Phase-7 floor + `domains_only_in`; `divergence` block | `meridian-query/src/compare.rs` | 8.2 | 1.5d |
+| 8.4 | +3 egress invariants (≥16 total): (a) Arti-down ⇒ anon half errors, zero direct retry; (b) no shared-cache write from compare; (c) no `Bandit::reward` from the anon half | hermetic tests w/ MockDialer | 8.2 | 1.5d |
+| 8.5 | Timing decorrelation: randomized inter-lane jitter (configurable, default-on) + threat-model residual-risk write-up | `compare.rs`, `docs/plan/05-threat-model.md`, `docs/privacy.md` | 8.2 | 1d |
+| 8.6 | QPP confidence: NQC + Clarity post-LTR; `confidence` block | `meridian-rank/src/qpp.rs` (new), `planner.rs` | — | 2d |
+| 8.7 | MMR diversity rerank (`diversity=mmr`, off by default; existing embeddings) | `meridian-rank/src/mmr.rs` (new), `planner.rs` | — | 1.5d |
+| 8.8 | Suites 12 (cross-lane mode) + 13 (`qpp`) wired into meridian-bench; alpha-nDCG@10 in `metrics.rs` | `meridian-eval/` | 8.3, 8.6 | 1.5d |
+| 8.9 | Docs: api.md (`compare`/`confidence`/`diversity`), privacy.md compare-mode disclosure (query goes out over Tor AND direct, by explicit request only) | `docs/api.md`, `docs/privacy.md` | 8.2–8.7 | 0.5d |
+| 8.10 | Exit re-validation + `phase-exits/p8.md` + v0.3.0 | docs | all | 1d |
+
+**Exit gate:** SPEC §16 Phase 8. ≈ 14d.
+
+## 11. Phase 9 — Adaptive frontier: decision log, OPE, contextual routing, VoI (v0.4.0)
+
+Strict internal order: log → OPE harness → policy (gated off) → DR ship decision.
+The DR decision may trail the v0.4.0 tag as a config flip (decision accrual is
+calendar-bound, ADR-25).
+
+| # | Task | Paths | Deps | Effort |
+|---|---|---|---|---|
+| 9.1 | ADR-24 privacy review: threat-model §decision-log + privacy.md disclosure (bucketed routing metadata ≠ query logging — reconciliation recorded) | `docs/plan/05-threat-model.md`, `docs/privacy.md` | — | 1.5d |
+| 9.2 | Decision log: redb table {buckets, arm, propensity, reward}; 30d TTL sweep; k-anon floor (<5/24h generalized); wipe path; ≤20MB cap; **anon decisions never logged**; ε-greedy propensities (ε/K, 1−ε+ε/K) emitted from day one | `meridian-searx/src/decision_log.rs` (new), `bandit.rs` | 9.1 | 2d |
+| 9.3 | OPE harness: IPS + doubly-robust estimators + synthetic-truth recovery tests (suite 14); offline bridge to `train/` | `meridian-eval/src/ope.rs` (new), `train/` | 9.2 | 2.5d |
+| 9.4 | Contextual policy: linear Thompson sampling, ~20-dim one-hot context, same 3 arms, same choose/reward interface; feature-gated default-OFF | `meridian-searx/src/contextual.rs` (new) | 9.3 | 2d |
+| 9.5 | Ship decision per ADR-25 (≥10k decisions or 60 days): DR report committed; enable only if 95% CI excludes zero; else "inconclusive, ε-greedy retained" in exit note | `docs/plan/bench/` DR report | 9.2–9.4 + dwell | 1d |
+| 9.6 | VoI fetch/stopping: Pandora's-box reservation values at deep-mode candidate selection + ingest frontier; novelty = MinHash + embedding coverage; `analysis.search_stopped_because` | `meridian-fetch/src/ladder.rs`, `meridian-query/src/planner.rs` | P7 sketches | 3d |
+| 9.7 | Suite 15 `voi`: deep-mode fetch replay → fetches-vs-nDCG@10 frontier + evidence-diversity guard | `meridian-eval/src/bench/voi.rs` | 9.6 | 1.5d |
+| 9.8 | Docs (operator manual: decision log + wipe; api.md if `fetch_budget` surfaces), exit, `phase-exits/p9.md`, v0.4.0 | docs | all | 1d |
+
+**Exit gate:** SPEC §16 Phase 9. ≈ 14.5d (+ calendar dwell for decision accrual).
+
+## 12. Cross-phase engineering rules
 
 - Re-validate `02-budgets.md` at every phase exit (SPEC §1).
 - Heavy deps enter the workspace only in the phase that uses them (keeps local
   `cargo check` viable on the dev Pi and CI fast).
 - Every egress/privacy behavior ships WITH its test in the same PR — no
   "tests later" for the two security-critical crates.
+- **Post-v0.1.0 additions:** experiments precede features (a gated feature's eval
+  suite must exist and pass BEFORE the feature merges); the hermetic
+  egress-invariant count is monotonically non-decreasing (13 → ≥16 → ≥17); every
+  new derived structure passes the ADR-19 deletability test in the same PR.

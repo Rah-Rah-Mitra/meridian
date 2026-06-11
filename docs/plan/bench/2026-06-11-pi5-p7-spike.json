@@ -1,0 +1,50 @@
+{
+  "version": "0.1.0",
+  "kernel": "6.18.33+rpt-rpi-2712",
+  "page_size": 16384,
+  "nproc": 4,
+  "compiled_suites": [
+    "fusion",
+    "synfarm",
+    "spike"
+  ],
+  "profile_note": "DEBUG BUILD — numbers are meaningless; use the CI release-bench artifact",
+  "suites": [
+    {
+      "name": "spike",
+      "gate": "≥3× FPR reduction (Poisson variant) AND reduction ≥1× with FDR ≤ q on the NB hold-out",
+      "gate_passed": true,
+      "skipped": false,
+      "metrics": {
+        "cells": 397,
+        "chosen_fpr_reduction_held_out": 1.81,
+        "chosen_fpr_reduction_primary": 3.76,
+        "days": 14,
+        "eb_k0_fpr_held_out": 0.02366,
+        "eb_k0_fpr_primary": 0.015,
+        "eb_k0_fpr_reduction_held_out": 1.81,
+        "eb_k0_fpr_reduction_primary": 3.76,
+        "eb_k0_ratio_fpr_matched_held_out": 0.04275,
+        "eb_k0_ratio_fpr_matched_primary": 0.05637,
+        "eb_k0_tpr_held_out": 0.412,
+        "eb_k0_tpr_primary": 0.588,
+        "eb_k1_fpr_held_out": 0.03761,
+        "eb_k1_fpr_primary": 0.05289,
+        "eb_k1_fpr_reduction_held_out": 1.36,
+        "eb_k1_fpr_reduction_primary": 0.79,
+        "eb_k1_ratio_fpr_matched_held_out": 0.05098,
+        "eb_k1_ratio_fpr_matched_primary": 0.0419,
+        "eb_k1_tpr_held_out": 0.445,
+        "eb_k1_tpr_primary": 0.569,
+        "recommended_k_ring": 0,
+        "replicates": 30
+      },
+      "notes": [
+        "candidate = EB(Gamma prior, method-of-moments) + quasi-NB variance (pooled 1/r̂ from window moments) + Gi* (k-ring 0) + BH q≤0.05; baseline = latest/window-mean ratio thresholded at matched TPR; k-ring fixed on the tuning variant, judged on the hold-out",
+        "hex lattice stands in for H3 res-5 (same 6-neighbor topology); production wiring uses h3o grid_disk in meridian-analytics (ADR-21)",
+        "NOTE: FPR-reduction divergence between variants is 2.1× (risk #21 review point at the P7 exit) — expected here: the hold-out is a deliberately harder regime (overdispersed counts, ramped spikes), and the candidate still dominates the baseline on it with held FDR"
+      ],
+      "duration_ms": 225.109424
+    }
+  ]
+}

@@ -63,3 +63,31 @@ Acceptance: hybrid ≥ BM25; no stage regresses its predecessor.
 - Corpus downloader streams + caps disk; never leaves >1.5GB of scratch.
 - Suites 1–5 are pure-Rust/in-process; 6–8 shell out (`vcgencmd`, `nft`) and are
   feature-gated `bench-device` so CI (x86) builds but skips them.
+
+## 6. Post-v0.1.0 suites (Phases 7–9, added 2026-06-11)
+
+Experiment-first protocol: suites 9, 10, and the suite-12 noise-floor probe run
+**before** their features are implemented — their results fix the ADR-18/21
+constants and the Phase-8 divergence gate. Statistical metrics (F1, FPR, JSD) are
+build-profile-independent; latency suites still require the release-bench build.
+
+| # | Suite | Method | Gate | Where it runs |
+|---|---|---|---|---|
+| 9 | `synfarm` | Generate syndication farms (1 original + N derived copies + M independents; primary AND held-out generator variants — risk #21), sweep shingle size × MinHash perms × cluster threshold, score pairwise F1 + false-merge vs ground truth; domain-dedup baseline reported | **F1 >0.8 AND false-merge <5% on both variants** (for the params chosen for ADR-18) | CI (pure in-process, deterministic) |
+| 10 | `spike` | Hex-lattice cells (topology-equivalent to H3 res-5; production uses h3o grid_disk), Gamma-heterogeneous Poisson counts, planted last-day spikes at ×2/×4/×8; ratio baseline vs EB-shrinkage (quasi-NB variance) + Gi* + BH-FDR; FPR at matched TPR; detector constants fixed on the tuning variant, judged on an overdispersed NB hold-out | **≥3× FPR reduction at equal TPR** vs thresholded ratio (Poisson variant) AND ≥1× with held FDR on the NB hold-out | CI |
+| 11 | `evidence-latency` | Micro-bench of sketch+cluster stage on 1000-candidate sets @100k corpus (P7, with the production sketch module) | ≤2ms added p50 fast-path | CI + device re-run at P7 exit |
+| 12 | `divergence` | (a) noise-floor probe (P7): repeated identical queries same-lane (direct/direct, anon/anon) against a running meridiand → bootstrap CI of within-lane JSD over domain distributions; (b) cross-lane mode (P8): curated region-sensitive query set, direct vs anon | (a) informational — the floor IS the deliverable; (b) cross-lane JSD > floor at p<0.05 | device only, feature `bench-divergence` (network-touching; never CI) |
+| 13 | `qpp` | NQC/Clarity vs measured per-query nDCG@10 on the eval set; ECE of the fused confidence (P8) | Spearman ρ ≥0.25; ECE reported (gate set at P8 exit) | CI |
+| 14 | `ope` | IPS/DR estimators vs synthetic logged ground truth with known true arm values (P9) | estimator bias <5% | CI |
+| 15 | `voi` | Replay deep-mode fetch traces with/without VoI: fetch count vs nDCG@10 frontier + evidence-diversity guard (P9) | ≥25% fewer fetches at equal nDCG@10 (±1%); median `independent_source_count` non-degrading | CI replay + device spot-check |
+
+**Quality-eval extension (P7–P8):** the §2 100-query set gains a duplicate-heavy
+subset (for alpha-nDCG@10) and a curated region-sensitive subset (for suite 12b);
+a small BEIR subset is added for ranking sanity (task choice = operator Q9).
+New metrics in `meridian-eval::metrics`: alpha-nDCG@10, ECE.
+
+**Standing gates at every post-v0.1.0 phase exit:** suites 1–8 re-run (no
+regression vs the Phase-6 baseline: BM25 0.48ms p50, ANN 0.45ms, fusion 0.144ms,
+heatmap 27ms, RSS ~250MB plateau); forget-correctness 100% (incl. ADR-19
+structures); privacy smoke green; hermetic egress-invariant count monotonically
+non-decreasing (13 → ≥16 at P8 → ≥17 at P9).
