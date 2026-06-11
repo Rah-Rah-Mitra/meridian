@@ -54,7 +54,10 @@ futures-util = { version = "0.3", default-features = false }
 rayon = "1"
 # --- bench-only (meridian-eval features; versions verified 2026-06-10) ---
 tantivy = { version = "0.26", features = ["zstd-compression"] }
-usearch = { version = "2.25", default-features = false }
+# Rung 1 RESTORED at the P7 exit (ADR-07, risk #3): the portable rung-2 build's
+# i8 cosine collapses with scale (recall 0.0 @1M); numkong 7.7.0's per-kernel
+# probes now drop SVE/SME cleanly under zig/musl, keeping NEON±dotprod.
+usearch = { version = "2.25" }
 cxx = "1"
 model2vec-rs = { version = "0.2", default-features = false, features = ["fancy-regex", "local-only"] }
 tract-onnx = "0.23"

@@ -1,59 +1,310 @@
 {
-  "version": "0.1.0",
-  "kernel": "6.18.33+rpt-rpi-2712",
-  "page_size": 16384,
-  "nproc": 4,
-  "compiled_suites": [
-    "fusion",
-    "synfarm",
-    "spike",
-    "evidence",
-    "embed",
-    "thermal",
-    "ann",
-    "lexical",
-    "disk",
-    "rerank",
-    "anon"
-  ],
-  "profile_note": "release-bench (thin LTO, target-cpu=cortex-a76); product profile is fat LTO — gates re-validated under it at Phase-1 exit",
-  "suites": [
-    {
-      "name": "lexical",
-      "gate": "BM25 top-1000 p50 < 30ms at max indexed size",
-      "gate_passed": true,
-      "skipped": false,
-      "metrics": {
-        "bm25_p50_ms_at_10000": 0.14133400000000002,
-        "bm25_p50_ms_at_100000": 0.47705600000000004,
-        "bm25_p50_ms_at_50000": 0.281464,
-        "bm25_p99_ms_at_10000": 0.688316,
-        "bm25_p99_ms_at_100000": 2.531079,
-        "bm25_p99_ms_at_50000": 1.316207,
-        "bytes_per_doc": 527.0,
-        "corpus_docs": 100000,
-        "docs_per_sec_ingest": 24440.0,
-        "index_bytes_final": 52667242
-      },
-      "notes": [],
-      "duration_ms": 8570.972109
+ "note": "P7 exit suite re-runs, 2026-06-11. ANN: portable-usearch runs kept for the defect record; numkong runs are the post-fix validation (native build, debug profile \u2014 recall is build-profile-independent).",
+ "runs": {
+  "fusion": [
+   {
+    "name": "fusion",
+    "gate": "RRF(1000+200+3\u00d720) + linear LTR top-100 < 2ms p50",
+    "gate_passed": true,
+    "skipped": false,
+    "metrics": {
+     "iterations": 1000,
+     "p50_ms": 0.15398199999999998,
+     "p99_ms": 0.161944
     },
-    {
-      "name": "disk",
-      "gate": "merge transient ≤ 0.75GB (Profile R scratch floor)",
-      "gate_passed": true,
-      "skipped": false,
-      "metrics": {
-        "index_bytes_final": 52667242,
-        "index_bytes_pre_merge": 58503955,
-        "merge_transient_bytes": 43909120,
-        "peak_used_bytes": 96665600,
-        "settled_used_bytes": 52756480
-      },
-      "notes": [
-        "sampler is 1Hz — short merges can under-report the true peak"
-      ],
-      "duration_ms": 8570.972109
-    }
+    "notes": [],
+    "duration_ms": 154.536769
+   }
+  ],
+  "synfarm": [
+   {
+    "name": "synfarm",
+    "gate": "pairwise F1 > 0.8 AND false-merge < 5% on BOTH variants \u2014 for the swept winner AND the production sketch format",
+    "gate_passed": true,
+    "skipped": false,
+    "metrics": {
+     "baseline_domain_f1_held_out": 0.054,
+     "baseline_domain_f1_primary": 0.054,
+     "docs_held_out": 336,
+     "docs_primary": 336,
+     "f1_held_out": 0.885,
+     "f1_primary": 1.0,
+     "f1_variant_drop": 0.115,
+     "false_merge_held_out": 0.0,
+     "false_merge_primary": 0.0,
+     "production_f1_held_out": 0.918,
+     "production_f1_primary": 0.995,
+     "production_false_merge_held_out": 0.0,
+     "production_false_merge_primary": 0.01,
+     "recommended_measure": "containment",
+     "recommended_minhash_perms": 64,
+     "recommended_shingle_k": 4,
+     "recommended_simhash_hamming_gate": 32,
+     "recommended_threshold": 0.3
+    },
+    "notes": [
+     "production format = meridian_index::sketch (OPH b=8, 60 bins, k=4, containment \u03c4=0.3)",
+     "winner: k=4 perms=64 measure=containment tau=0.3 \u2014 adopt these as the ADR-18 constants",
+     "false_merge = 1 \u2212 pairwise precision (fraction of merged pairs that are cross-origin); risk #21 hold-out variant uses block shuffles, lead rewrites and heavier word edits"
+    ],
+    "duration_ms": 226.493659
+   }
+  ],
+  "spike": [
+   {
+    "name": "spike",
+    "gate": "\u22653\u00d7 FPR reduction (Poisson variant) AND reduction \u22651\u00d7 with FDR \u2264 q on the NB hold-out",
+    "gate_passed": true,
+    "skipped": false,
+    "metrics": {
+     "cells": 397,
+     "chosen_fpr_reduction_held_out": 1.81,
+     "chosen_fpr_reduction_primary": 3.76,
+     "days": 14,
+     "eb_k0_fpr_held_out": 0.02366,
+     "eb_k0_fpr_primary": 0.015,
+     "eb_k0_fpr_reduction_held_out": 1.81,
+     "eb_k0_fpr_reduction_primary": 3.76,
+     "eb_k0_ratio_fpr_matched_held_out": 0.04275,
+     "eb_k0_ratio_fpr_matched_primary": 0.05637,
+     "eb_k0_tpr_held_out": 0.412,
+     "eb_k0_tpr_primary": 0.588,
+     "eb_k1_fpr_held_out": 0.03761,
+     "eb_k1_fpr_primary": 0.05289,
+     "eb_k1_fpr_reduction_held_out": 1.36,
+     "eb_k1_fpr_reduction_primary": 0.79,
+     "eb_k1_ratio_fpr_matched_held_out": 0.05098,
+     "eb_k1_ratio_fpr_matched_primary": 0.0419,
+     "eb_k1_tpr_held_out": 0.445,
+     "eb_k1_tpr_primary": 0.569,
+     "recommended_k_ring": 0,
+     "replicates": 30
+    },
+    "notes": [
+     "candidate = EB(Gamma prior, method-of-moments) + quasi-NB variance (pooled 1/r\u0302 from window moments) + Gi* (k-ring 0) + BH q\u22640.05; baseline = latest/window-mean ratio thresholded at matched TPR; k-ring fixed on the tuning variant, judged on the hold-out",
+     "hex lattice stands in for H3 res-5 (same 6-neighbor topology); production wiring uses h3o grid_disk in meridian-analytics (ADR-21)",
+     "NOTE: FPR-reduction divergence between variants is 2.1\u00d7 (risk #21 review point at the P7 exit) \u2014 expected here: the hold-out is a deliberately harder regime (overdispersed counts, ramped spikes), and the candidate still dominates the baseline on it with held FDR"
+    ],
+    "duration_ms": 33.46200399999999
+   }
+  ],
+  "evidence": [
+   {
+    "name": "evidence",
+    "gate": "evidence stage \u22642ms p50 at the API max limit (50 results)",
+    "gate_passed": true,
+    "skipped": false,
+    "metrics": {
+     "corpus_docs": 1000,
+     "iterations": 200,
+     "p50_ms_limit100": 0.597,
+     "p50_ms_limit50": 0.185,
+     "p99_ms_limit100": 0.617,
+     "p99_ms_limit50": 0.208,
+     "sample_independent_sources_at_50": 20
+    },
+    "notes": [
+     "stage = SketchReader::get_many + evidence::annotate, the exact planner path; re-run on-device against the 100k volume at the P7 exit"
+    ],
+    "duration_ms": 393.59992
+   }
+  ],
+  "lexical+disk": [
+   {
+    "name": "lexical",
+    "gate": "BM25 top-1000 p50 < 30ms at max indexed size",
+    "gate_passed": true,
+    "skipped": false,
+    "metrics": {
+     "bm25_p50_ms_at_10000": 0.11916700000000001,
+     "bm25_p50_ms_at_100000": 0.488224,
+     "bm25_p50_ms_at_50000": 0.29279700000000003,
+     "bm25_p99_ms_at_10000": 0.460575,
+     "bm25_p99_ms_at_100000": 2.5296350000000003,
+     "bm25_p99_ms_at_50000": 1.3269289999999998,
+     "bytes_per_doc": 527.0,
+     "corpus_docs": 100000,
+     "docs_per_sec_ingest": 20326.0,
+     "index_bytes_final": 52665958
+    },
+    "notes": [],
+    "duration_ms": 9634.037162
+   },
+   {
+    "name": "disk",
+    "gate": "merge transient \u2264 0.75GB (Profile R scratch floor)",
+    "gate_passed": true,
+    "skipped": false,
+    "metrics": {
+     "index_bytes_final": 52665958,
+     "index_bytes_pre_merge": 58503227,
+     "merge_transient_bytes": 41615360,
+     "peak_used_bytes": 94404608,
+     "settled_used_bytes": 52789248
+    },
+    "notes": [
+     "sampler is 1Hz \u2014 short merges can under-report the true peak"
+    ],
+    "duration_ms": 9634.037162
+   }
+  ],
+  "embed": [
+   {
+    "name": "embed",
+    "gate": "embed throughput > 2000 docs/s (batch 32)",
+    "gate_passed": true,
+    "skipped": false,
+    "metrics": {
+     "dimensions": 256,
+     "docs_per_sec_batch_1": 19232.0,
+     "docs_per_sec_batch_256": 47306.0,
+     "docs_per_sec_batch_32": 46501.0
+    },
+    "notes": [],
+    "duration_ms": 1353.3500809999998
+   }
+  ],
+  "ann-1M-portable-DEFECT": [
+   {
+    "name": "ann",
+    "gate": "some swept ef reaches recall@10 \u22650.95 at p99 <40ms AND 16K mmap view ok",
+    "gate_passed": false,
+    "skipped": false,
+    "metrics": {
+     "build_rss_delta_mb": 483,
+     "build_vectors_per_sec": 3112.0,
+     "index_size": 1000000,
+     "memory_usage_mb": 506,
+     "mmap_view_smoke": "pass",
+     "recall_at_10_ef_128": 0.0,
+     "recall_at_10_ef_192": 0.0,
+     "recall_at_10_ef_256": 0.0,
+     "recall_at_10_ef_64": 0.0,
+     "search_p50_ms_ef_128": 0.477,
+     "search_p50_ms_ef_192": 0.655,
+     "search_p50_ms_ef_256": 0.886,
+     "search_p50_ms_ef_64": 0.334,
+     "search_p99_ms_ef_128": 1.005,
+     "search_p99_ms_ef_192": 1.35,
+     "search_p99_ms_ef_256": 1.537,
+     "search_p99_ms_ef_64": 0.728,
+     "vectors": 1000000
+    },
+    "notes": [],
+    "duration_ms": 335576.38122100005
+   }
+  ],
+  "ann-10k-portable-DEFECT": [
+   {
+    "name": "ann",
+    "gate": "some swept ef reaches recall@10 \u22650.95 at p99 <40ms AND 16K mmap view ok",
+    "gate_passed": false,
+    "skipped": false,
+    "metrics": {
+     "build_rss_delta_mb": 5,
+     "build_vectors_per_sec": 2989.0,
+     "index_size": 10000,
+     "memory_usage_mb": 16,
+     "mmap_view_smoke": "pass",
+     "recall_at_10_ef_128": 0.598,
+     "recall_at_10_ef_192": 0.659,
+     "recall_at_10_ef_256": 0.722,
+     "recall_at_10_ef_64": 0.52,
+     "search_p50_ms_ef_128": 1.002,
+     "search_p50_ms_ef_192": 1.377,
+     "search_p50_ms_ef_256": 1.702,
+     "search_p50_ms_ef_64": 0.564,
+     "search_p99_ms_ef_128": 1.644,
+     "search_p99_ms_ef_192": 1.973,
+     "search_p99_ms_ef_256": 5.054,
+     "search_p99_ms_ef_64": 1.203,
+     "vectors": 10000
+    },
+    "notes": [],
+    "duration_ms": 8919.071768
+   }
+  ],
+  "ann-10k-numkong-FIX": [
+   {
+    "name": "ann",
+    "gate": "some swept ef reaches recall@10 \u22650.95 at p99 <40ms AND 16K mmap view ok",
+    "gate_passed": true,
+    "skipped": false,
+    "metrics": {
+     "build_rss_delta_mb": 6,
+     "build_vectors_per_sec": 1091.0,
+     "derived_ef_search": 192,
+     "index_size": 10000,
+     "memory_usage_mb": 16,
+     "mmap_view_smoke": "pass",
+     "recall_at_10_ef_128": 0.92,
+     "recall_at_10_ef_192": 0.957,
+     "recall_at_10_ef_256": 0.976,
+     "recall_at_10_ef_64": 0.835,
+     "search_p50_ms_ef_128": 1.702,
+     "search_p50_ms_ef_192": 2.324,
+     "search_p50_ms_ef_256": 2.788,
+     "search_p50_ms_ef_64": 0.947,
+     "search_p99_ms_ef_128": 5.757,
+     "search_p99_ms_ef_192": 4.045,
+     "search_p99_ms_ef_256": 9.969,
+     "search_p99_ms_ef_64": 5.076,
+     "vectors": 10000
+    },
+    "notes": [
+     "ef_search re-derived per SPEC \u00a715: 192 (recall \u22650.95 at p99 4.05ms)"
+    ],
+    "duration_ms": 18910.438297999997
+   }
+  ],
+  "ann-100k-numkong-FIX": [
+   {
+    "name": "ann",
+    "gate": "some swept ef reaches recall@10 \u22650.95 at p99 <40ms AND 16K mmap view ok",
+    "gate_passed": true,
+    "skipped": false,
+    "metrics": {
+     "build_rss_delta_mb": 50,
+     "build_vectors_per_sec": 1295.0,
+     "derived_ef_search": 64,
+     "index_size": 100000,
+     "memory_usage_mb": 81,
+     "mmap_view_smoke": "pass",
+     "recall_at_10_ef_128": 0.999,
+     "recall_at_10_ef_192": 0.999,
+     "recall_at_10_ef_256": 0.999,
+     "recall_at_10_ef_64": 0.999,
+     "search_p50_ms_ef_128": 1.586,
+     "search_p50_ms_ef_192": 2.315,
+     "search_p50_ms_ef_256": 3.042,
+     "search_p50_ms_ef_64": 0.828,
+     "search_p99_ms_ef_128": 2.244,
+     "search_p99_ms_ef_192": 2.804,
+     "search_p99_ms_ef_256": 4.106,
+     "search_p99_ms_ef_64": 1.226,
+     "vectors": 100000
+    },
+    "notes": [
+     "ef_search re-derived per SPEC \u00a715: 64 (recall \u22650.95 at p99 1.23ms)"
+    ],
+    "duration_ms": 89991.868297
+   }
+  ],
+  "thermal-180s-hot-start": [
+   {
+    "name": "thermal",
+    "gate": "no throttle flags and max temp < 80\u00b0C",
+    "gate_passed": false,
+    "skipped": false,
+    "metrics": {
+     "duration_secs": 180,
+     "max_temp_c": 80.7,
+     "throttle_flags_union": "0x0",
+     "throughput_drift_pct": 4.0
+    },
+    "notes": [],
+    "duration_ms": 180086.132775
+   }
   ]
+ }
 }
