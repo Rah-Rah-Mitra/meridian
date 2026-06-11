@@ -94,7 +94,82 @@ fn request(lane: Lane, scope: Scope) -> SearchRequest {
         geo: None,
         after: None,
         before: None,
+        bypass_cache: false,
+        pin_engines: false,
     }
+}
+
+/// Phase-8 invariant (ADR-22): compare-vantages fails CLOSED when the anon
+/// half cannot run — never a silent direct-only answer under a compare label —
+/// and the failed compare leaves the shared query cache untouched.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn inv14_compare_fails_closed_when_anon_down() {
+    let (direct_addr, _direct_hits) = canary().await;
+    let (anon_addr, anon_hits) = canary().await;
+    let lanes_cfg = LanesConfig {
+        anon_enabled: true, // enabled but NOT started ⇒ injected Arti-down
+        ..LanesConfig::default()
+    };
+    let planner = temp_planner(
+        lanes_cfg,
+        Some(format!("http://{direct_addr}/")),
+        Some(format!("http://{anon_addr}/")),
+    );
+
+    let err = meridian_query::compare::compare_vantages(
+        &planner,
+        request(Lane::Direct, Scope::Web),
+        0, // jitter elided: hermetic test, no upstream to decorrelate from
+        0.3,
+    )
+    .await
+    .expect_err("compare must fail closed when the anon half cannot run");
+    assert!(
+        matches!(err, PlanError::Lane(EgressError::NotReady(_))),
+        "unexpected error: {err:?}"
+    );
+    assert_eq!(anon_hits.load(Ordering::SeqCst), 0, "anon backend was hit");
+    let [(_, query_entries, _), _] = planner.cache_stats();
+    assert_eq!(
+        query_entries, 0,
+        "compare halves must never enter the shared cache"
+    );
+}
+
+/// Phase-8 invariant (ADR-22): `bypass_cache` requests neither read nor write
+/// the shared query cache — the mechanism both compare halves ride.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn inv15_bypass_cache_writes_nothing() {
+    let (direct_addr, _hits) = canary().await;
+    let planner = temp_planner(
+        LanesConfig::default(),
+        Some(format!("http://{direct_addr}/")),
+        None,
+    );
+
+    let mut req = request(Lane::Direct, Scope::Web);
+    req.bypass_cache = true;
+    planner.search(req).await.expect("direct search works");
+    let [(_, after_bypass, _), _] = planner.cache_stats();
+    assert_eq!(after_bypass, 0, "bypassed search must not be cached");
+
+    planner
+        .search(request(Lane::Direct, Scope::Web))
+        .await
+        .expect("direct search works");
+    let [(_, after_normal, _), _] = planner.cache_stats();
+    assert_eq!(after_normal, 1, "normal search caches (control arm)");
+}
+
+/// Phase-8 invariant (risk #18 tripwire): the timing-decorrelation jitter is
+/// ON by default — a compare dispatched with default config never sends both
+/// halves back-to-back.
+#[test]
+fn inv16_compare_jitter_defaults_on() {
+    assert!(
+        SearchConfig::default().compare_jitter_ms_max > 0,
+        "risk #18: default compare config must include inter-lane jitter"
+    );
 }
 
 /// Invariant 1: anon requested, Arti down (lane enabled, never started) —

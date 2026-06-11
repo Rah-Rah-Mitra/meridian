@@ -154,6 +154,11 @@ struct SearchParams {
     scope: Option<String>,
     #[serde(default)]
     lane: Option<String>,
+    /// `vantages` runs the query over direct AND anon and attaches the
+    /// `divergence` block (Phase 8, ADR-22). Explicit per-request opt-in —
+    /// the query is intentionally observable from two vantages.
+    #[serde(default)]
+    compare: Option<String>,
     #[serde(default)]
     limit: Option<usize>,
     // Geo constraint (SPEC §10): lat+lon+radius_km together, OR h3.
@@ -255,6 +260,17 @@ async fn search(
         }
     };
     let geo = parse_geo(&params)?;
+    let compare = match params.compare.as_deref() {
+        None => false,
+        Some("vantages") => true,
+        Some(_) => {
+            return Err(Problem::new(
+                StatusCode::BAD_REQUEST,
+                "invalid compare",
+                "compare=vantages",
+            ));
+        }
+    };
     let request = SearchRequest {
         q: params.q,
         mode,
@@ -264,7 +280,36 @@ async fn search(
         geo,
         after: params.after,
         before: params.before,
+        bypass_cache: false,
+        pin_engines: false,
     };
+    if compare {
+        // Compare governs lanes itself and is web-scoped by definition; a
+        // local-only or lane-pinned compare is a caller error, not a guess.
+        if !matches!(request.scope, Scope::Web) {
+            return Err(Problem::new(
+                StatusCode::BAD_REQUEST,
+                "compare=vantages requires scope=web",
+                "the comparison is between web vantages",
+            ));
+        }
+        if params.lane.is_some() {
+            return Err(Problem::new(
+                StatusCode::BAD_REQUEST,
+                "compare=vantages governs lanes",
+                "omit the lane parameter",
+            ));
+        }
+        let response = meridian_query::compare::compare_vantages(
+            &state.planner,
+            request,
+            state.config.search.compare_jitter_ms_max,
+            state.config.search.compare_noise_floor_p90,
+        )
+        .await
+        .map_err(problem::plan_error)?;
+        return Ok(Json(response));
+    }
     let response = state
         .planner
         .search(request)
@@ -293,6 +338,10 @@ struct IngestResponse {
     accepted: usize,
     deduped: usize,
     queued: usize,
+    /// Tombstoned content refused at re-ingest (SPEC §10 `/v1/forget`).
+    /// v0.2.0 addition: operators could not previously distinguish a dedup
+    /// from a forget-refusal in the response.
+    refused: usize,
 }
 
 async fn ingest(
@@ -342,6 +391,7 @@ async fn ingest(
 
     let mut accepted = 0;
     let mut deduped = 0;
+    let mut refused = 0;
     if !texts.is_empty() {
         let ingestor = state.ingestor.clone();
         let stats = tokio::task::spawn_blocking(move || ingestor.ingest_batch(&texts))
@@ -362,12 +412,14 @@ async fn ingest(
             })?;
         accepted += stats.accepted;
         deduped += stats.deduped;
+        refused += stats.refused;
     }
     for (url, lane) in &urls {
         match state.ingestor.ingest_url(url, lane).await {
             Ok(stats) => {
                 accepted += stats.accepted;
                 deduped += stats.deduped;
+                refused += stats.refused;
             }
             Err(_) => {
                 // Per-URL failures degrade the count, not the batch; detail
@@ -381,6 +433,7 @@ async fn ingest(
         Json(IngestResponse {
             accepted,
             deduped,
+            refused,
             queued: 0,
         }),
     ))
