@@ -96,6 +96,7 @@ fn request(lane: Lane, scope: Scope) -> SearchRequest {
         before: None,
         bypass_cache: false,
         pin_engines: false,
+        diversity_mmr: false,
     }
 }
 

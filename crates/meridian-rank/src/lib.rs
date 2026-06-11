@@ -14,6 +14,9 @@
 
 /// Per-candidate features (SPEC §11). Fields not yet plumbed are fed neutral
 /// values by the planner and documented there (freshness/domain_prior/geo).
+pub mod mmr;
+pub mod qpp;
+
 #[derive(Debug, Clone, Default)]
 pub struct Features {
     /// RRF fusion score — the dominant signal (already encodes BM25⊕ANN⊕engines).
