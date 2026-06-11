@@ -18,6 +18,16 @@ use meridian_searx::bandit::Bandit;
 use meridian_searx::client::SearxClient;
 use meridian_vector::VectorStore;
 use std::process::ExitCode;
+
+// SPEC §8: mimalloc as the global allocator (secure mode off). Not a luxury:
+// musl's mallocng never consolidates the mixed-lifetime pattern this process
+// produces (moka cache entries pinned among 1000-candidate transient vecs) —
+// the Phase-6 soak measured ~20x RSS amplification per cached search and an
+// unbounded climb into the shed rungs. mimalloc's sharded heaps + page purge
+// hold the same load flat. 16KB-page kernel compatibility validated on the
+// Pi 5 deployment target (Phase-6 soak).
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use std::sync::Arc;
 
 fn main() -> ExitCode {
@@ -263,6 +273,7 @@ fn serve() -> ExitCode {
         // hashes + forget tombstones are deliberately permanent (correctness).
         {
             let data_dir = components.config.index.data_dir.clone();
+            let planner = components.planner.clone();
             tokio::spawn(async move {
                 let mut tick = tokio::time::interval(std::time::Duration::from_secs(30 * 60));
                 loop {
@@ -272,6 +283,14 @@ fn serve() -> ExitCode {
                             .map(|m| m.len())
                             .unwrap_or(0);
                         metrics::gauge!("meridian_store_bytes", "store" => store).set(bytes as f64);
+                    }
+                    // In-RAM cache occupancy (Phase-6 soak finding): weighted
+                    // caps are only trustworthy when observable.
+                    for (cache, entries, weighted) in planner.cache_stats() {
+                        metrics::gauge!("meridian_cache_entries", "cache" => cache)
+                            .set(entries as f64);
+                        metrics::gauge!("meridian_cache_weighted_bytes", "cache" => cache)
+                            .set(weighted as f64);
                     }
                 }
             });

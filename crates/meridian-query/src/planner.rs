@@ -97,22 +97,36 @@ pub struct SearchResponse {
     pub degraded: Vec<&'static str>,
 }
 
-/// Cached fusion output (SPEC §8.4 query cache: 256MB weighted, TTI 15m, TTL 2h
+/// Cached fusion output (SPEC §8.4 query cache: 128MB weighted, TTI 15m, TTL 2h
 /// for the shared direct-lane cache; the anon cache is a separate ephemeral
-/// 32MB/TTL-5m instance — anon results never touch shared state, SPEC §12.4).
+/// 16MB/TTL-5m instance — anon results never touch shared state, SPEC §12.4).
 #[derive(Clone)]
 struct CachedSearch {
     results: Vec<SearchResult>,
     degraded: Vec<&'static str>,
 }
 
+/// Weighted cost of a cached entry. Counts every owned allocation (strings,
+/// per-result struct, vec headers, moka entry bookkeeping) — the Phase-6 soak
+/// proved the original snippet-bytes-only estimate off by an order of
+/// magnitude once allocator overhead is included, which let the "256MB" cache
+/// grow the process past every shed rung. The ×2 factor is the measured
+/// mimalloc fragmentation allowance; budgets treat the cap as REAL bytes.
 fn cached_search_weight(v: &Arc<CachedSearch>) -> u32 {
-    let bytes: usize = v
+    let owned: usize = v
         .results
         .iter()
-        .map(|r| r.url.len() + r.title.len() + r.snippet.len() + 64)
+        .map(|r| {
+            r.url.capacity()
+                + r.title.capacity()
+                + r.snippet.capacity()
+                + std::mem::size_of::<SearchResult>()
+        })
         .sum();
-    (bytes + 64) as u32
+    let fixed = std::mem::size_of::<CachedSearch>()
+        + v.degraded.capacity() * std::mem::size_of::<&'static str>()
+        + 256; // moka entry + key + Arc bookkeeping
+    ((owned + fixed) * 2) as u32
 }
 
 pub struct Planner {
@@ -157,13 +171,13 @@ impl Planner {
         vector_cfg: &VectorConfig,
     ) -> Self {
         let cache = moka::sync::Cache::builder()
-            .max_capacity(256 * 1024 * 1024)
+            .max_capacity(128 * 1024 * 1024)
             .weigher(|_k, v: &Arc<CachedSearch>| cached_search_weight(v))
             .time_to_idle(std::time::Duration::from_secs(15 * 60))
             .time_to_live(std::time::Duration::from_secs(2 * 60 * 60))
             .build();
         let anon_cache = moka::sync::Cache::builder()
-            .max_capacity(32 * 1024 * 1024)
+            .max_capacity(16 * 1024 * 1024)
             .weigher(|_k, v: &Arc<CachedSearch>| cached_search_weight(v))
             .time_to_live(std::time::Duration::from_secs(5 * 60))
             .build();
@@ -288,6 +302,26 @@ impl Planner {
     pub fn purge_caches(&self) {
         self.cache.invalidate_all();
         self.anon_cache.invalidate_all();
+    }
+
+    /// Honest cache occupancy for `/metrics` (Phase-6 finding: weighted-cap
+    /// caches need entry/byte gauges or RSS growth is undiagnosable).
+    /// `run_pending_tasks` first — moka's counters lag eviction otherwise.
+    pub fn cache_stats(&self) -> [(&'static str, u64, u64); 2] {
+        self.cache.run_pending_tasks();
+        self.anon_cache.run_pending_tasks();
+        [
+            (
+                "query",
+                self.cache.entry_count(),
+                self.cache.weighted_size(),
+            ),
+            (
+                "query_anon",
+                self.anon_cache.entry_count(),
+                self.anon_cache.weighted_size(),
+            ),
+        ]
     }
 
     /// Aggregate per-engine counters for `/metrics` (no user data).

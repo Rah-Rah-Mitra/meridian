@@ -64,25 +64,24 @@ search_worker "-H X-Forwarded-For:198.51.100.7" "$WORK/direct" &
   done ) &
 
 # --- sampler -------------------------------------------------------------------
+# RSS via /proc (container PIDs are host-visible): docker stats reports 0B on
+# this cgroup-v2 setup, and needs docker-group perms the soak shell may lack.
+MPID=$(pgrep -xo meridiand || true)
+cnt() { grep -c "$@" 2>/dev/null | head -1; } # grep -c prints 0 itself; no || echo
 while :; do
   sleep 60
   NOW=$(date +%s)
-  RSS=$(docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' 2>/dev/null \
-    | awk '/meridiand/ {print $2}' | sed 's/MiB.*//;s/GiB.*/e3/' || echo "")
-  TEMP=$(awk '{printf "%.1f", $1/1000}' /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo "")
-  P99=$(python3 - "$WORK/direct" <<'PY' 2>/dev/null || echo ""
+  RSS=$(awk '/VmRSS/{printf "%.0f", $2/1024}' "/proc/${MPID:-0}/status" 2>/dev/null)
+  [[ -z "$RSS" ]] && { MPID=$(pgrep -xo meridiand || true); RSS=$(awk '/VmRSS/{printf "%.0f", $2/1024}' "/proc/${MPID:-0}/status" 2>/dev/null); }
+  TEMP=$(awk '{printf "%.1f", $1/1000}' /sys/class/thermal/thermal_zone0/temp 2>/dev/null)
+  P99=$(python3 - "$WORK/direct" <<'PY' 2>/dev/null
 import sys
 rows=[l.split() for l in open(sys.argv[1]) if l.strip()]
 t=sorted(float(r[1])*1000 for r in rows if r[0]=="200")
 print(f"{t[max(0,int(0.99*len(t))-1)]:.0f}" if t else "")
 PY
 )
-  D2=$(grep -c '^2' "$WORK/direct" 2>/dev/null || echo 0)
-  DE=$(grep -cv '^2' "$WORK/direct" 2>/dev/null || echo 0)
-  A2=$(grep -c '^2' "$WORK/anon" 2>/dev/null || echo 0)
-  A5=$(grep -c '^503' "$WORK/anon" 2>/dev/null || echo 0)
-  I2=$(grep -c '^2' "$WORK/ingest" 2>/dev/null || echo 0)
-  echo "$NOW,$RSS,$TEMP,$P99,$D2,$DE,$A2,$A5,$I2" >> "$OUT"
+  echo "$NOW,$RSS,$TEMP,$P99,$(cnt '^2' "$WORK/direct"),$(cnt -v '^2' "$WORK/direct"),$(cnt '^2' "$WORK/anon"),$(cnt '^503' "$WORK/anon"),$(cnt '^2' "$WORK/ingest")" >> "$OUT"
   : > "$WORK/direct"; : > "$WORK/anon"; : > "$WORK/ingest"
   [[ "$DUR" -gt 0 && $((NOW - START)) -ge "$DUR" ]] && break
 done

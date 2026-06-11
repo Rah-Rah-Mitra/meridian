@@ -15,6 +15,7 @@ default = []
 rerank-ort = ["meridian-query/rerank-ort"]
 
 [dependencies]
+mimalloc.workspace = true
 meridian-common.workspace = true
 meridian-api.workspace = true
 meridian-egress.workspace = true
