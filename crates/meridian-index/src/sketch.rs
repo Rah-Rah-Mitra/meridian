@@ -30,6 +30,15 @@ pub const ENCODED_LEN: usize = 4 + BINS;
 /// Chance two UNRELATED bins share a byte (b=8 quantization collision).
 const B_BIT_COLLISION: f64 = 1.0 / 256.0;
 
+/// Minimum matched bins before the similarity estimate is trusted at all.
+/// Noise floor: unrelated docs match ≈ BINS/256 ≈ 0.23 bins in expectation, so
+/// ≥5 by chance is ~5e-7 per pair — while real derivation produces 25+.
+/// Without this floor, ONE chance collision against a tiny shingle set
+/// (min(|A|,|B|) ≈ 10) amplifies through the containment denominator to ≥τ —
+/// a false merge observed live during the P7 exit drill (tiny repeated doc vs
+/// a large unrelated article).
+const MIN_MATCH_BINS: usize = 5;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sketch {
     /// Distinct shingle count — the containment denominator.
@@ -97,15 +106,20 @@ impl Sketch {
     }
 
     /// Estimated Jaccard similarity from the signatures, corrected for the b=8
-    /// quantization collision rate.
+    /// quantization collision rate. Below [`MIN_MATCH_BINS`] the estimate is 0
+    /// — chance collisions must never clear the derivation threshold via the
+    /// containment amplification (see the constant's doc).
     pub fn jaccard(&self, other: &Self) -> f64 {
         let matches = self
             .sig
             .iter()
             .zip(other.sig.iter())
             .filter(|(a, b)| a == b)
-            .count() as f64;
-        let m = matches / BINS as f64;
+            .count();
+        if matches < MIN_MATCH_BINS {
+            return 0.0;
+        }
+        let m = matches as f64 / BINS as f64;
         ((m - B_BIT_COLLISION) / (1.0 - B_BIT_COLLISION)).clamp(0.0, 1.0)
     }
 
@@ -244,5 +258,31 @@ mod tests {
     fn tiny_document_is_a_single_shingle() {
         let s = Sketch::compute("two words");
         assert_eq!(s.shingles, 1);
+    }
+
+    /// The P7 exit-drill false merge: a tiny shingle set against a large
+    /// unrelated document. One chance bin collision (≈21%/pair without the
+    /// MIN_MATCH_BINS floor) amplifies through the containment denominator to
+    /// ≥τ. With the floor, none of many such pairs may merge.
+    #[test]
+    fn size_asymmetry_noise_cannot_clear_tau() {
+        let large = Sketch::compute(
+            &(0..400)
+                .map(|i| format!("article word{i} body{}", i * 7))
+                .collect::<Vec<_>>()
+                .join(" "),
+        );
+        let mut merges = 0;
+        for k in 0..500 {
+            let tiny = Sketch::compute(&format!(
+                "note{k} short reminder item{} list entry final",
+                k * 13
+            ));
+            assert!(tiny.shingles < 10, "test premise: tiny set");
+            if tiny.containment(&large) >= CONTAINMENT_TAU {
+                merges += 1;
+            }
+        }
+        assert_eq!(merges, 0, "{merges}/500 tiny-vs-large chance merges");
     }
 }
