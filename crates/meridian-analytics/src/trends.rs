@@ -1,7 +1,13 @@
 //! `/v1/trends` queries (SPEC §10): per-day time series for a topic and/or H3
-//! res-5 cell over a window, plus "top movers" — topics whose latest-day volume
-//! most exceeds their window mean.
+//! res-5 cell over a window, plus "top movers" — topics whose latest-day
+//! volume significantly exceeds their window baseline.
+//!
+//! Phase 7 (ADR-21): movers are ranked by an EB-shrunk quasi-NB z-score with
+//! BH-FDR across root codes — the raw latest/mean ratio fired on
+//! single-digit-count noise (suite-10 study). The raw values stay in the
+//! payload for explainability; `significant` is the defensible flag.
 
+use crate::stats::{MoverInput, mover_stats};
 use crate::store::{AnalyticsStore, StoreError};
 use std::collections::HashMap;
 
@@ -9,7 +15,7 @@ use std::collections::HashMap;
 pub struct TrendsReport {
     /// (day_epoch, count) ascending.
     pub series: Vec<(u32, u32)>,
-    /// (root_code, latest_count, window_mean, ratio) descending by ratio.
+    /// Movers descending by z (Phase 7: statistical ordering, ADR-21).
     pub top_movers: Vec<Mover>,
 }
 
@@ -18,7 +24,20 @@ pub struct Mover {
     pub root: u8,
     pub latest: u32,
     pub mean: f32,
+    /// Raw latest/window-mean ratio — kept for explainability (pre-P7 metric).
     pub ratio: f32,
+    /// EB-shrunk latest-day rate (ADR-21).
+    pub shrunk_rate: f32,
+    /// Quasi-NB standardized excess over the shrunk baseline.
+    pub z: f32,
+    /// BH q-value across all root codes in this report.
+    pub q_value: f32,
+    /// q ≤ 0.05 — the defensible "this moved" flag.
+    pub significant: bool,
+    /// "likely low-sample noise" when the ratio looks elevated but the
+    /// statistics cannot back it (ADR-21 honesty label).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<&'static str>,
 }
 
 /// `topic` = GDELT EventRootCode; `h3_r5` = a res-5 cell (both optional).
@@ -42,31 +61,71 @@ pub fn trends(
     let mut series: Vec<(u32, u32)> = by_day.into_iter().collect();
     series.sort_unstable();
 
-    // Movers: latest-day volume vs window mean per root code.
-    let mut roots: HashMap<u8, Vec<u32>> = HashMap::new();
-    for ((root, _day), n) in &by_root_day {
-        roots.entry(*root).or_default().push(*n);
-    }
-    let mut top_movers: Vec<Mover> = roots
-        .into_iter()
-        .filter_map(|(root, counts)| {
-            let latest = *by_root_day.get(&(root, latest_day))?;
-            let mean = counts.iter().sum::<u32>() as f32 / counts.len() as f32;
-            if mean <= 0.0 || counts.len() < 2 {
-                return None;
+    // Movers (ADR-21): dense per-day vectors per root over the observed window
+    // (missing days are real zeros), then EB + quasi-NB z + BH across roots.
+    let first_day = by_root_day
+        .keys()
+        .map(|(_, day)| *day)
+        .min()
+        .unwrap_or(latest_day);
+    let window_len = (latest_day.saturating_sub(first_day) + 1) as usize;
+    let mut root_ids: Vec<u8> = by_root_day.keys().map(|(root, _)| *root).collect();
+    root_ids.sort_unstable();
+    root_ids.dedup();
+
+    let mut candidates: Vec<(u8, MoverInput)> = Vec::new();
+    if window_len >= 2 {
+        for &root in &root_ids {
+            let days: Vec<u32> = (0..window_len)
+                .map(|i| {
+                    by_root_day
+                        .get(&(root, first_day + i as u32))
+                        .copied()
+                        .unwrap_or(0)
+                })
+                .collect();
+            // Same admission rule as the pre-P7 detector: a baseline must exist.
+            let baseline_sum: u32 = days[..window_len - 1].iter().sum();
+            if baseline_sum > 0 {
+                candidates.push((root, MoverInput { days }));
             }
-            Some(Mover {
-                root,
+        }
+    }
+    let inputs: Vec<MoverInput> = candidates
+        .iter()
+        .map(|(_, input)| MoverInput {
+            days: input.days.clone(),
+        })
+        .collect();
+    let stats = mover_stats(&inputs);
+
+    let mut top_movers: Vec<Mover> = candidates
+        .iter()
+        .zip(stats)
+        .map(|((root, input), s)| {
+            let latest = *input.days.last().unwrap_or(&0);
+            let mean = input.days.iter().sum::<u32>() as f32 / input.days.len() as f32;
+            Mover {
+                root: *root,
                 latest,
                 mean,
-                ratio: latest as f32 / mean,
-            })
+                ratio: if mean > 0.0 {
+                    latest as f32 / mean
+                } else {
+                    0.0
+                },
+                shrunk_rate: s.shrunk_rate,
+                z: s.z,
+                q_value: s.q_value,
+                significant: s.significant,
+                label: s.label,
+            }
         })
         .collect();
     top_movers.sort_by(|a, b| {
-        b.ratio
-            .partial_cmp(&a.ratio)
+        b.z.partial_cmp(&a.z)
             .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.root.cmp(&b.root))
     });
     top_movers.truncate(10);
 
@@ -112,6 +171,18 @@ mod tests {
         assert_eq!(report.series[4], (104, 55));
         assert_eq!(report.top_movers[0].root, 3, "{:?}", report.top_movers);
         assert!(report.top_movers[0].ratio > 3.0);
+        // Phase 7 (ADR-21): the spike is statistically backed; steady is not.
+        assert!(
+            report.top_movers[0].significant,
+            "z={} q={}",
+            report.top_movers[0].z, report.top_movers[0].q_value
+        );
+        let steady = report.top_movers.iter().find(|m| m.root == 14).unwrap();
+        assert!(!steady.significant, "steady root must not be flagged");
+        assert!(
+            steady.label.is_none(),
+            "steady root is not 'elevated' either"
+        );
 
         // Topic filter narrows the series.
         let only14 = trends(&store, 100, 104, Some(14), None).unwrap();

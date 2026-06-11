@@ -44,6 +44,19 @@ pub fn cell_to_latlng(cell: u64) -> Option<(f64, f64)> {
     Some((ll.lat(), ll.lng()))
 }
 
+/// k-ring 1 of `cell` INCLUDING the cell itself (≤7 cells; fewer near
+/// pentagons). The Gi* neighborhood primitive for the Phase-7 heatmap
+/// statistics (ADR-21).
+pub fn k_ring1(cell: u64) -> Vec<u64> {
+    let Ok(cell) = CellIndex::try_from(cell) else {
+        return Vec::new();
+    };
+    cell.grid_disk::<Vec<_>>(1)
+        .into_iter()
+        .map(u64::from)
+        .collect()
+}
+
 /// Parent of `cell` at `res` (no-op when `res` ≥ the cell's own resolution).
 /// Heatmap rollup primitive.
 pub fn parent_at(cell: u64, res: u8) -> Option<u64> {
