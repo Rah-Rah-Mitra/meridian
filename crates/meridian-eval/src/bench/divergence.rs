@@ -23,6 +23,10 @@ use std::time::Instant;
 
 const LANES: &[&str] = &["direct", "anon"];
 const BOOTSTRAP_RESAMPLES: usize = 1_000;
+/// Fixed result prefix the JSD analysis sees (responses are requested with
+/// varying `limit` ≥ this for cache-busting, then truncated here).
+/// Repeats must stay ≤ `max_limit − ANALYZE_PREFIX` (50 − 20 = 30).
+const ANALYZE_PREFIX: usize = 20;
 
 /// Region-sensitive default query classes (news / geopolitics / local services)
 /// — the kinds of queries where vantage is expected to matter in Phase 8.
@@ -61,6 +65,18 @@ pub fn run(cfg: &BenchConfig) -> SuiteResult {
         },
         None => DEFAULT_QUERIES.iter().map(|s| (*s).to_owned()).collect(),
     };
+    let mut cfg = cfg.clone();
+    // Cache-busting rides distinct `limit` values (ANALYZE_PREFIX + rep), and
+    // the server clamps limit at 50 — beyond 30 repeats the busting would
+    // silently stop working, so cap it instead.
+    if cfg.repeats > 30 {
+        result.note(format!(
+            "repeats capped 30 (was {}) — limit-based cache-busting bound",
+            cfg.repeats
+        ));
+        cfg.repeats = 30;
+    }
+    let cfg = &cfg;
     result.metric("queries", queries.len());
     result.metric("repeats_per_query", cfg.repeats);
     result.metric("api_base", cfg.api_base.clone());
@@ -99,8 +115,9 @@ pub fn run(cfg: &BenchConfig) -> SuiteResult {
                 let mut jsds = probe.within_lane_jsds.clone();
                 if jsds.is_empty() {
                     result.note(format!(
-                        "lane {lane}: {} ok responses but no comparable run pairs",
-                        probe.ok_runs
+                        "lane {lane}: {} ok responses but no comparable run pairs ({} empty — \
+                         engine timeouts inside the lane deadline?)",
+                        probe.ok_runs, probe.empty_runs
                     ));
                     continue;
                 }
@@ -109,6 +126,7 @@ pub fn run(cfg: &BenchConfig) -> SuiteResult {
                 let (lo, hi) = bootstrap_mean_ci(&probe.within_lane_jsds);
                 result.metric(format!("{lane}_ok_runs").as_str(), probe.ok_runs);
                 result.metric(format!("{lane}_failed_runs").as_str(), probe.failed_runs);
+                result.metric(format!("{lane}_empty_runs").as_str(), probe.empty_runs);
                 result.metric(
                     format!("{lane}_jsd_pairs").as_str(),
                     probe.within_lane_jsds.len(),
@@ -147,6 +165,9 @@ fn round4(x: f64) -> f64 {
 struct LaneProbe {
     ok_runs: usize,
     failed_runs: usize,
+    /// HTTP 200 but zero parseable result domains — engine timeouts inside the
+    /// lane deadline look exactly like this; silent dropping hid it once.
+    empty_runs: usize,
     within_lane_jsds: Vec<f64>,
     identical_pairs: usize,
 }
@@ -158,17 +179,17 @@ async fn probe_lane(
     lane: &str,
     bearer: Option<&str>,
 ) -> Result<LaneProbe, String> {
-    // Anon engine fan-outs are slow and Tor-polite pacing matters; direct can
-    // run tighter. The gap also gives short cache TTLs a chance to expire.
-    let gap = if lane == "anon" {
-        std::time::Duration::from_millis(1_500)
-    } else {
-        std::time::Duration::from_millis(300)
-    };
+    // Engine-polite pacing on BOTH lanes: the first run of this probe paced
+    // direct at 300ms and drove the upstream engines into timeout/rate-limit —
+    // every direct fan-out came back empty inside meridiand's 800ms deadline.
+    // 2.5s/query keeps the probe a slow trickle.
+    let gap = std::time::Duration::from_millis(2_500);
+    let _ = lane;
 
     let mut probe = LaneProbe {
         ok_runs: 0,
         failed_runs: 0,
+        empty_runs: 0,
         within_lane_jsds: Vec::new(),
         identical_pairs: 0,
     };
@@ -177,11 +198,17 @@ async fn probe_lane(
     for q in queries {
         // One domain distribution per repeat run.
         let mut runs: Vec<HashMap<u64, f64>> = Vec::new();
-        for _ in 0..cfg.repeats {
+        for rep in 0..cfg.repeats {
+            // Cache-busting: the planner's query caches key on `limit`, so a
+            // distinct limit per repeat forces a fresh engine fan-out without
+            // any server-side change; the analysis truncates every response to
+            // the same top-ANALYZE_PREFIX results so distributions stay
+            // comparable across repeats.
             let url = format!(
-                "{}/v1/search?q={}&scope=web&lane={lane}&limit=20",
+                "{}/v1/search?q={}&scope=web&lane={lane}&limit={}",
                 cfg.api_base.trim_end_matches('/'),
                 percent_encode(q),
+                ANALYZE_PREFIX + rep,
             );
             let mut req = client.get(url);
             if let Some(b) = bearer {
@@ -211,7 +238,12 @@ async fn probe_lane(
                                 let _ = e;
                             }
                             Ok(body) => {
-                                runs.push(domain_distribution(&body));
+                                let dist = domain_distribution(&body);
+                                if dist.is_empty() {
+                                    probe.empty_runs += 1;
+                                } else {
+                                    runs.push(dist);
+                                }
                                 probe.ok_runs += 1;
                             }
                         }
@@ -244,16 +276,17 @@ fn probe_status_tolerable(status: u16) -> bool {
     matches!(status, 429 | 502 | 503 | 504)
 }
 
-/// Result URLs → registered-domain counts. Registered domain is approximated as
-/// the last two host labels (three when the second-to-last is a well-known
-/// second-level registry label) — a PSL-exact mapping is not needed for a floor
-/// measured against itself.
+/// Result URLs → registered-domain counts over the first [`ANALYZE_PREFIX`]
+/// results (responses are over-fetched for cache-busting). Registered domain
+/// is approximated as the last two host labels (three when the second-to-last
+/// is a well-known second-level registry label) — a PSL-exact mapping is not
+/// needed for a floor measured against itself.
 fn domain_distribution(body: &serde_json::Value) -> HashMap<u64, f64> {
     let mut dist: HashMap<u64, f64> = HashMap::new();
     let Some(results) = body.get("results").and_then(|r| r.as_array()) else {
         return dist;
     };
-    for r in results {
+    for r in results.iter().take(ANALYZE_PREFIX) {
         let Some(url) = r.get("url").and_then(|u| u.as_str()) else {
             continue;
         };
