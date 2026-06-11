@@ -89,18 +89,19 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           docker buildx build --platform linux/arm64 -f deploy/Dockerfile \
             -t "$IMAGE:$VERSION" -t "$IMAGE:latest" --push deploy
-      - name: SBOM (syft, spdx-json) — image + workspace
-        uses: anchore/sbom-action@v0
-        with:
-          image: ${{ env.IMAGE }}:latest
-          # The repo/registry is private and current syft versions no longer
-          # inherit the docker-login credentials — pass them explicitly
-          # (v0.2.0 release attempt 3 failed here with UNAUTHORIZED).
-          registry-username: ${{ github.actor }}
-          registry-password: ${{ secrets.GITHUB_TOKEN }}
-          format: spdx-json
-          output-file: sbom-image.spdx.json
-          upload-artifact: false
+      # Direct syft (pinned): sbom-action cannot select a platform, and the
+      # image is arm64-only since v0.2.0 — syft on the amd64 runner otherwise
+      # asks the manifest for linux/amd64 and fails (release attempt 4).
+      # Registry auth via syft's own env (attempt 3 failed UNAUTHORIZED).
+      - name: SBOM (syft, spdx-json) — image
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
+            | sh -s -- -b /usr/local/bin v1.42.3
+          syft scan "registry:$IMAGE:latest" --platform linux/arm64 \
+            -o spdx-json=sbom-image.spdx.json
+        env:
+          SYFT_REGISTRY_AUTH_USERNAME: ${{ github.actor }}
+          SYFT_REGISTRY_AUTH_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
       - name: SBOM (cargo workspace)
         uses: anchore/sbom-action@v0
         with:
