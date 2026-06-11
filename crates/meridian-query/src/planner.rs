@@ -86,6 +86,10 @@ pub struct SearchResult {
     pub h3: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ts: Option<u64>,
+    /// Derivation-cluster annotation (Phase 7, ADR-18); `null` when the doc has
+    /// no sketch (web result never ingested) — never guessed from a snippet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<crate::evidence::ResultEvidence>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -95,6 +99,9 @@ pub struct SearchResponse {
     pub lane_requested: String,
     pub lane_effective: String,
     pub degraded: Vec<&'static str>,
+    /// Source-independence block (Phase 7, ADR-18/20); absent = feature off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<crate::evidence::EvidenceBlock>,
 }
 
 /// Cached fusion output (SPEC §8.4 query cache: 128MB weighted, TTI 15m, TTL 2h
@@ -104,6 +111,7 @@ pub struct SearchResponse {
 struct CachedSearch {
     results: Vec<SearchResult>,
     degraded: Vec<&'static str>,
+    evidence: Option<crate::evidence::EvidenceBlock>,
 }
 
 /// Weighted cost of a cached entry. Counts every owned allocation (strings,
@@ -125,6 +133,10 @@ fn cached_search_weight(v: &Arc<CachedSearch>) -> u32 {
         .sum();
     let fixed = std::mem::size_of::<CachedSearch>()
         + v.degraded.capacity() * std::mem::size_of::<&'static str>()
+        + v.evidence
+            .as_ref()
+            .map(|e| 64 + e.clusters.len() * 16)
+            .unwrap_or(0)
         + 256; // moka entry + key + Arc bookkeeping
     ((owned + fixed) * 2) as u32
 }
@@ -149,6 +161,9 @@ pub struct Planner {
     anon_permits: Arc<tokio::sync::Semaphore>,
     /// LTR domain_prior source (analytics PageRank; NoPrior until first run).
     priors: Arc<dyn meridian_common::prior::DomainPriorSource>,
+    /// Sketch read handle for the evidence layer (Phase 7, ADR-18).
+    /// `None` = evidence off (config kill-switch or no ingestor wired).
+    sketches: Option<crate::ingest::SketchReader>,
     cfg: SearchConfig,
     vector_cfg: VectorConfig,
 }
@@ -167,6 +182,7 @@ impl Planner {
         shed: Arc<ShedState>,
         anon_max_searches: usize,
         priors: Arc<dyn meridian_common::prior::DomainPriorSource>,
+        sketches: Option<crate::ingest::SketchReader>,
         cfg: &SearchConfig,
         vector_cfg: &VectorConfig,
     ) -> Self {
@@ -196,6 +212,7 @@ impl Planner {
             anon_cache,
             anon_permits: Arc::new(tokio::sync::Semaphore::new(anon_max_searches.max(1))),
             priors,
+            sketches,
             cfg: cfg.clone(),
             vector_cfg: vector_cfg.clone(),
         }
@@ -369,6 +386,7 @@ impl Planner {
                     lane_requested: lane_name(&req.lane),
                     lane_effective: lane_name(&req.lane),
                     degraded: hit.degraded.clone(),
+                    evidence: hit.evidence.clone(),
                 });
             }
         }
@@ -607,6 +625,7 @@ impl Planner {
                 source: "local",
                 h3: (hit.h3_r7 != 0).then_some(hit.h3_r7),
                 ts: (hit.ts != 0).then_some(hit.ts),
+                evidence: None,
             });
         }
         if !bm25_list.is_empty() {
@@ -643,6 +662,7 @@ impl Planner {
                             source: "local",
                             h3: (d.h3_r7 != 0).then_some(d.h3_r7),
                             ts: (d.ts != 0).then_some(d.ts),
+                            evidence: None,
                         });
                     }
                     // Key with no resolvable doc (vector for a deleted/lost doc)
@@ -687,6 +707,7 @@ impl Planner {
                         source: "web",
                         h3: None,
                         ts: None,
+                        evidence: None,
                     });
                 }
             }
@@ -834,6 +855,21 @@ impl Planner {
             }
         }
 
+        // Evidence layer (Phase 7, ADR-18): derivation clusters over the FINAL
+        // result set — the block describes exactly what the caller sees.
+        // (ADR-18 sketches a pre-LTR slot; clustering moves there when LTR/MMR
+        // start consuming cluster features — recorded in the P7 exit note.)
+        // Sketch lookups are mmap'd point reads; the whole stage is bounded by
+        // the ≤2ms suite-11 gate. `sketches: None` = feature off ⇒ no block.
+        let evidence = self.sketches.as_ref().map(|reader| {
+            let ev_start = Instant::now();
+            let keys: Vec<u64> = results.iter().map(|r| url_key(&r.url)).collect();
+            let found = reader.get_many(&keys);
+            let block = crate::evidence::annotate(&mut results, &found);
+            timings.insert("evidence_ms", ev_start.elapsed().as_millis() as u64);
+            block
+        });
+
         // Bandit reward (SPEC §11): chosen arm "appeared" if any web-sourced
         // result is in the final top-10. Direct lane only by construction —
         // `chosen_arm` is only ever set on the direct branch above, so anon
@@ -855,6 +891,7 @@ impl Planner {
                 Arc::new(CachedSearch {
                     results: results.clone(),
                     degraded: degraded.clone(),
+                    evidence: evidence.clone(),
                 })
             };
             if cacheable {
@@ -877,6 +914,7 @@ impl Planner {
                 "local-only".to_owned()
             },
             degraded,
+            evidence,
         })
     }
 }

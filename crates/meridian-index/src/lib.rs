@@ -6,6 +6,7 @@
 //! implement one trait); in v1 tantivy owns segment lifecycle locally.
 
 pub mod lexical;
+pub mod sketch;
 
 use meridian_common::MeridianError;
 

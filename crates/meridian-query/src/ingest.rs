@@ -12,6 +12,7 @@ use meridian_egress::Lane;
 use meridian_embed::Embedder;
 use meridian_fetch::Fetcher;
 use meridian_index::lexical::{IndexDoc, LexicalIndex, domain_hash, url_key};
+use meridian_index::sketch;
 use meridian_vector::VectorStore;
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use std::sync::Arc;
@@ -25,6 +26,11 @@ const HASH_BY_KEY: TableDefinition<u64, &[u8]> = TableDefinition::new("hash_by_k
 /// Tombstoned content hashes: re-ingest of forgotten content is REFUSED until
 /// the operator clears the tombstone (SPEC §10 `/v1/forget`).
 const TOMBSTONES: TableDefinition<&[u8], u64> = TableDefinition::new("forget_tombstones_v1");
+/// url_key → 64-byte derivation sketch (Phase 7, ADR-18). Written in the SAME
+/// transaction as the dedup rows and removed in the SAME transaction as a
+/// forget — a sketch may never outlive its document (ADR-19, risk #17).
+/// Additive table: v0.1.0 volumes simply lack rows until docs are re-ingested.
+const SKETCHES: TableDefinition<u64, &[u8]> = TableDefinition::new("sketch_v1");
 
 #[derive(Debug, thiserror::Error)]
 pub enum IngestError {
@@ -60,7 +66,7 @@ pub struct IngestStats {
 
 pub struct Ingestor {
     index: Arc<LexicalIndex>,
-    dedup: Database,
+    dedup: Arc<Database>,
     fetcher: Arc<Fetcher>,
     embedder: Arc<Embedder>,
     vectors: Arc<VectorStore>,
@@ -96,11 +102,13 @@ impl Ingestor {
             .map_err(|e| IngestError::Dedup(e.to_string()))?;
         wtx.open_table(TOMBSTONES)
             .map_err(|e| IngestError::Dedup(e.to_string()))?;
+        wtx.open_table(SKETCHES)
+            .map_err(|e| IngestError::Dedup(e.to_string()))?;
         wtx.commit()
             .map_err(|e| IngestError::Dedup(e.to_string()))?;
         Ok(Self {
             index,
-            dedup,
+            dedup: Arc::new(dedup),
             fetcher,
             embedder,
             vectors,
@@ -116,6 +124,14 @@ impl Ingestor {
         self.vectors
             .persist()
             .map_err(|e| IngestError::Vector(e.to_string()))
+    }
+
+    /// Read handle on the sketch table for query-time evidence clustering
+    /// (Phase 7). Shares the dedup database — redb is single-open per process.
+    pub fn sketch_reader(&self) -> SketchReader {
+        SketchReader {
+            db: self.dedup.clone(),
+        }
     }
 
     /// Ingest a batch of text documents in ONE dedup transaction + ONE index
@@ -136,6 +152,9 @@ impl Ingestor {
                 .map_err(|e| IngestError::Dedup(e.to_string()))?;
             let tombstones = wtx
                 .open_table(TOMBSTONES)
+                .map_err(|e| IngestError::Dedup(e.to_string()))?;
+            let mut sketches = wtx
+                .open_table(SKETCHES)
                 .map_err(|e| IngestError::Dedup(e.to_string()))?;
             for doc in docs {
                 let text = doc.text.trim();
@@ -170,6 +189,12 @@ impl Ingestor {
                 let index_doc = self.build_doc(doc, text, ts);
                 by_key
                     .insert(index_doc.url_key, key)
+                    .map_err(|e| IngestError::Dedup(e.to_string()))?;
+                // Derivation sketch (Phase 7, ADR-18): same transaction as the
+                // dedup rows so forget atomicity covers it (ADR-19).
+                let sketch = meridian_index::sketch::Sketch::compute(text).encode();
+                sketches
+                    .insert(index_doc.url_key, sketch.as_slice())
                     .map_err(|e| IngestError::Dedup(e.to_string()))?;
                 accepted.push((index_doc.url_key, text.to_owned()));
                 self.index
@@ -295,6 +320,9 @@ impl Ingestor {
             let mut tombstones = wtx
                 .open_table(TOMBSTONES)
                 .map_err(|e| IngestError::Dedup(e.to_string()))?;
+            let mut sketches = wtx
+                .open_table(SKETCHES)
+                .map_err(|e| IngestError::Dedup(e.to_string()))?;
             for &key in keys {
                 let hash: Option<Vec<u8>> = by_key
                     .get(key)
@@ -312,6 +340,11 @@ impl Ingestor {
                         .map_err(|e| IngestError::Dedup(e.to_string()))?;
                     removed += 1;
                 }
+                // A sketch may never outlive its document (ADR-19, risk #17) —
+                // removed unconditionally, same transaction.
+                sketches
+                    .remove(key)
+                    .map_err(|e| IngestError::Dedup(e.to_string()))?;
                 self.index.delete_by_url_key(key);
                 let _ = self
                     .vectors
@@ -391,6 +424,36 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
+/// Read-only view of the sketch table for query-time evidence clustering
+/// (Phase 7). Cheap to clone; reads are mmap'd point lookups.
+#[derive(Clone)]
+pub struct SketchReader {
+    db: Arc<Database>,
+}
+
+impl SketchReader {
+    /// Fetch sketches for the given url_keys. Keys without a sketch (web
+    /// results never ingested, docs from a pre-v0.2.0 volume) are simply
+    /// absent from the map — the evidence layer reports them as un-asserted.
+    pub fn get_many(&self, keys: &[u64]) -> std::collections::HashMap<u64, sketch::Sketch> {
+        let mut out = std::collections::HashMap::new();
+        let Ok(rtx) = self.db.begin_read() else {
+            return out;
+        };
+        let Ok(table) = rtx.open_table(SKETCHES) else {
+            return out; // table absent on old volumes — evidence degrades to null
+        };
+        for &key in keys {
+            if let Ok(Some(v)) = table.get(key) {
+                if let Some(s) = sketch::Sketch::decode(v.value()) {
+                    out.insert(key, s);
+                }
+            }
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -455,6 +518,13 @@ mod tests {
 
         let hits = ingestor.index.search("meridian metre", 10).unwrap();
         assert_eq!(hits.len(), 1);
+        // Sketch row written in the same transaction (Phase 7, ADR-18/19).
+        let key = meridian_index::lexical::url_key("https://history.example/metre");
+        let sketches = ingestor.sketch_reader().get_many(&[key]);
+        assert!(
+            sketches.contains_key(&key),
+            "ingested doc must carry a derivation sketch"
+        );
         // Dense path actually ran: one vector under the doc's url_key, and the
         // stub embedding of the same text retrieves it.
         assert_eq!(ingestor.vectors.len(), 1);
@@ -469,7 +539,6 @@ mod tests {
         );
 
         // /v1/forget semantics (SPEC §10): removal + tombstone + refusal.
-        let key = meridian_index::lexical::url_key("https://history.example/metre");
         let removed = ingestor.forget_keys(&[key]).unwrap();
         assert_eq!(removed, 1);
         assert!(
@@ -481,6 +550,11 @@ mod tests {
             "forgotten doc must leave the lexical index"
         );
         assert_eq!(ingestor.vectors.len(), 0, "vector dropped too");
+        // The sketch may not outlive the document (ADR-19, risk #17).
+        assert!(
+            ingestor.sketch_reader().get_many(&[key]).is_empty(),
+            "forgotten doc's sketch must be gone"
+        );
         // Re-ingest of the SAME content is refused (tombstone), not deduped.
         let stats3 = ingestor.ingest_batch(&[doc]).unwrap();
         assert_eq!(stats3.accepted, 0);

@@ -78,6 +78,7 @@ fn temp_planner(
         Arc::new(ShedState::default()),
         2,
         Arc::new(meridian_common::prior::NoPrior),
+        None,
         &SearchConfig::default(),
         &vector_cfg,
     )
