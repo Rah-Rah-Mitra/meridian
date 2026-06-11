@@ -1,0 +1,41 @@
+{
+  "version": "0.1.0",
+  "kernel": "6.18.33+rpt-rpi-2712",
+  "page_size": 16384,
+  "nproc": 4,
+  "compiled_suites": [
+    "fusion",
+    "synfarm",
+    "spike",
+    "evidence",
+    "embed",
+    "thermal",
+    "ann",
+    "lexical",
+    "disk",
+    "rerank",
+    "anon"
+  ],
+  "profile_note": "release-bench (thin LTO, target-cpu=cortex-a76); product profile is fat LTO — gates re-validated under it at Phase-1 exit",
+  "suites": [
+    {
+      "name": "evidence",
+      "gate": "evidence stage ≤2ms p50 at the API max limit (50 results)",
+      "gate_passed": true,
+      "skipped": false,
+      "metrics": {
+        "corpus_docs": 1000,
+        "iterations": 200,
+        "p50_ms_limit100": 0.698,
+        "p50_ms_limit50": 0.208,
+        "p99_ms_limit100": 0.715,
+        "p99_ms_limit50": 0.237,
+        "sample_independent_sources_at_50": 20
+      },
+      "notes": [
+        "stage = SketchReader::get_many + evidence::annotate, the exact planner path; re-run on-device against the 100k volume at the P7 exit"
+      ],
+      "duration_ms": 409.436824
+    }
+  ]
+}

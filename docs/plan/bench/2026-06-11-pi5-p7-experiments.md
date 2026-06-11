@@ -78,6 +78,25 @@ The quantization costs ~0.07 hold-out F1 (recall, not precision — false-merge
 stays 0.0, the conservative direction) and stays above the 0.8 gate. The
 committed `p7-synfarm.json` is from the run including this gate.
 
+## Addendum 2 (same day): suite-11 `evidence` on-device, release-bench build
+
+Run with the CI-built `meridian-bench-aarch64` artifact (PR #2 run, release-bench
+profile) on the Pi 5 — raw data: [p7-evidence.json](2026-06-11-pi5-p7-evidence.json).
+
+| Metric | Measured | Gate | Verdict |
+|---|---|---|---|
+| evidence stage p50 @ limit 50 | **0.208 ms** | ≤2 ms | **PASS** (≈10× headroom) |
+| evidence stage p99 @ limit 50 | 0.237 ms | — | info |
+| evidence stage p50 @ 100 results | 0.698 ms | — | info (O(s²) headroom check) |
+| fusion suite (regression canary) | 0.155 ms p50 | <2 ms | PASS (Phase-0 baseline 0.144 ms) |
+
+Same binary re-confirmed suites 9 (incl. production-format gate) and 10 with
+identical statistical results (deterministic generators). The earlier
+debug-build "failure" of this gate (4.7 ms) was build-profile overhead, as the
+report header warns; timing gates are judged on release-bench only. The 1k-doc
+temp corpus stands in for the 100k volume here — the P7 exit re-runs this
+against the real store (redb point lookups grow ~log, no surprise expected).
+
 ## Honesty notes
 
 - Both suites score detectors against **synthetic generators built by the same
