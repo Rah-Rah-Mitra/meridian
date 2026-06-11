@@ -47,6 +47,16 @@ pub struct SearchRequest {
     /// `ts` window (unix seconds, inclusive).
     pub after: Option<u64>,
     pub before: Option<u64>,
+    /// Skip query-cache read AND write (Phase 8: both compare halves bypass —
+    /// a stale cached half would compare different points in time, and the
+    /// combined response must never be cached).
+    pub bypass_cache: bool,
+    /// Skip bandit engine selection (instance-default engines, no reward).
+    /// Phase 8: BOTH compare halves pin engines — the suite-12 probe measured
+    /// the bandit's arm churn at p90 JSD 0.67 within the direct lane alone,
+    /// which would drown any real vantage signal; pinning makes the two
+    /// halves differ by vantage only.
+    pub pin_engines: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -102,6 +112,9 @@ pub struct SearchResponse {
     /// Source-independence block (Phase 7, ADR-18/20); absent = feature off.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evidence: Option<crate::evidence::EvidenceBlock>,
+    /// Vantage-divergence block (Phase 8, ADR-22); only on compare=vantages.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub divergence: Option<crate::compare::DivergenceBlock>,
 }
 
 /// Cached fusion output (SPEC §8.4 query cache: 128MB weighted, TTI 15m, TTL 2h
@@ -362,8 +375,8 @@ impl Planner {
         // Query caches (SPEC §8.4): the shared one serves direct only; anon has
         // its own ephemeral instance (lane isolation, §12.4); region results are
         // vantage-dependent and never cached. Shedding stage 2 drops + bypasses.
-        let cacheable = matches!(req.lane, Lane::Direct);
-        let anon_cacheable = matches!(req.lane, Lane::Anon);
+        let cacheable = matches!(req.lane, Lane::Direct) && !req.bypass_cache;
+        let anon_cacheable = matches!(req.lane, Lane::Anon) && !req.bypass_cache;
         let key = Self::cache_key(&req, limit);
         if self
             .shed
@@ -387,6 +400,7 @@ impl Planner {
                     lane_effective: lane_name(&req.lane),
                     degraded: hit.degraded.clone(),
                     evidence: hit.evidence.clone(),
+                    divergence: None,
                 });
             }
         }
@@ -538,7 +552,7 @@ impl Planner {
                 let salt = blake3::hash(req.q.as_bytes()).as_bytes()[0] as u64
                     ^ (timings.len() as u64)
                     ^ (req.q.len() as u64).wrapping_mul(0x9E37);
-                let engines: Vec<String> = match (&self.bandit, is_direct) {
+                let engines: Vec<String> = match (&self.bandit, is_direct && !req.pin_engines) {
                     (Some(b), true) => {
                         let arm = b.choose(query_intent.key(), salt);
                         chosen_arm = Some(arm.id);
@@ -915,6 +929,7 @@ impl Planner {
             },
             degraded,
             evidence,
+            divergence: None,
         })
     }
 }

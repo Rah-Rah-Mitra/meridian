@@ -259,6 +259,13 @@ pub struct SearchConfig {
     pub anon_searx_deadline_ms: u64,
     /// Domain diversity cap in the final ranking (SPEC §11: 3).
     pub max_per_domain: usize,
+    /// Compare-vantages (Phase 8, ADR-22): max randomized delay before the
+    /// anon-side dispatch (risk #18 timing decorrelation). Default ON (30s
+    /// window); 0 = operator explicitly accepts the correlation risk.
+    pub compare_jitter_ms_max: u64,
+    /// Same-lane JSD noise floor (p90) from this deployment's suite-12 probe —
+    /// the per-request `exceeds_floor` reference. Measured, not invented.
+    pub compare_noise_floor_p90: f64,
 }
 
 impl Default for SearchConfig {
@@ -270,6 +277,9 @@ impl Default for SearchConfig {
             searx_deadline_ms: 800,
             anon_searx_deadline_ms: 8_000,
             max_per_domain: 3,
+            compare_jitter_ms_max: 30_000,
+            // 2026-06-11 probe (docs/plan/bench/, anon lane p90).
+            compare_noise_floor_p90: 0.30,
         }
     }
 }
