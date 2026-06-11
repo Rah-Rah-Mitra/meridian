@@ -91,6 +91,10 @@ fn main() -> ExitCode {
                 cfg.api_base = take(&mut i).unwrap_or_else(|| cfg.api_base.clone());
             }
             "--queries" => cfg.queries = take(&mut i).map(PathBuf::from),
+            "--cross-lane" => cfg.cross_lane = true,
+            "--floor-mean" => {
+                cfg.floor_mean = take(&mut i).and_then(|v| v.parse().ok()).unwrap_or(0.096);
+            }
             "--repeats" => cfg.repeats = take(&mut i).and_then(|v| v.parse().ok()).unwrap_or(8),
             "--out" => out_dir = take(&mut i).map(PathBuf::from).unwrap_or_default(),
             s if !s.starts_with("--") => suite = s.to_owned(),

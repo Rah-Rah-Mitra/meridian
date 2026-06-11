@@ -1,5 +1,13 @@
-//! Suite 12 (probe mode) — `divergence`: same-lane JSD noise floor
-//! (Phase 7 task 7.4, ADR-22 / 04-bench-plan §6).
+//! Suite 12 — `divergence`: same-lane JSD noise floor (probe mode, Phase 7
+//! task 7.4) and the cross-lane Phase-8 gate (`--cross-lane`, suite 12b)
+//! (ADR-22 / 04-bench-plan §6).
+//!
+//! Gate mode drives the SHIPPED `compare=vantages` endpoint (so engine pinning
+//! and cache bypass are exactly production behavior) and bootstrap-tests the
+//! cross-lane JSD distribution against the committed same-lane floor mean.
+//! Prerequisite for a timely run: `MERIDIAN_SEARCH__COMPARE_JITTER_MS_MAX=0`
+//! on the instance (the suite reports the jitter it observed; results are
+//! valid either way — just slow with the default 30s window).
 //!
 //! Issues the same queries repeatedly against a RUNNING meridiand, per lane
 //! (direct, then anon if available), and bootstraps the distribution of
@@ -81,6 +89,10 @@ pub fn run(cfg: &BenchConfig) -> SuiteResult {
     result.metric("repeats_per_query", cfg.repeats);
     result.metric("api_base", cfg.api_base.clone());
 
+    if cfg.cross_lane {
+        return run_cross_lane(cfg, &queries, result, start);
+    }
+
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -154,6 +166,132 @@ pub fn run(cfg: &BenchConfig) -> SuiteResult {
          gate must exceed it at p<0.05 (bootstrap). Commit this report to docs/plan/bench/."
             .to_owned(),
     );
+    result.duration_ms = start.elapsed().as_secs_f64() * 1e3;
+    result
+}
+
+/// Suite 12b: the Phase-8 divergence gate. Drives `compare=vantages` per
+/// (query, repeat) and tests mean cross-lane JSD against the committed
+/// same-lane floor mean (one-sample bootstrap).
+fn run_cross_lane(
+    cfg: &BenchConfig,
+    queries: &[String],
+    mut result: SuiteResult,
+    start: Instant,
+) -> SuiteResult {
+    let rt = match tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            result.note(format!("tokio runtime: {e}"));
+            result.gate("cross-lane JSD > floor at p<0.05", false);
+            result.duration_ms = start.elapsed().as_secs_f64() * 1e3;
+            return result;
+        }
+    };
+    let bearer = std::env::var("MERIDIAN_BEARER").ok();
+    let client = match reqwest::Client::builder()
+        // A compare = direct fan-out + jitter + anon fan-out; generous.
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            result.note(format!("http client: {e}"));
+            result.gate("cross-lane JSD > floor at p<0.05", false);
+            result.duration_ms = start.elapsed().as_secs_f64() * 1e3;
+            return result;
+        }
+    };
+
+    let mut samples: Vec<f64> = Vec::new();
+    let mut jitters: Vec<f64> = Vec::new();
+    let mut failed = 0usize;
+    rt.block_on(async {
+        for q in queries {
+            for _rep in 0..cfg.repeats {
+                let url = format!(
+                    "{}/v1/search?q={}&scope=web&compare=vantages&limit={ANALYZE_PREFIX}",
+                    cfg.api_base.trim_end_matches('/'),
+                    percent_encode(q),
+                );
+                let mut req = client.get(url);
+                if let Some(b) = bearer.as_deref() {
+                    req = req.header("authorization", format!("Bearer {b}"));
+                }
+                match req.send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        match resp.json::<serde_json::Value>().await {
+                            Ok(body) => {
+                                let d = &body["divergence"];
+                                if let Some(jsd) = d["jsd"].as_f64() {
+                                    samples.push(jsd);
+                                    if let Some(j) = d["jitter_applied_ms"].as_f64() {
+                                        jitters.push(j);
+                                    }
+                                } else {
+                                    failed += 1;
+                                }
+                            }
+                            Err(_) => failed += 1,
+                        }
+                    }
+                    _ => failed += 1,
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(2_500)).await;
+            }
+        }
+    });
+
+    result.metric("mode", "cross-lane (compare=vantages)");
+    result.metric("cross_samples", samples.len());
+    result.metric("cross_failed", failed);
+    if !jitters.is_empty() {
+        result.metric("mean_jitter_observed_ms", round4(mean(&jitters)));
+    }
+    if samples.len() < 10 {
+        result.note(format!(
+            "only {} cross-lane samples — not enough for the gate (lane down? \
+             compare disabled?)",
+            samples.len()
+        ));
+        result.gate("cross-lane JSD > floor at p<0.05", false);
+        result.duration_ms = start.elapsed().as_secs_f64() * 1e3;
+        return result;
+    }
+
+    let mut sorted = samples.clone();
+    let cross_p50 = percentile_ms(&mut sorted, 50.0);
+    let cross_p90 = percentile_ms(&mut sorted, 90.0);
+    result.metric("cross_jsd_mean", round4(mean(&samples)));
+    result.metric("cross_jsd_p50", round4(cross_p50));
+    result.metric("cross_jsd_p90", round4(cross_p90));
+    result.metric("floor_mean_reference", round4(cfg.floor_mean));
+
+    // One-sample bootstrap: p = P(resampled cross mean ≤ floor mean).
+    let mut rng = Rng::new(0xC405_2026);
+    let mut le = 0usize;
+    for _ in 0..BOOTSTRAP_RESAMPLES {
+        let m: f64 = (0..samples.len())
+            .map(|_| samples[rng.below(samples.len())])
+            .sum::<f64>()
+            / samples.len() as f64;
+        if m <= cfg.floor_mean {
+            le += 1;
+        }
+    }
+    let p_value = le as f64 / BOOTSTRAP_RESAMPLES as f64;
+    result.metric("bootstrap_p_value", round4(p_value));
+    result.note(
+        "gate per SPEC §16 P8: mean cross-lane JSD (shipped compare=vantages, \
+         engines pinned both halves) exceeds the committed same-lane floor mean \
+         at p<0.05 (one-sample bootstrap)"
+            .to_owned(),
+    );
+    result.gate("cross-lane JSD > floor at p<0.05 (bootstrap)", p_value < 0.05);
     result.duration_ms = start.elapsed().as_secs_f64() * 1e3;
     result
 }
