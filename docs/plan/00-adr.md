@@ -234,7 +234,8 @@ M=16/efc=128/ef=64, serialization + mmap `view()`.
   portable-C++ (drop the SIMD feature, keep i8) → (3) hnsw_rs with offset-u8
   quantization, accepted as degraded-perf last resort.
 
-**Status: CONFIRMED — fallback ladder RUNG 2 ACTIVATED (2026-06-10).**
+**Status: CONFIRMED — fallback ladder RUNG 2 ACTIVATED (2026-06-10);
+RUNG 1 RESTORED at the P7 exit (2026-06-11) — see below.**
 
 **Risk #3 tripwire fired (Phase 2):** usearch's default `numkong` SIMD backend
 compiles SVE/SME C kernels (`-DNK_TARGET_SVE=1 -DNK_TARGET_SME=1 …`) that zig's
@@ -248,6 +249,23 @@ so the perf loss is immaterial — but the Phase-0 ANN numbers were numkong, so 
 Phase-2 exit note re-validates the portable path on-device. numkong's NEON-dotprod
 kernels remain available on gnu if a future need justifies a per-target feature
 split; not worth the complexity now.
+
+**P7-exit finding (2026-06-11): RUNG 2 WAS A RECALL DEFECT.** The Phase-2
+re-validation covered latency and the end-to-end nDCG eval — NOT the synthetic
+recall gate. The P7 exit re-ran suite 2 and found the portable build's i8
+cosine path collapses with scale: recall@10 **0.52 @10k → 0.007 @100k → 0.0
+@1M** (deterministic; reproduced with both the CI gnu artifact and a native
+local build) vs Phase-0's numkong 0.98. The product's dense lane has been
+returning near-noise neighbors at corpus scale since Phase 2 — masked because
+RRF fusion is BM25-dominant and the 100-query eval moved (hybrid 0.42 ≥ BM25
+0.38) on real embeddings. **Resolution: rung 1 restored** — numkong 7.7.0's
+build script now probes each ISA kernel individually and hard-drops kernels
+whose flags the compiler rejects (the per-kernel-probe fix the Phase-2-era
+version lacked), so zig/musl builds keep NEON±dotprod and skip SVE/SME.
+Re-measured with numkong: recall@10 **0.999 @100k, 0.92–0.98 @10k** across the
+ef sweep. CI musl cross-build is the gate that proves the zig path; the bench
+suite-2 recall gate re-runs at every exit henceforth (it was the only
+instrument that could see this, and it sat unused from Phase 2 to Phase 7).
 
 ## ADR-08 — mimalloc global allocator
 
