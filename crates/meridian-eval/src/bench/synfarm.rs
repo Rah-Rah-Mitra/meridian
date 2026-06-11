@@ -285,6 +285,23 @@ fn generate(seed: u64, variant: Variant) -> Vec<Doc> {
                 words: sentences.concat(),
             });
         }
+
+        // Tiny unrelated stubs (8–15 words): the size-asymmetry adversarial
+        // case from the P7 exit drill — chance similarity noise against tiny
+        // shingle sets amplifies through the containment denominator. Each is
+        // its own origin; ANY merge involving one is a false merge.
+        for stub in 0..2u32 {
+            let len = 8 + rng.below(8);
+            let words: Vec<String> = (0..len)
+                .map(|_| general[rng.below(general.len())].clone())
+                .collect();
+            next_domain += 1;
+            docs.push(Doc {
+                origin: farm * 100 + 50 + stub,
+                domain: next_domain - 1,
+                words,
+            });
+        }
     }
     docs
 }
