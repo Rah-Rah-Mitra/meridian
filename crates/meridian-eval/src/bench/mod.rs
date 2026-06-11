@@ -9,6 +9,11 @@ use serde::Serialize;
 use std::path::PathBuf;
 
 pub mod fusion;
+pub mod spike;
+pub mod synfarm;
+
+#[cfg(feature = "bench-divergence")]
+pub mod divergence;
 
 #[cfg(feature = "bench-embed")]
 pub mod embed;
@@ -44,6 +49,13 @@ pub struct BenchConfig {
     pub scratch_dir: PathBuf,
     /// Thermal loop duration in seconds (600 per SPEC; shorter for smoke runs).
     pub thermal_secs: u64,
+    /// Base URL of a RUNNING meridiand for the divergence probe (suite 12).
+    pub api_base: String,
+    /// Optional query list (one per line) for the divergence probe; defaults to
+    /// the embedded region-sensitive set.
+    pub queries: Option<PathBuf>,
+    /// Repeats per query per lane for the divergence probe.
+    pub repeats: usize,
 }
 
 impl Default for BenchConfig {
@@ -55,6 +67,9 @@ impl Default for BenchConfig {
             ann_vectors: 1_000_000,
             scratch_dir: PathBuf::from("bench-scratch"),
             thermal_secs: 600,
+            api_base: "http://127.0.0.1:8080".to_owned(),
+            queries: None,
+            repeats: 8,
         }
     }
 }
@@ -246,7 +261,7 @@ pub(crate) fn synthetic_sentences(n: usize, rng: &mut Rng) -> Vec<String> {
 fn compiled_suites() -> Vec<&'static str> {
     // `mut` is unused only when every bench feature is off.
     #[allow(unused_mut)]
-    let mut v = vec!["fusion"];
+    let mut v = vec!["fusion", "synfarm", "spike"];
     #[cfg(feature = "bench-embed")]
     v.extend(["embed", "thermal"]);
     #[cfg(feature = "bench-ann")]
@@ -257,5 +272,7 @@ fn compiled_suites() -> Vec<&'static str> {
     v.push("rerank");
     #[cfg(feature = "bench-anon")]
     v.push("anon");
+    #[cfg(feature = "bench-divergence")]
+    v.push("divergence");
     v
 }

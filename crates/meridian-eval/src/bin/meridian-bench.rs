@@ -43,6 +43,18 @@ const SUITES: &[(&str, &str)] = &[
         "anon",
         "Arti bootstrap + isolated circuit timing + RSS delta — informational",
     ),
+    (
+        "synfarm",
+        "suite 9: syndication-farm sketch sweep — gate F1 >0.8 + false-merge <5% (both variants)",
+    ),
+    (
+        "spike",
+        "suite 10: planted-spike trends study, ratio vs EB+Gi*+BH — gate ≥3× FPR reduction",
+    ),
+    (
+        "divergence",
+        "suite 12 probe: same-lane JSD noise floor vs a running meridiand — informational (device)",
+    ),
 ];
 
 fn main() -> ExitCode {
@@ -71,6 +83,11 @@ fn main() -> ExitCode {
             "--thermal-secs" => {
                 cfg.thermal_secs = take(&mut i).and_then(|v| v.parse().ok()).unwrap_or(600);
             }
+            "--api-base" => {
+                cfg.api_base = take(&mut i).unwrap_or_else(|| cfg.api_base.clone());
+            }
+            "--queries" => cfg.queries = take(&mut i).map(PathBuf::from),
+            "--repeats" => cfg.repeats = take(&mut i).and_then(|v| v.parse().ok()).unwrap_or(8),
             "--out" => out_dir = take(&mut i).map(PathBuf::from).unwrap_or_default(),
             s if !s.starts_with("--") => suite = s.to_owned(),
             s => {
@@ -105,6 +122,14 @@ fn main() -> ExitCode {
 
     if wants("fusion") {
         run_and_print(&mut report, meridian_eval::bench::fusion::run(&cfg));
+    }
+
+    if wants("synfarm") {
+        run_and_print(&mut report, meridian_eval::bench::synfarm::run(&cfg));
+    }
+
+    if wants("spike") {
+        run_and_print(&mut report, meridian_eval::bench::spike::run(&cfg));
     }
 
     if wants("embed") {
@@ -166,6 +191,16 @@ fn main() -> ExitCode {
         run_and_print(
             &mut report,
             SuiteResult::skipped("anon", "not compiled in (bench-anon)"),
+        );
+    }
+
+    if wants("divergence") {
+        #[cfg(feature = "bench-divergence")]
+        run_and_print(&mut report, meridian_eval::bench::divergence::run(&cfg));
+        #[cfg(not(feature = "bench-divergence"))]
+        run_and_print(
+            &mut report,
+            SuiteResult::skipped("divergence", "not compiled in (bench-divergence)"),
         );
     }
 
