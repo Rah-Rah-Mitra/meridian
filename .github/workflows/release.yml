@@ -93,6 +93,11 @@ jobs:
         uses: anchore/sbom-action@v0
         with:
           image: ${{ env.IMAGE }}:latest
+          # The repo/registry is private and current syft versions no longer
+          # inherit the docker-login credentials — pass them explicitly
+          # (v0.2.0 release attempt 3 failed here with UNAUTHORIZED).
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
           format: spdx-json
           output-file: sbom-image.spdx.json
           upload-artifact: false
