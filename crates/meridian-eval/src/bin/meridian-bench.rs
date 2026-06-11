@@ -55,6 +55,10 @@ const SUITES: &[(&str, &str)] = &[
         "divergence",
         "suite 12 probe: same-lane JSD noise floor vs a running meridiand — informational (device)",
     ),
+    (
+        "evidence",
+        "suite 11: sketch-lookup + containment clustering latency — gate ≤2ms p50 @ limit 50",
+    ),
 ];
 
 fn main() -> ExitCode {
@@ -130,6 +134,10 @@ fn main() -> ExitCode {
 
     if wants("spike") {
         run_and_print(&mut report, meridian_eval::bench::spike::run(&cfg));
+    }
+
+    if wants("evidence") {
+        run_and_print(&mut report, meridian_eval::bench::evidence::run(&cfg));
     }
 
     if wants("embed") {

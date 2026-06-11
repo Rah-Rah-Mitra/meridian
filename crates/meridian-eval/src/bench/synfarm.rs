@@ -107,6 +107,27 @@ pub fn run(_cfg: &BenchConfig) -> SuiteResult {
     let gate_radius = simhash_gate_radius(&primary, combo.k, 0.99);
     result.metric("recommended_simhash_hamming_gate", gate_radius);
 
+    // Production-format validation: the shipped `meridian_index::sketch::Sketch`
+    // (densified one-permutation b=8 MinHash, 60 bins, containment τ) is a
+    // DIFFERENT estimator from the full-u64 sweep above — quantization and OPH
+    // densification change the variance, so it gets its own gate on both
+    // variants before ADR-18 may rely on it.
+    let prod_p = score_production(&primary);
+    let prod_h = score_production(&held_out);
+    result.metric("production_f1_primary", round3(prod_p.f1));
+    result.metric("production_false_merge_primary", round3(prod_p.false_merge));
+    result.metric("production_f1_held_out", round3(prod_h.f1));
+    result.metric(
+        "production_false_merge_held_out",
+        round3(prod_h.false_merge),
+    );
+    result.note(format!(
+        "production format = meridian_index::sketch (OPH b=8, {} bins, k={}, containment τ={})",
+        meridian_index::sketch::BINS,
+        meridian_index::sketch::SHINGLE_K,
+        meridian_index::sketch::CONTAINMENT_TAU
+    ));
+
     result.note(format!(
         "winner: k={} perms={} measure={} tau={} — adopt these as the ADR-18 constants",
         combo.k,
@@ -128,11 +149,36 @@ pub fn run(_cfg: &BenchConfig) -> SuiteResult {
     }
 
     result.gate(
-        "pairwise F1 > 0.8 AND false-merge < 5% on BOTH generator variants",
-        gate_ok(&sp) && gate_ok(&sh) && (sp.f1 - sh.f1).abs() <= 0.15,
+        "pairwise F1 > 0.8 AND false-merge < 5% on BOTH variants — for the swept \
+         winner AND the production sketch format",
+        gate_ok(&sp)
+            && gate_ok(&sh)
+            && (sp.f1 - sh.f1).abs() <= 0.15
+            && gate_ok(&prod_p)
+            && gate_ok(&prod_h),
     );
     result.duration_ms = start.elapsed().as_secs_f64() * 1e3;
     result
+}
+
+/// Cluster a corpus with the SHIPPED sketch implementation and score it.
+fn score_production(docs: &[Doc]) -> Scores {
+    use meridian_index::sketch::{CONTAINMENT_TAU, Sketch};
+    let sketches: Vec<Sketch> = docs
+        .iter()
+        .map(|d| Sketch::compute(&d.words.join(" ")))
+        .collect();
+    let n = docs.len();
+    let mut uf = UnionFind::new(n);
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if sketches[i].containment(&sketches[j]) >= CONTAINMENT_TAU {
+                uf.union(i, j);
+            }
+        }
+    }
+    let labels: Vec<usize> = (0..n).map(|i| uf.find(i)).collect();
+    pairwise_scores(docs, &labels)
 }
 
 #[derive(Clone, Copy)]

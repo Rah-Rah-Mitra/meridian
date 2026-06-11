@@ -62,19 +62,39 @@ Response:
       "rank_signals": { "bm25": 12.1, "ann": 0.71, "rrf": 0.032, "ltr": 0.83, "freshness": 0.62, "geo": 0.9, "domain_prior": 0.4 },
       "source": "local",
       "h3": 608533319155138559,
-      "ts": 1749600000
+      "ts": 1749600000,
+      "evidence": { "cluster": 0 }
     }
   ],
-  "timings": { "plan": 1, "lexical": 9, "fusion": 2, "total": 14 },
+  "timings": { "plan": 1, "lexical": 9, "fusion": 2, "evidence_ms": 0, "total": 14 },
   "lane_requested": "direct",
   "lane_effective": "direct",
-  "degraded": ["searx_timeout"]
+  "degraded": ["searx_timeout"],
+  "evidence": {
+    "schema": 1,
+    "independent_source_count": 3,
+    "apparent_source_count": 10,
+    "sketched_results": 7,
+    "clusters": [ { "id": 0, "members": 5, "domains": 2 } ]
+  }
 }
 ```
 
 `h3` (res-7 cell of geo-tagged local docs) and `ts` appear only when the
 document has them. `degraded` lists stages that timed out or were skipped —
 results are still served honestly labeled.
+
+**Evidence block** (v0.2.0, additive — absent when `[evidence] enabled =
+false`): results are clustered by text-derivation similarity (MinHash
+containment over ingest-time sketches); each cluster is one apparent ORIGIN, so
+`independent_source_count` < `apparent_source_count` means some results are
+copies/syndications of each other, not independent corroboration. A cluster
+with `members > domains` is cross-domain syndication — the case plain domain
+grouping cannot see. **Honesty contract:** only results whose documents were
+ingested (and therefore sketched from full text) participate; web results
+never fetched carry `evidence: null` and are excluded from the count —
+independence is never guessed from a snippet. `sketched_results` states the
+basis. Documents ingested before v0.2.0 lack sketches until re-ingested.
 
 ## POST /v1/ingest  (bearer)
 
@@ -125,8 +145,16 @@ Lane health, honestly reported:
 | `window` | `7d` | `24h` / `7d` / `all`. Windows narrower than `all` exclude docs without a timestamp. |
 
 ```json
-{ "res": 5, "cells": [ { "h3": "851f1d4bfffffff", "count": 42, "lat": 52.5, "lon": 13.4 } ] }
+{ "res": 5, "schema": 1, "cells": [
+  { "h3": "851f1d4bfffffff", "count": 42, "lat": 52.5, "lon": 13.4,
+    "z": 3.1, "q_value": 0.004, "significant": true }
+] }
 ```
+
+`z` / `q_value` / `significant` (v0.2.0, ADR-21): Getis-Ord Gi* hot-spot
+statistics over each cell's H3 k-ring-1 neighborhood with Benjamini-Hochberg
+FDR across all returned cells. `significant` (q ≤ 0.05) is the defensible
+"this is a hot spot" flag; a big raw `count` alone is not.
 
 ## GET /v1/trends
 
@@ -141,12 +169,24 @@ Requires `[analytics] enabled = true` (GDELT opt-in), else `404`.
 ```json
 {
   "series": [[20608, 17], [20609, 25]],
-  "top_movers": [ { "root": 14, "latest": 25, "mean": 11.5, "ratio": 2.17 } ]
+  "top_movers": [
+    { "root": 14, "latest": 25, "mean": 11.5, "ratio": 2.17,
+      "shrunk_rate": 18.2, "z": 4.7, "q_value": 0.001, "significant": true },
+    { "root": 3, "latest": 4, "mean": 1.2, "ratio": 3.33,
+      "shrunk_rate": 2.1, "z": 1.1, "q_value": 0.41, "significant": false,
+      "label": "likely low-sample noise" }
+  ]
 }
 ```
 
 `series` is `(day, count)` ascending, where `day` is days since the Unix
-epoch; `top_movers` ranks root codes by latest/mean ratio over the window.
+epoch. `top_movers` (v0.2.0, ADR-21) ranks root codes by `z` — an
+empirical-Bayes-shrunk, overdispersion-aware standardized excess of the latest
+day over the window baseline, with Benjamini-Hochberg FDR across roots.
+`significant` (q ≤ 0.05) is the defensible "this moved" flag; `ratio` is the
+raw latest/mean kept for explainability, and an elevated ratio WITHOUT
+significance carries the `label` honesty marker. GDELT caveat: all trends
+describe *media coverage*, not ground truth about the world (ADR-15).
 
 ## POST /v1/forget  (bearer)
 
