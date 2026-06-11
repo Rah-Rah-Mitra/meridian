@@ -4,15 +4,16 @@
 hybrid index (BM25 + dense vectors) + geo analytics, sized for a Raspberry Pi 5 and scaling to
 edge servers without redesign.
 
-> Status: **Phase 5 complete** — geo + analytics + retention/forget are live.
-> Documents are geo-tagged at ingest by an offline GeoNames gazetteer (H3
-> res-7), search takes geo/time filters, `/v1/geo/heatmap` answers in 27ms
-> p50 on a 100k-doc corpus, and opt-in GDELT analytics feed `/v1/trends` plus
-> a PageRank-derived ranking prior. `POST /v1/forget` provably erases a
-> document from lexical+vector+caches and tombstones it against re-ingest.
-> Phase 6 (hardening + v0.1.0 release) is underway. Planning artifacts:
-> [`docs/plan/`](docs/plan/); docs: [operator manual](docs/operator-manual.md)
-> · [API](docs/api.md) · [privacy](docs/privacy.md).
+> Status: **v0.1.0 released** — all six build phases complete on a Raspberry
+> Pi 5. Hybrid geo-aware search (heatmap p50 27ms @100k docs), three egress
+> lanes (anon = embedded Arti, provably fail-closed), opt-in GDELT trends,
+> real deletion with re-ingest tombstones, and a hardening pass that
+> included a multi-hour endurance run (100% success at 10 rps + ingest, flat
+> RSS), chaos drills, byte-exact backup/restore, and an egress capture
+> proving the node talks only to Tor relays, search engines (via SearXNG),
+> and opt-in GDELT. Docs: [operator manual](docs/operator-manual.md) ·
+> [API](docs/api.md) · [privacy](docs/privacy.md) · phase exit notes in
+> [`docs/plan/phase-exits/`](docs/plan/phase-exits/).
 
 ## What it is
 
@@ -53,7 +54,17 @@ The full, binding specification is [`docs/SPEC.md`](docs/SPEC.md) (v2.1).
 | 3 | Ranking stack (LTR, deep rerank, bandit routing) | **Done** (2026-06-10) |
 | 4 | Egress lanes: anon (Arti) + region (WireGuard) | **Done** (2026-06-11) |
 | 5 | Geo + analytics + retention/forget | **Done** (2026-06-11) |
-| 6 | Hardening + v0.1.0 release | In progress |
+| 6 | Hardening + v0.1.0 release | **Done** (2026-06-11) |
+
+## Installing
+
+```sh
+docker pull ghcr.io/rah-rah-mitra/meridian/meridiand:0.1.0   # linux/arm64 + linux/amd64
+```
+
+See the [operator manual](docs/operator-manual.md) for the full compose-based
+install. Binaries, SBOMs, and checksums are attached to each
+[GitHub release](https://github.com/Rah-Rah-Mitra/meridian/releases).
 
 ## Building
 

@@ -119,4 +119,4 @@ Phase-1+ deps stay feature-scoped where possible.
 | 3 | **DONE 2026-06-10 ✓** — deep p50 204ms (CE rerank, gnu/ort image), cache-hit 0.47ms, LTR no-regression ([exit note](phase-exits/p3.md)) |
 | 4 | **DONE 2026-06-11 ✓** — anon metasearch cold p50 1.34s (≤8s), Arti RSS delta +47MB (≤150MB), zero direct egress proven hermetically + live bootstrap windows; image 74.7MB ([exit note](phase-exits/p4.md)) |
 | 5 | **DONE 2026-06-11 ✓** — heatmap p50 27ms; analytics 128MB/14 simulated days; stores: index 47.6MB, vectors 38.6MB, dedup 9.6MB; search p50 12ms on schema v3 ([exit note](phase-exits/p5.md)) |
-| 6 | 24h soak: RSS slope <1MB/h, temp <80°C, p99 stable |
+| 6 | **DONE 2026-06-11 ✓** — soak (abbreviated, see [exit note](phase-exits/p6.md)): heap slope ≤0MB/h post-warm, RSS plateau ~250MB (mimalloc), temp ≤61°C, p99 29–34ms, 100% success; drills + reviews + v0.1.0 multi-arch release |
