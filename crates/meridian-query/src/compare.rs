@@ -66,6 +66,17 @@ pub async fn compare_vantages(
     let mut direct_req = req.clone();
     direct_req.lane = Lane::Direct;
     let mut direct = planner.search(direct_req).await?;
+    // An empty half is an OUTAGE, not a vantage: jsd(∅,∅)=0 would read as
+    // "no divergence" — fabricated agreement. Refuse before spending a Tor
+    // circuit on a doomed comparison. (Found live: the searxng sidecar was
+    // down and 48 gate compares silently reported zero divergence.)
+    if direct.results.is_empty() {
+        return Err(PlanError::Lane(meridian_egress::EgressError::NotReady(
+            "compare: direct half returned no web results (engines unreachable \
+             or deadline too tight) — comparison refused, not fabricated"
+                .into(),
+        )));
+    }
 
     // Timing decorrelation BEFORE the anon dispatch (risk #18). SystemTime
     // nanos are not crypto-grade randomness; the adversary model here is
@@ -88,6 +99,13 @@ pub async fn compare_vantages(
     // Fail-closed: any anon-half error (Arti down, no backend, admission
     // budget) fails the WHOLE compare — never a silent direct-only answer.
     let anon = planner.search(anon_req).await?;
+    if anon.results.is_empty() {
+        return Err(PlanError::Lane(meridian_egress::EgressError::NotReady(
+            "compare: anon half returned no web results — comparison refused, \
+             not fabricated"
+                .into(),
+        )));
+    }
 
     let dist_direct = domain_distribution(&direct);
     let dist_anon = domain_distribution(&anon);

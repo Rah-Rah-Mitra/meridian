@@ -1,0 +1,183 @@
+{
+  "index_settings": {
+    "docstore_compression": "lz4",
+    "docstore_blocksize": 16384
+  },
+  "segments": [
+    {
+      "segment_id": "41b58524-b76a-4fa8-92aa-f926c511ac53",
+      "max_doc": 20000,
+      "deletes": null
+    },
+    {
+      "segment_id": "808e4c58-7103-436f-95db-62ea4554c0d7",
+      "max_doc": 12000,
+      "deletes": null
+    },
+    {
+      "segment_id": "4559b895-ac9c-46db-8bdd-ac4f26bf590a",
+      "max_doc": 12000,
+      "deletes": null
+    },
+    {
+      "segment_id": "8b1ebbc7-6931-4528-951c-bbe38f55fc85",
+      "max_doc": 12000,
+      "deletes": null
+    },
+    {
+      "segment_id": "74649d5c-050a-4202-a1ac-0af39b907dbe",
+      "max_doc": 12000,
+      "deletes": null
+    },
+    {
+      "segment_id": "a50faa6e-c55c-4afc-8086-6b7c5d2aba52",
+      "max_doc": 11992,
+      "deletes": null
+    },
+    {
+      "segment_id": "a6854b53-2ead-4f5b-be01-7e072f57497d",
+      "max_doc": 8000,
+      "deletes": null
+    },
+    {
+      "segment_id": "8aaf0e9f-8f7a-4756-ba71-d1b25b540115",
+      "max_doc": 510,
+      "deletes": null
+    },
+    {
+      "segment_id": "d78f2c25-12ce-44c4-9bff-29db2378d17f",
+      "max_doc": 490,
+      "deletes": null
+    },
+    {
+      "segment_id": "4972aef7-38d6-446a-be9f-1ac9f866bf82",
+      "max_doc": 36,
+      "deletes": null
+    },
+    {
+      "segment_id": "fc053aef-4f21-43d3-bdb6-e8ed9fcd36e9",
+      "max_doc": 31,
+      "deletes": null
+    }
+  ],
+  "schema": [
+    {
+      "name": "url",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "basic",
+          "fieldnorms": true,
+          "tokenizer": "raw"
+        },
+        "stored": true,
+        "fast": false
+      }
+    },
+    {
+      "name": "url_key",
+      "type": "u64",
+      "options": {
+        "indexed": true,
+        "fieldnorms": true,
+        "fast": true,
+        "stored": false
+      }
+    },
+    {
+      "name": "title",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "position",
+          "fieldnorms": true,
+          "tokenizer": "en_stem_meridian"
+        },
+        "stored": true,
+        "fast": false
+      }
+    },
+    {
+      "name": "body",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "freq",
+          "fieldnorms": true,
+          "tokenizer": "en_stem_meridian"
+        },
+        "stored": false,
+        "fast": false
+      }
+    },
+    {
+      "name": "snippet",
+      "type": "text",
+      "options": {
+        "stored": true,
+        "fast": false
+      }
+    },
+    {
+      "name": "h3_r7",
+      "type": "u64",
+      "options": {
+        "indexed": true,
+        "fieldnorms": true,
+        "fast": true,
+        "stored": false
+      }
+    },
+    {
+      "name": "h3_r5",
+      "type": "u64",
+      "options": {
+        "indexed": true,
+        "fieldnorms": true,
+        "fast": true,
+        "stored": false
+      }
+    },
+    {
+      "name": "ts",
+      "type": "u64",
+      "options": {
+        "indexed": true,
+        "fieldnorms": true,
+        "fast": true,
+        "stored": false
+      }
+    },
+    {
+      "name": "domain_hash",
+      "type": "u64",
+      "options": {
+        "indexed": true,
+        "fieldnorms": true,
+        "fast": true,
+        "stored": false
+      }
+    },
+    {
+      "name": "lang",
+      "type": "u64",
+      "options": {
+        "indexed": false,
+        "fieldnorms": false,
+        "fast": true,
+        "stored": false
+      }
+    },
+    {
+      "name": "quality",
+      "type": "f64",
+      "options": {
+        "indexed": false,
+        "fieldnorms": false,
+        "fast": true,
+        "stored": false
+      }
+    }
+  ],
+  "opstamp": 89439
+}

@@ -11,7 +11,7 @@
 //! document itself is the single grade-3 relevant. Synthetic v0 — the
 //! operator-labeled set (06-operator-questions Q1) remains open.
 
-use meridian_eval::metrics::{mrr_at, ndcg_at, recall_at};
+use meridian_eval::metrics::{ece_10, mrr_at, ndcg_at, recall_at, spearman};
 use meridian_eval::qrels;
 use meridian_eval::stats::Rng;
 use meridian_rank::{Features, LinearLtr, Scorer, title_match_ratio};
@@ -325,6 +325,11 @@ fn run(data: &str, models: &str, queries: &str, qrels_path: &str) -> ExitCode {
     let mut ltr_scores = (0.0, 0.0, 0.0);
     let scorer = LinearLtr::default();
     let mut evaluated = 0usize;
+    // Suite 13 (Phase 8, ADR-23): per-query QPP predictors vs measured nDCG@10.
+    let mut qpp_score: Vec<f64> = Vec::new();
+    let mut qpp_nqc: Vec<f64> = Vec::new();
+    let mut qpp_clarity: Vec<f64> = Vec::new();
+    let mut qpp_ndcg: Vec<f64> = Vec::new();
 
     for (qid, query) in &set.queries {
         let Some(judgments) = set.qrels.get(qid) else {
@@ -407,6 +412,53 @@ fn run(data: &str, models: &str, queries: &str, qrels_path: &str) -> ExitCode {
             .filter_map(|(k, _)| url_by_key.get(k).cloned())
             .collect();
 
+        // Suite 13: confidence over the SAME shapes the planner feeds qpp —
+        // top = the LTR-ranked head's RRF scores + snippets, pool = the scored
+        // top-100 fused candidates.
+        let snippet_by_key: std::collections::HashMap<u64, String> = {
+            let mut m: std::collections::HashMap<u64, String> = bm25_full_for_ltr
+                .iter()
+                .map(|h| (h.url_key, h.snippet.clone()))
+                .collect();
+            let missing: Vec<u64> = fused
+                .iter()
+                .take(100)
+                .map(|(k, _)| *k)
+                .filter(|k| !m.contains_key(k))
+                .collect();
+            for d in index.docs_by_keys(&missing).unwrap_or_default() {
+                m.insert(d.url_key, d.snippet);
+            }
+            m
+        };
+        let rrf_by_key: std::collections::HashMap<u64, f32> =
+            fused.iter().take(100).map(|(k, r)| (*k, *r)).collect();
+        let pool: Vec<(f32, &str)> = fused
+            .iter()
+            .take(100)
+            .filter_map(|(k, r)| snippet_by_key.get(k).map(|s| (*r, s.as_str())))
+            .collect();
+        let head: Vec<(f32, &str)> = ltr_ranked_keyed
+            .iter()
+            .take(10)
+            .filter_map(|(k, _)| {
+                let r = rrf_by_key.get(k)?;
+                snippet_by_key.get(k).map(|s| (*r, s.as_str()))
+            })
+            .collect();
+        let top_scores: Vec<f32> = head.iter().map(|(r, _)| *r).collect();
+        let top_snips: Vec<&str> = head.iter().map(|(_, s)| *s).collect();
+        let pool_scores: Vec<f32> = pool.iter().map(|(r, _)| *r).collect();
+        let pool_snips: Vec<&str> = pool.iter().map(|(_, s)| *s).collect();
+        if let Some(c) =
+            meridian_rank::qpp::confidence(&top_scores, &top_snips, &pool_scores, &pool_snips)
+        {
+            qpp_score.push(f64::from(c.score));
+            qpp_nqc.push(f64::from(c.nqc));
+            qpp_clarity.push(f64::from(c.clarity));
+            qpp_ndcg.push(ndcg_at(10, &ltr_ranked, judgments));
+        }
+
         bm25_scores.0 += ndcg_at(10, &bm25_ranked, judgments);
         bm25_scores.1 += mrr_at(10, &bm25_ranked, judgments);
         bm25_scores.2 += recall_at(100, &bm25_ranked, judgments);
@@ -439,6 +491,25 @@ fn run(data: &str, models: &str, queries: &str, qrels_path: &str) -> ExitCode {
         ltr_scores.1 / n,
         ltr_scores.2 / n
     );
+    // Suite 13 report (SPEC §16 P8 gate: blended score ρ ≥ 0.25 vs nDCG@10).
+    let rho_score = spearman(&qpp_score, &qpp_ndcg);
+    let rho_nqc = spearman(&qpp_nqc, &qpp_ndcg);
+    let rho_clarity = spearman(&qpp_clarity, &qpp_ndcg);
+    let ece = ece_10(&qpp_score, &qpp_ndcg);
+    println!(
+        "\nsuite 13 (qpp, n={}): spearman score={:.3} nqc={:.3} clarity={:.3} | ece(score vs ndcg)={:.3}",
+        qpp_score.len(),
+        rho_score,
+        rho_nqc,
+        rho_clarity,
+        ece
+    );
+    let qpp_gate = rho_score >= 0.25;
+    println!(
+        "GATE qpp spearman(score, ndcg@10) >= 0.25: {}",
+        if qpp_gate { "PASS" } else { "FAIL" }
+    );
+
     let hybrid_beats_bm25 = hybrid_scores.0 >= bm25_scores.0;
     // LTR no-regression (SPEC §16 Phase-3 exit): within 1% of hybrid nDCG@10.
     let ltr_no_regression = ltr_scores.0 >= hybrid_scores.0 - 0.01 * hybrid_scores.0.max(1e-9);
@@ -450,7 +521,7 @@ fn run(data: &str, models: &str, queries: &str, qrels_path: &str) -> ExitCode {
         "GATE hybrid+ltr no regression vs hybrid: {}",
         if ltr_no_regression { "PASS" } else { "FAIL" }
     );
-    if hybrid_beats_bm25 && ltr_no_regression {
+    if hybrid_beats_bm25 && ltr_no_regression && qpp_gate {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
