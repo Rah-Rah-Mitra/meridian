@@ -108,6 +108,7 @@ transits the config layer.
 | `analytics.pull_interval_secs` | 900 | GDELT publishes every 15 min. |
 | `analytics.retention_days` | 90 | Counter TTL, compacted daily. |
 | `analytics.max_edges` | 200000 | PageRank substrate bound. |
+| `evidence.enabled` | true | Source-independence clustering in `/v1/search` (v0.2.0, ADR-18). Pure local computation, no network/privacy surface — this is the kill-switch. Sketches are written at ingest and erased by `/v1/forget` in the same transaction; docs ingested before v0.2.0 have none until re-ingested. |
 
 ## 5. Operations
 

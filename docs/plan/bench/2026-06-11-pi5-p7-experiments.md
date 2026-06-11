@@ -61,6 +61,23 @@
    harder regime (overdispersion + ramped spikes), and the candidate still
    dominates the baseline there with held FDR. Reviewed at the P7 exit.
 
+## Addendum (same day, Phase-7 implementation): production-format validation
+
+The shipped `meridian_index::sketch::Sketch` is a DIFFERENT estimator from the
+swept winner — densified one-permutation MinHash with b=8 quantization (60
+bins × 1 byte + u32 shingle count = the 64 B/doc budget row), chosen so the
+ingest cost is one hash pass per shingle instead of 128. Suite 9 gained a
+`production sketch` gate over the same two generator variants:
+
+| Format | F1 primary | F1 hold-out | false-merge (both) | Verdict |
+|---|---|---|---|---|
+| Swept winner (128-perm full-u64, k=4, containment τ=0.3) | 1.0 | 0.894 | 0.0 | PASS |
+| **Production** (OPH b=8, 60 bins, k=4, containment τ=0.3) | 1.0 | 0.821 | 0.0 | **PASS** |
+
+The quantization costs ~0.07 hold-out F1 (recall, not precision — false-merge
+stays 0.0, the conservative direction) and stays above the 0.8 gate. The
+committed `p7-synfarm.json` is from the run including this gate.
+
 ## Honesty notes
 
 - Both suites score detectors against **synthetic generators built by the same
