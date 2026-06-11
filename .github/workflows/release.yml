@@ -1,8 +1,14 @@
 # Meridian release pipeline (WBS 6.6) — runs on version tags.
-# Multi-arch (linux/arm64 + linux/amd64) FROM-scratch images to GHCR, SBOM via
-# syft, binaries + SBOM attached to the GitHub release. Both binaries are
-# static musl zigbuilds; arm64 keeps the Cortex-A76 tuning (the appliance
-# target), amd64 uses the portable x86-64-v2 baseline.
+# linux/arm64 FROM-scratch image to GHCR (the appliance target), SBOM via
+# syft, binary + SBOMs attached to the GitHub release.
+#
+# amd64 SUSPENDED at v0.2.0 (P7 exit): the numkong SIMD backend is REQUIRED
+# for dense recall (ADR-07 — the portable fallback is a recall defect), and
+# numkong's x86 capabilities.h forward-declares `syscall(...) noexcept`
+# assuming glibc, which hard-conflicts with zig-musl's unistd.h. amd64 returns
+# via a gnu/distroless image or an upstream __GLIBC__ guard — carried forward
+# in phase-exits/p7.md. Shipping amd64 on the portable backend would ship the
+# known recall defect; not an option.
 
 name: release
 
@@ -25,7 +31,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-unknown-linux-musl, x86_64-unknown-linux-musl
+          targets: aarch64-unknown-linux-musl
       - uses: mlugg/setup-zig@v2
       - uses: taiki-e/install-action@v2
         with:
@@ -65,31 +71,10 @@ jobs:
           NK_TARGET_SMEBI32: "0"
           NK_TARGET_SMELUT2: "0"
           NK_TARGET_SMEFA64: "0"
-      - name: build amd64 (portable v2 baseline)
-        run: cargo zigbuild --release --target x86_64-unknown-linux-musl -p meridiand
-        env:
-          RUSTFLAGS: -C target-cpu=x86-64-v2
-          # numkong 7.7.0 under zig, x86 strain of the aarch64 probe gap (see
-          # the arm64 step above): probes enable Skylake+ AVX-512/AMX kernels
-          # whose evex512 gating zig's clang rejects at compile time. Pin to
-          # Haswell (AVX2) — runtime dispatch checks CPUID before selecting,
-          # so the v2-baseline image stays safe on older machines.
-          NK_TARGET_HASWELL: "1"
-          NK_TARGET_SKYLAKE: "0"
-          NK_TARGET_ICELAKE: "0"
-          NK_TARGET_GENOA: "0"
-          NK_TARGET_SAPPHIRE: "0"
-          NK_TARGET_SAPPHIREAMX: "0"
-          NK_TARGET_GRANITEAMX: "0"
-          NK_TARGET_DIAMOND: "0"
-          NK_TARGET_TURIN: "0"
-          NK_TARGET_ALDER: "0"
-          NK_TARGET_SIERRA: "0"
       - name: stage image contents
         run: |
-          mkdir -p deploy/stage/linux/arm64 deploy/stage/linux/amd64
+          mkdir -p deploy/stage/linux/arm64
           cp target/aarch64-unknown-linux-musl/release/meridiand deploy/stage/linux/arm64/
-          cp target/x86_64-unknown-linux-musl/release/meridiand deploy/stage/linux/amd64/
           bash deploy/fetch-models.sh deploy/stage/models
           bash deploy/fetch-gazetteer.sh deploy/stage/models
       - uses: docker/setup-qemu-action@v3
@@ -99,10 +84,10 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: build + push multi-arch manifest
+      - name: build + push image (arm64)
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          docker buildx build --platform linux/arm64,linux/amd64 -f deploy/Dockerfile \
+          docker buildx build --platform linux/arm64 -f deploy/Dockerfile \
             -t "$IMAGE:$VERSION" -t "$IMAGE:latest" --push deploy
       - name: SBOM (syft, spdx-json) — image + workspace
         uses: anchore/sbom-action@v0
@@ -121,9 +106,7 @@ jobs:
       - name: package binaries
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          for ARCH in aarch64 x86_64; do
-            cp "target/${ARCH}-unknown-linux-musl/release/meridiand" "meridiand-${VERSION}-${ARCH}-linux-musl"
-          done
+          cp "target/aarch64-unknown-linux-musl/release/meridiand" "meridiand-${VERSION}-aarch64-linux-musl"
           sha256sum meridiand-* sbom-*.json > SHA256SUMS
       - name: create GitHub release
         env:
