@@ -143,9 +143,16 @@ mod tests {
 4074267\tBerlin\tBerlin\t\t44.46867\t-71.18508\tP\tPPL\tUS\t\tNH\t007\t\t\t9367\t311\t317\tAmerica/New_York\t2023-10-12\n";
 
     fn sample_gazetteer() -> Gazetteer {
+        // Unique file per CALL: both tests build an FST in parallel under the
+        // same pid — a shared path lets the writers interleave and corrupt the
+        // file (observed as a flaky `Fst("FST error")` in CI).
+        static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!("meridian-gaz-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("test.fst");
+        let path = dir.join(format!(
+            "test-{}.fst",
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         let n = build_from_geonames(std::io::Cursor::new(SAMPLE), &path).unwrap();
         assert!(n >= 2);
         Gazetteer::open(&path).unwrap()
