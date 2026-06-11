@@ -37,6 +37,34 @@ jobs:
         run: cargo zigbuild --release --target aarch64-unknown-linux-musl -p meridiand
         env:
           RUSTFLAGS: -C target-cpu=cortex-a76
+          # numkong 7.7.0 under zig (ADR-07 P7-exit amendment): the NEON/fp16
+          # probes false-negative on GCC feature spellings ('simd'), while the
+          # sdot/SVE/SME probes pass — an INCONSISTENT kernel matrix that fails
+          # the build. Pin the matrix to the Cortex-A76 reality instead:
+          # NEON+sdot on (NEON is mandatory in AArch64; sdot carries the i8
+          # cosine path that motivated rung 1), every SVE/SME/f16/bf16/fp8
+          # kernel off (zig rejects their flags; the A76 has none of them).
+          NK_TARGET_NEON: "1"
+          NK_TARGET_NEONSDOT: "1"
+          NK_TARGET_NEONHALF: "0"
+          NK_TARGET_NEONBFDOT: "0"
+          NK_TARGET_NEONFHM: "0"
+          NK_TARGET_NEONFP8: "0"
+          NK_TARGET_SVE: "0"
+          NK_TARGET_SVEHALF: "0"
+          NK_TARGET_SVEBFDOT: "0"
+          NK_TARGET_SVESDOT: "0"
+          NK_TARGET_SVE2: "0"
+          NK_TARGET_SVE2P1: "0"
+          NK_TARGET_SME: "0"
+          NK_TARGET_SME2: "0"
+          NK_TARGET_SME2P1: "0"
+          NK_TARGET_SMEF64: "0"
+          NK_TARGET_SMEHALF: "0"
+          NK_TARGET_SMEBF16: "0"
+          NK_TARGET_SMEBI32: "0"
+          NK_TARGET_SMELUT2: "0"
+          NK_TARGET_SMEFA64: "0"
       - name: build amd64 (portable v2 baseline)
         run: cargo zigbuild --release --target x86_64-unknown-linux-musl -p meridiand
         env:
