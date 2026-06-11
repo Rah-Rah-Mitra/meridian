@@ -4,15 +4,18 @@
 hybrid index (BM25 + dense vectors) + geo analytics, sized for a Raspberry Pi 5 and scaling to
 edge servers without redesign.
 
-> Status: **v0.1.0 released** — all six build phases complete on a Raspberry
-> Pi 5. Hybrid geo-aware search (heatmap p50 27ms @100k docs), three egress
-> lanes (anon = embedded Arti, provably fail-closed), opt-in GDELT trends,
-> real deletion with re-ingest tombstones, and a hardening pass that
-> included a multi-hour endurance run (100% success at 10 rps + ingest, flat
-> RSS), chaos drills, byte-exact backup/restore, and an egress capture
-> proving the node talks only to Tor relays, search engines (via SearXNG),
-> and opt-in GDELT. Docs: [operator manual](docs/operator-manual.md) ·
-> [API](docs/api.md) · [privacy](docs/privacy.md) · phase exit notes in
+> Status: **v0.2.0 released — the evidence release.** Meridian now tells you
+> how independent your sources are: every search response carries derivation
+> clusters (`independent_source_count` vs `apparent_source_count`, built from
+> deletable 64-byte MinHash sketches at +0.2ms p50), trends/heatmap carry
+> defensible statistics (empirical-Bayes + overdispersion-aware z-scores +
+> FDR `significant` flags instead of raw ratios), and `compare=vantages`
+> previews Phase 8: the same query over direct AND Tor with a Jensen-Shannon
+> divergence report. Also in v0.2.0: a latent dense-recall defect (since
+> Phase 2) found and fixed — recall@10 restored 0.0 → 0.999 at scale.
+> v0.2.0 images are linux/arm64 only (see release notes). Docs:
+> [operator manual](docs/operator-manual.md) · [API](docs/api.md) ·
+> [privacy](docs/privacy.md) · exit notes in
 > [`docs/plan/phase-exits/`](docs/plan/phase-exits/).
 
 ## What it is
@@ -29,14 +32,18 @@ edge servers without redesign.
 - **Privacy guardrails as hard requirements**: no query logging by default, client IPs never
   persisted, strict retention TTLs, `POST /v1/forget` deletion path, zeroized secrets, no
   third-party telemetry.
+- **Evidence & uncertainty (v0.2.0+)**: source-independence clusters on every response (deletable
+  sketches — forget erases them in the same transaction), statistically gated trends/heatmap,
+  vantage-divergence comparison across egress lanes, and raw query-performance predictors
+  (`confidence` block).
 
-The full, binding specification is [`docs/SPEC.md`](docs/SPEC.md) (v2.1).
+The full, binding specification is [`docs/SPEC.md`](docs/SPEC.md) (v2.2).
 
 ## Repository layout
 
 | Path | Contents |
 |---|---|
-| `docs/SPEC.md` | The v2.1 implementation spec (single source of truth) |
+| `docs/SPEC.md` | The v2.2 implementation spec (single source of truth) |
 | `docs/plan/` | §1 Planning Protocol artifacts: ADRs, WBS, budgets, risk register, bench plan, threat model, operator questions |
 | `crates/` | 15 library crates (see SPEC §5) |
 | `bins/meridiand` | The single composition-root binary |
@@ -55,11 +62,20 @@ The full, binding specification is [`docs/SPEC.md`](docs/SPEC.md) (v2.1).
 | 4 | Egress lanes: anon (Arti) + region (WireGuard) | **Done** (2026-06-11) |
 | 5 | Geo + analytics + retention/forget | **Done** (2026-06-11) |
 | 6 | Hardening + v0.1.0 release | **Done** (2026-06-11) |
+| 7 | Evidence foundations + statistical rigor → v0.2.0 | **Done** (2026-06-12) — [exit note](docs/plan/phase-exits/p7.md) |
+| 8 | Vantage divergence + confidence → v0.3.0 | **In progress** — compare-vantages, QPP confidence, MMR landed; pending: cross-lane gate run, confidence calibration (suite 13), alpha-nDCG eval, full soak, exit note |
+| 9 | Adaptive frontier (decision log, OPE, contextual routing, VoI) → v0.4.0 | Planned (ADR-24..26) |
+| 10 | Candidates: region metasearch sidecars, conformal calibration, change-point trends, amd64 image restoration | Recorded, not scheduled |
+
+Known pending beyond the phase table: 1M ANN re-baseline + hybrid-nDCG
+re-evaluation on the healed dense lane (the Phase-2 baseline understates it),
+and the amd64 image (suspended at v0.2.0 — upstream numkong x86 headers
+assume glibc and conflict with zig-musl).
 
 ## Installing
 
 ```sh
-docker pull ghcr.io/rah-rah-mitra/meridian/meridiand:0.1.0   # linux/arm64 + linux/amd64
+docker pull ghcr.io/rah-rah-mitra/meridian/meridiand:0.2.0   # linux/arm64
 ```
 
 See the [operator manual](docs/operator-manual.md) for the full compose-based
