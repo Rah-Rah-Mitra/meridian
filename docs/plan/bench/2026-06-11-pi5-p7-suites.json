@@ -305,6 +305,38 @@
     "notes": [],
     "duration_ms": 180086.132775
    }
+  ],
+  "thermal-600s-stack-up": [
+   {
+    "name": "thermal",
+    "gate": "no throttle flags and max temp < 80\u00b0C",
+    "gate_passed": false,
+    "skipped": false,
+    "metrics": {
+     "duration_secs": 600,
+     "max_temp_c": 80.7,
+     "throttle_flags_union": "0x0",
+     "throughput_drift_pct": 1.0
+    },
+    "notes": [],
+    "duration_ms": 600403.246464
+   }
+  ],
+  "thermal-600s-stack-stopped": [
+   {
+    "name": "thermal",
+    "gate": "no throttle flags and max temp < 80\u00b0C",
+    "gate_passed": false,
+    "skipped": false,
+    "metrics": {
+     "duration_secs": 600,
+     "max_temp_c": 80.7,
+     "throttle_flags_union": "0x0",
+     "throughput_drift_pct": 30.0
+    },
+    "notes": [],
+    "duration_ms": 600095.163062
+   }
   ]
  }
 }
