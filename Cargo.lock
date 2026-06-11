@@ -3281,6 +3281,7 @@ dependencies = [
  "meridian-rank",
  "meridian-vector",
  "model2vec-rs",
+ "reqwest",
  "rustls",
  "serde",
  "serde_json",
