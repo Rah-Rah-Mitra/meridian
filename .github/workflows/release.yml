@@ -69,6 +69,22 @@ jobs:
         run: cargo zigbuild --release --target x86_64-unknown-linux-musl -p meridiand
         env:
           RUSTFLAGS: -C target-cpu=x86-64-v2
+          # numkong 7.7.0 under zig, x86 strain of the aarch64 probe gap (see
+          # the arm64 step above): probes enable Skylake+ AVX-512/AMX kernels
+          # whose evex512 gating zig's clang rejects at compile time. Pin to
+          # Haswell (AVX2) — runtime dispatch checks CPUID before selecting,
+          # so the v2-baseline image stays safe on older machines.
+          NK_TARGET_HASWELL: "1"
+          NK_TARGET_SKYLAKE: "0"
+          NK_TARGET_ICELAKE: "0"
+          NK_TARGET_GENOA: "0"
+          NK_TARGET_SAPPHIRE: "0"
+          NK_TARGET_SAPPHIREAMX: "0"
+          NK_TARGET_GRANITEAMX: "0"
+          NK_TARGET_DIAMOND: "0"
+          NK_TARGET_TURIN: "0"
+          NK_TARGET_ALDER: "0"
+          NK_TARGET_SIERRA: "0"
       - name: stage image contents
         run: |
           mkdir -p deploy/stage/linux/arm64 deploy/stage/linux/amd64
