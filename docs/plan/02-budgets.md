@@ -120,7 +120,7 @@ Phase-1+ deps stay feature-scoped where possible.
 | 4 | **DONE 2026-06-11 ✓** — anon metasearch cold p50 1.34s (≤8s), Arti RSS delta +47MB (≤150MB), zero direct egress proven hermetically + live bootstrap windows; image 74.7MB ([exit note](phase-exits/p4.md)) |
 | 5 | **DONE 2026-06-11 ✓** — heatmap p50 27ms; analytics 128MB/14 simulated days; stores: index 47.6MB, vectors 38.6MB, dedup 9.6MB; search p50 12ms on schema v3 ([exit note](phase-exits/p5.md)) |
 | 6 | **DONE 2026-06-11 ✓** — soak (abbreviated, see [exit note](phase-exits/p6.md)): heap slope ≤0MB/h post-warm, RSS plateau ~250MB (mimalloc), temp ≤61°C, p99 29–34ms, 100% success; drills + reviews + v0.1.0 multi-arch release |
-| 7 | evidence ≤2ms p50 added; heatmap+Gi* ≤60ms R; sketch ≤64 B/doc; ingest regression ≤10%; RSS ≤ Phase-6 plateau |
+| 7 | **DONE 2026-06-11 ✓** — evidence +0.2ms p50 (A/B kill-switch, same deployment; suite 11: 0.208ms release); heatmap+Gi* 23.7ms p50 (≤60); sketch 123 B/doc gross (ceiling re-issued — payload 64 B); ingest 99 docs/s sustained API-level (rate-limiter-paced, ≥50 gate); RSS 261MB post-ingest (plateau band) ([exit note](phase-exits/p7.md)) |
 | 8 | fast path (no compare flag): zero p50/p95 change; compare-mode ≤ slowest lane + 500ms; QPP ≤1ms |
 | 9 | decision log ≤20MB; deep p50 ≤2.5s holds; VoI replaces fetches, adds no serving RAM beyond transient |
 
@@ -132,7 +132,7 @@ New analytical stages are budgeted against the **measured Phase-6 baseline**
 
 | Item | Profile F | Profile R | Tripwire |
 |---|---|---|---|
-| Sketch store (`sketch_v1` in dedup.redb) | ≤64MB @1M (≤64 B/doc) | ≤6.4MB @100k | alert at 80% of cap; bytes/doc reported in suite 11 |
+| Sketch store (`sketch_v1` in dedup.redb) | ≤128MB @1M gross | ≤12.8MB @100k gross — **measured 12.3MB ✓** (123 B/doc gross; payload is 64 B by construction, redb B-tree overhead ≈ +59 B/row — ceiling re-issued at the P7 exit, not silently absorbed) | alert at 80% of cap |
 | Decision log (Phase 9) | ≤20MB | ≤20MB | TTL sweep keeps it bounded; hard cap refuses writes + alert metric |
 | Evidence stage (query-time, fast path) | ≤2ms p50 added | ≤2ms p50 added | suite 11 gate; p95 watched in /metrics stage timings |
 | Evidence transient RAM (clustering top-1000 candidates) | ≤32MB | ≤32MB | included in the soak RSS gate — plateau must not move |

@@ -1,0 +1,59 @@
+{
+  "version": "0.1.0",
+  "kernel": "6.18.33+rpt-rpi-2712",
+  "page_size": 16384,
+  "nproc": 4,
+  "compiled_suites": [
+    "fusion",
+    "synfarm",
+    "spike",
+    "evidence",
+    "embed",
+    "thermal",
+    "ann",
+    "lexical",
+    "disk",
+    "rerank",
+    "anon"
+  ],
+  "profile_note": "release-bench (thin LTO, target-cpu=cortex-a76); product profile is fat LTO — gates re-validated under it at Phase-1 exit",
+  "suites": [
+    {
+      "name": "lexical",
+      "gate": "BM25 top-1000 p50 < 30ms at max indexed size",
+      "gate_passed": true,
+      "skipped": false,
+      "metrics": {
+        "bm25_p50_ms_at_10000": 0.14133400000000002,
+        "bm25_p50_ms_at_100000": 0.47705600000000004,
+        "bm25_p50_ms_at_50000": 0.281464,
+        "bm25_p99_ms_at_10000": 0.688316,
+        "bm25_p99_ms_at_100000": 2.531079,
+        "bm25_p99_ms_at_50000": 1.316207,
+        "bytes_per_doc": 527.0,
+        "corpus_docs": 100000,
+        "docs_per_sec_ingest": 24440.0,
+        "index_bytes_final": 52667242
+      },
+      "notes": [],
+      "duration_ms": 8570.972109
+    },
+    {
+      "name": "disk",
+      "gate": "merge transient ≤ 0.75GB (Profile R scratch floor)",
+      "gate_passed": true,
+      "skipped": false,
+      "metrics": {
+        "index_bytes_final": 52667242,
+        "index_bytes_pre_merge": 58503955,
+        "merge_transient_bytes": 43909120,
+        "peak_used_bytes": 96665600,
+        "settled_used_bytes": 52756480
+      },
+      "notes": [
+        "sampler is 1Hz — short merges can under-report the true peak"
+      ],
+      "duration_ms": 8570.972109
+    }
+  ]
+}

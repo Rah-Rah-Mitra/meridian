@@ -48,6 +48,26 @@ With `lane=anon`, traffic leaves only through Tor (embedded Arti):
 - **No shared state:** anon search results live in a separate ephemeral cache
   (32 MB, 5-minute TTL) and never touch the shared query cache.
 
+## Compare-vantages mode (v0.2.0, explicit opt-in)
+
+`compare=vantages` deliberately sends the SAME query over the direct lane AND
+over Tor within one window so the result distributions can be compared. Said
+plainly: **for that one request you are trading the anon lane's unlinkability
+for divergence evidence.** An upstream engine (or an observer of both
+vantages) that sees an identical rare query arrive twice in a short window can
+link the Tor request to your direct IP.
+
+What Meridian does about it — and what it cannot do:
+
+- Compare mode is **never a default and never auto-triggered**; it runs only
+  when the request says `compare=vantages`.
+- A **randomized delay** (default up to 30s, `search.compare_jitter_ms_max`)
+  separates the two dispatches. This narrows trivial timing correlation; it
+  cannot defeat an adversary observing both vantages (threat model §8).
+- Neither half is cached, no per-query cross-lane record is persisted, and the
+  anon half touches no shared routing state — the comparison exists only in
+  the response you receive.
+
 ## Retention table
 
 | Store | Contents | Where | Lifetime / cap |

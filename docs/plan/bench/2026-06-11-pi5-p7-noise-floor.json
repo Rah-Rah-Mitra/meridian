@@ -1,0 +1,41 @@
+{
+  "version": "0.1.0",
+  "kernel": "6.18.33+rpt-rpi-2712",
+  "page_size": 16384,
+  "nproc": 4,
+  "compiled_suites": [
+    "fusion",
+    "synfarm",
+    "spike",
+    "evidence",
+    "divergence"
+  ],
+  "profile_note": "DEBUG BUILD — numbers are meaningless; use the CI release-bench artifact",
+  "suites": [
+    {
+      "name": "divergence",
+      "gate": null,
+      "gate_passed": null,
+      "skipped": false,
+      "metrics": {
+        "api_base": "http://127.0.0.1:8080",
+        "direct_empty_runs": 11,
+        "direct_failed_runs": 0,
+        "direct_jsd_mean": 0.2942,
+        "direct_jsd_mean_ci95_hi": 0.3334,
+        "direct_jsd_mean_ci95_lo": 0.2575,
+        "direct_jsd_p50": 0.05,
+        "direct_jsd_p90": 0.6673,
+        "direct_jsd_pairs": 281,
+        "direct_ok_runs": 96,
+        "queries": 12,
+        "repeats_per_query": 8
+      },
+      "notes": [
+        "lane anon: 86 ok responses but no comparable run pairs (86 empty — engine timeouts inside the lane deadline?)",
+        "noise floor = the within-lane JSD distribution above; the Phase-8 cross-lane gate must exceed it at p<0.05 (bootstrap). Commit this report to docs/plan/bench/."
+      ],
+      "duration_ms": 539799.935428
+    }
+  ]
+}

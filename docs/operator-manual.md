@@ -109,6 +109,9 @@ transits the config layer.
 | `analytics.retention_days` | 90 | Counter TTL, compacted daily. |
 | `analytics.max_edges` | 200000 | PageRank substrate bound. |
 | `evidence.enabled` | true | Source-independence clustering in `/v1/search` (v0.2.0, ADR-18). Pure local computation, no network/privacy surface — this is the kill-switch. Sketches are written at ingest and erased by `/v1/forget` in the same transaction; docs ingested before v0.2.0 have none until re-ingested. |
+| `search.searx_deadline_ms` | 800 | Direct metasearch deadline. **Networks where engines need 0.8–1.6s (measured on this deployment) get empty web results at the default** — raise to ~2500 if `degraded:["searx_unavailable"]` dominates `scope=web` responses. |
+| `search.compare_jitter_ms_max` | 30000 | Compare-vantages inter-lane decorrelation window (risk #18). 0 = you explicitly accept the timing-correlation risk. |
+| `search.compare_noise_floor_p90` | 0.30 | Same-lane JSD noise floor for `divergence.exceeds_floor`. Set from YOUR deployment's suite-12 probe (`meridian-bench divergence`), not from someone else's network. |
 
 ## 5. Operations
 
