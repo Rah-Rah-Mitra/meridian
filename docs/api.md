@@ -39,6 +39,7 @@ configured, gated endpoints answer `503 auth not configured`.
 | `radius_km` | float | 25 | With `lat`+`lon`. Clamped to 250 km. |
 | `h3` | string | — | Alternative to lat/lon: one H3 cell (hex like `871f1d489ffffff`, or decimal). Mutually exclusive with `lat`/`lon`. |
 | `after`, `before` | int | — | Unix-seconds document-timestamp window (inclusive). |
+| `compare` | `vantages` | — | v0.2.0: run the query over direct AND anon and attach the `divergence` block. Requires `scope=web`; the `lane` param must be omitted (compare governs lanes). See the privacy note below. |
 
 Geo/time filters apply to **local results only** — the SearXNG fan-out cannot
 be geo-filtered (recorded tradeoff, ADR-10). Under a geo/time filter the local
@@ -83,6 +84,30 @@ Response:
 `h3` (res-7 cell of geo-tagged local docs) and `ts` appear only when the
 document has them. `degraded` lists stages that timed out or were skipped —
 results are still served honestly labeled.
+
+**Divergence block** (`compare=vantages`, v0.2.0 preview of Phase 8, ADR-22):
+the response is the DIRECT half's results plus:
+
+```json
+"divergence": {
+  "schema": 1, "lanes_compared": ["direct", "anon"],
+  "jsd": 0.41, "noise_floor_p90": 0.30, "exceeds_floor": true,
+  "domains_only_in_direct": ["example-a.com"],
+  "domains_only_in_anon": ["example-b.org"],
+  "anon_result_count": 18, "jitter_applied_ms": 12040
+}
+```
+
+Semantics: `jsd` is the Jensen-Shannon divergence (bounded [0,1]) between the
+two lanes' registered-domain distributions; `exceeds_floor` compares it to the
+deployment's measured same-lane noise floor (`search.compare_noise_floor_p90`)
+— a per-request signal, not a population claim. Both halves bypass the query
+caches and pin instance-default engines (bandit arm churn alone measures p90
+JSD 0.67 — pinning makes the halves differ by vantage only). Fail-closed: an
+unavailable anon lane errors the whole request (`503`), never a silent
+direct-only answer. **Privacy:** compare mode intentionally sends the same
+query over Tor AND directly within one window — explicitly opt-in, jittered
+(`search.compare_jitter_ms_max`, default on), see privacy.md.
 
 **Evidence block** (v0.2.0, additive — absent when `[evidence] enabled =
 false`): results are clustered by text-derivation similarity (MinHash

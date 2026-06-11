@@ -438,6 +438,14 @@ verbatim-dup fast path (Hamming ≲ 6), with MinHash-containment doing the real
 work. Evidence block default-ON with `evidence.enabled` kill-switch (operator,
 2026-06-11).
 
+**P7-exit amendment (`MIN_MATCH_BINS = 5`):** the live exit drill caught a
+false merge the synthetic farms missed — ONE chance b=8 bin collision
+(~21%/pair) against a tiny shingle set amplifies through the containment
+denominator past τ. The estimator now returns 0 below 5 matched bins (noise
+P(≥5) ≈ 5e-7; real derivation produces 25+); suite 9's generator gained tiny
+stub docs so the size-asymmetry case is gated permanently. Hold-out F1
+improved to 0.918 (the floor removes noise edges).
+
 ## ADR-19 — Derived-structure deletability policy (standing rule)
 
 **Decision.** Any derived structure computed over **user-touchable data** (docs,
@@ -525,6 +533,17 @@ waiting for ≥3 vantages; each region sidecar costs real RAM on the 8GB Pi
 (risk #19), so scope stays closed until a region lane exists with a budget.
 
 **Status: CONFIRMED (operator).**
+
+**P7-exit amendment (suite-12 findings, as built):** (1) both compare halves
+also **pin instance-default engines** (`pin_engines`) — the probe measured the
+ε-greedy bandit's arm churn at p90 JSD 0.667 WITHIN the direct lane alone,
+which would drown any vantage signal; pinning makes the halves differ by
+vantage only, and removes bandit reads/rewards from compares entirely.
+(2) The deployment's measured fixed-engine noise floor is **p90 0.30**
+(`search.compare_noise_floor_p90`; anon lane, 336 pairs, mean 0.096
+CI [0.082, 0.110]) — the per-request `exceeds_floor` reference. (3) Both
+halves bypass the query caches (`bypass_cache`): a cached half would compare
+different points in time. Full data: `bench/2026-06-11-pi5-p7-exit.md`.
 
 ## ADR-23 — QPP confidence methodology (Phase 8)
 
