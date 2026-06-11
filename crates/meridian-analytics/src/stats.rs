@@ -269,24 +269,44 @@ mod tests {
     }
 
     #[test]
-    fn low_sample_elevation_gets_the_noise_label() {
-        // Many sparse units; one shows a 0→2 "spike" that the stats cannot back
-        // strongly... ensure ANY elevated-but-insignificant unit is labeled.
+    fn elevated_movers_are_backed_or_labeled() {
+        // Sparse, noisy units where ratios look dramatic on tiny counts. The
+        // contract (ADR-21): a unit whose latest/baseline ratio is elevated
+        // (≥2×) is either statistically significant or carries the honesty
+        // label — an elevated-looking mover is never presented bare.
         let mut units: Vec<MoverInput> = (0..30)
-            .map(|_| MoverInput {
-                days: vec![1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1],
+            .map(|i| {
+                let mut days = vec![0u32; 14];
+                for (d, slot) in days.iter_mut().enumerate() {
+                    *slot = u32::from((d + i) % 3 == 0);
+                }
+                days
             })
+            .map(|days| MoverInput { days })
             .collect();
         units.push(MoverInput {
             days: vec![0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 3],
         });
         let stats = mover_stats(&units);
-        for s in &stats {
-            if !s.significant {
-                let has_label_iff_elevated = s.label.is_some() || s.z < 2.0 || s.q_value > 0.0;
-                assert!(has_label_iff_elevated);
+        let mut elevated_seen = 0;
+        for (u, s) in units.iter().zip(&stats) {
+            let latest = f64::from(*u.days.last().unwrap());
+            let w = &u.days[..u.days.len() - 1];
+            let baseline = w.iter().map(|&x| f64::from(x)).sum::<f64>() / w.len() as f64;
+            if baseline > 0.0 && latest / baseline >= 2.0 {
+                elevated_seen += 1;
+                assert!(
+                    s.significant || s.label.is_some(),
+                    "elevated unit must be backed or labeled (z={} q={})",
+                    s.z,
+                    s.q_value
+                );
             }
         }
+        assert!(
+            elevated_seen > 0,
+            "test corpus must contain an elevated unit"
+        );
     }
 
     #[test]
