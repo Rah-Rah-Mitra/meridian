@@ -57,6 +57,11 @@ pub struct BenchConfig {
     pub queries: Option<PathBuf>,
     /// Repeats per query per lane for the divergence probe.
     pub repeats: usize,
+    /// Suite 12b: run the cross-lane Phase-8 gate instead of the floor probe.
+    pub cross_lane: bool,
+    /// Suite 12b: the committed same-lane floor MEAN the gate tests against
+    /// (default = the 2026-06-11 anon-lane probe, docs/plan/bench).
+    pub floor_mean: f64,
 }
 
 impl Default for BenchConfig {
@@ -71,6 +76,8 @@ impl Default for BenchConfig {
             api_base: "http://127.0.0.1:8080".to_owned(),
             queries: None,
             repeats: 8,
+            cross_lane: false,
+            floor_mean: 0.096,
         }
     }
 }
