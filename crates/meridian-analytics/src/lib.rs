@@ -7,6 +7,7 @@
 
 pub mod gdelt;
 pub mod graph;
+pub mod stats;
 pub mod store;
 pub mod trends;
 

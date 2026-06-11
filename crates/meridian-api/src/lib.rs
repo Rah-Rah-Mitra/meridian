@@ -484,7 +484,11 @@ fn parse_window(raw: Option<&str>) -> Result<Option<u64>, Problem> {
     Ok(Some(now.saturating_sub(secs)))
 }
 
-/// SPEC §10 `GET /v1/geo/heatmap`: `{cells:[{h3,count,lat,lon}]}`.
+/// SPEC §10 `GET /v1/geo/heatmap`:
+/// `{res, schema, cells:[{h3,count,lat,lon,z,q_value,significant}]}`.
+/// Phase 7 (ADR-21): per-cell Getis-Ord Gi* hot-spot statistics over the
+/// k-ring-1 neighborhood with BH-FDR across the scanned cells — `significant`
+/// is the defensible flag; raw counts stay for explainability.
 async fn heatmap(
     State(state): State<Arc<AppState>>,
     Query(params): Query<HeatmapParams>,
@@ -496,19 +500,26 @@ async fn heatmap(
         .heatmap(params.q.clone(), res, after_ts)
         .await
         .map_err(problem::plan_error)?;
+    let stats = meridian_analytics::stats::heatmap_stats(&cells);
     let cells: Vec<serde_json::Value> = cells
         .into_iter()
-        .map(|(cell, count)| {
+        .zip(stats)
+        .map(|((cell, count), s)| {
             let centroid = meridian_geo::h3::cell_to_latlng(cell);
             serde_json::json!({
                 "h3": format!("{cell:x}"),
                 "count": count,
                 "lat": centroid.map(|c| c.0),
                 "lon": centroid.map(|c| c.1),
+                "z": s.z,
+                "q_value": s.q_value,
+                "significant": s.significant,
             })
         })
         .collect();
-    Ok(Json(serde_json::json!({ "res": res, "cells": cells })))
+    Ok(Json(
+        serde_json::json!({ "res": res, "schema": 1, "cells": cells }),
+    ))
 }
 
 #[derive(Debug, Deserialize)]
