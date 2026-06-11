@@ -27,6 +27,7 @@ pub struct MeridianConfig {
     pub models: ModelsConfig,
     pub vector: VectorConfig,
     pub analytics: AnalyticsConfig,
+    pub evidence: EvidenceConfig,
 }
 
 impl MeridianConfig {
@@ -346,6 +347,22 @@ impl ModelsConfig {
         self.gazetteer_file
             .clone()
             .unwrap_or_else(|| self.dir.join("gazetteer.fst"))
+    }
+}
+
+/// Evidence layer (Phase 7, ADR-18): source-independence clustering over
+/// search results. ON by default (operator decision 2026-06-11) — pure local
+/// computation over already-held data, no privacy surface; this is the
+/// kill-switch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct EvidenceConfig {
+    pub enabled: bool,
+}
+
+impl Default for EvidenceConfig {
+    fn default() -> Self {
+        Self { enabled: true }
     }
 }
 

@@ -1,0 +1,201 @@
+//! Evidence layer (Phase 7, ADR-18): derivation clusters over a result set.
+//!
+//! Results whose documents carry an ingest-time sketch are clustered by
+//! pairwise containment (union-find over edges ≥ τ); each cluster is one
+//! apparent ORIGIN. `independent_source_count` counts those clusters — the
+//! suite-9 experiment showed domain dedup is structurally blind to
+//! cross-domain syndication (baseline F1 0.054), which is exactly what this
+//! layer surfaces.
+//!
+//! Honesty contract (ADR-18): results WITHOUT a sketch (web results never
+//! fetched/ingested, docs from a pre-v0.2.0 volume) get `evidence: null` and
+//! are excluded from the independence count — a snippet is too little text to
+//! assert independence on. The block reports how many results were sketched so
+//! the count's basis is visible.
+
+use crate::planner::SearchResult;
+use meridian_index::lexical::url_key;
+use meridian_index::sketch::{CONTAINMENT_TAU, Sketch};
+use std::collections::HashMap;
+
+/// Per-result evidence annotation (additive, ADR-20).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ResultEvidence {
+    /// Derivation-cluster id, dense within this response.
+    pub cluster: u32,
+}
+
+/// Response-level `evidence` block (additive, ADR-20; `schema` versions the
+/// block shape independently of the API).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EvidenceBlock {
+    pub schema: u8,
+    /// Number of derivation clusters among sketched results — apparent origins.
+    pub independent_source_count: u32,
+    /// Total results in the response (the naive source count).
+    pub apparent_source_count: u32,
+    /// How many results carried a sketch (the basis of the independence count).
+    pub sketched_results: u32,
+    pub clusters: Vec<ClusterSummary>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ClusterSummary {
+    pub id: u32,
+    pub members: u32,
+    /// Distinct result domains inside the cluster — members > domains means
+    /// cross-domain syndication, the case domain dedup cannot see.
+    pub domains: u32,
+}
+
+/// Cluster `results` by sketch containment and annotate them in place.
+/// Returns the response-level block. O(s²) pairwise over sketched results —
+/// bounded by the response limit (≤50), microseconds in practice (suite 11).
+pub fn annotate(results: &mut [SearchResult], sketches: &HashMap<u64, Sketch>) -> EvidenceBlock {
+    // Sketched result indices, in response order.
+    let keyed: Vec<(usize, u64)> = results
+        .iter()
+        .enumerate()
+        .filter_map(|(i, r)| {
+            let key = url_key(&r.url);
+            sketches.contains_key(&key).then_some((i, key))
+        })
+        .collect();
+
+    let mut parent: Vec<usize> = (0..keyed.len()).collect();
+    fn find(parent: &mut Vec<usize>, x: usize) -> usize {
+        if parent[x] != x {
+            let root = find(parent, parent[x]);
+            parent[x] = root;
+        }
+        parent[x]
+    }
+    for a in 0..keyed.len() {
+        for b in (a + 1)..keyed.len() {
+            let (sa, sb) = (&sketches[&keyed[a].1], &sketches[&keyed[b].1]);
+            if sa.containment(sb) >= CONTAINMENT_TAU {
+                let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
+                if ra != rb {
+                    parent[ra] = rb;
+                }
+            }
+        }
+    }
+
+    // Dense cluster ids in first-appearance order; annotate results.
+    let mut id_by_root: HashMap<usize, u32> = HashMap::new();
+    let mut members: Vec<u32> = Vec::new();
+    let mut domains: Vec<std::collections::HashSet<String>> = Vec::new();
+    for (slot, &(result_idx, _)) in keyed.iter().enumerate() {
+        let root = find(&mut parent, slot);
+        let next_id = id_by_root.len() as u32;
+        let id = *id_by_root.entry(root).or_insert(next_id);
+        if id as usize == members.len() {
+            members.push(0);
+            domains.push(std::collections::HashSet::new());
+        }
+        members[id as usize] += 1;
+        domains[id as usize].insert(result_host(&results[result_idx].url));
+        results[result_idx].evidence = Some(ResultEvidence { cluster: id });
+    }
+
+    EvidenceBlock {
+        schema: 1,
+        independent_source_count: members.len() as u32,
+        apparent_source_count: results.len() as u32,
+        sketched_results: keyed.len() as u32,
+        clusters: members
+            .iter()
+            .zip(domains.iter())
+            .enumerate()
+            .map(|(id, (m, d))| ClusterSummary {
+                id: id as u32,
+                members: *m,
+                domains: d.len() as u32,
+            })
+            .collect(),
+    }
+}
+
+fn result_host(url: &str) -> String {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::planner::RankSignals;
+
+    fn result(url: &str) -> SearchResult {
+        SearchResult {
+            url: url.to_owned(),
+            title: String::new(),
+            snippet: String::new(),
+            score: 0.0,
+            rank_signals: RankSignals {
+                rrf: 0.0,
+                bm25: None,
+                ann: None,
+                searx_rank: None,
+                ltr: 0.0,
+                ce: None,
+            },
+            source: "local",
+            h3: None,
+            ts: None,
+            evidence: None,
+        }
+    }
+
+    #[test]
+    fn clusters_copies_and_leaves_web_results_null() {
+        let origin = "the desalination plant approval covered by many outlets verbatim \
+                      with identical wording across the syndication network today"
+            .repeat(3);
+        let independent = "completely different reporting angle with its own words and \
+                           structure about water infrastructure policy and budgets"
+            .repeat(3);
+        let mut sketches = HashMap::new();
+        sketches.insert(url_key("https://a.example/1"), Sketch::compute(&origin));
+        sketches.insert(url_key("https://b.example/2"), Sketch::compute(&origin));
+        sketches.insert(
+            url_key("https://c.example/3"),
+            Sketch::compute(&independent),
+        );
+
+        let mut results = vec![
+            result("https://a.example/1"),
+            result("https://b.example/2"),
+            result("https://c.example/3"),
+            result("https://unsketched.example/4"), // pure web result
+        ];
+        let block = annotate(&mut results, &sketches);
+
+        assert_eq!(block.schema, 1);
+        assert_eq!(block.apparent_source_count, 4);
+        assert_eq!(block.sketched_results, 3);
+        assert_eq!(
+            block.independent_source_count, 2,
+            "two copies + one independent = two origins"
+        );
+        assert_eq!(
+            results[0].evidence.as_ref().unwrap().cluster,
+            results[1].evidence.as_ref().unwrap().cluster,
+            "verbatim copies share a cluster"
+        );
+        assert_ne!(
+            results[0].evidence.as_ref().unwrap().cluster,
+            results[2].evidence.as_ref().unwrap().cluster
+        );
+        assert!(
+            results[3].evidence.is_none(),
+            "unsketched result must stay null, never guessed"
+        );
+        let c0 = &block.clusters[results[0].evidence.as_ref().unwrap().cluster as usize];
+        assert_eq!(c0.members, 2);
+        assert_eq!(c0.domains, 2, "cross-domain syndication visible");
+    }
+}

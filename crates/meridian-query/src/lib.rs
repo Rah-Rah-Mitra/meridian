@@ -5,6 +5,7 @@
 //! Status: Phase 1 — lexical planner + ingest pipeline live; ANN joins the
 //! fusion in Phase 2, LTR/rerank in Phase 3.
 
+pub mod evidence;
 pub mod ingest;
 pub mod intent;
 pub mod planner;

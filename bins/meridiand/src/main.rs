@@ -177,6 +177,9 @@ fn build_components(config: MeridianConfig) -> Result<Components, String> {
         tracing::info!(reason = %e, "deep rerank unavailable; mode=deep will degrade to LTR");
         Reranker::unavailable()
     }));
+    // Evidence layer (Phase 7, ADR-18): the config kill-switch decides whether
+    // the planner gets a sketch read handle at all — `None` = no evidence block.
+    let sketches = config.evidence.enabled.then(|| ingestor.sketch_reader());
     let planner = Arc::new(Planner::new(
         index,
         embedder,
@@ -189,6 +192,7 @@ fn build_components(config: MeridianConfig) -> Result<Components, String> {
         shed.clone(),
         config.lanes.anon.max_concurrent_searches,
         priors,
+        sketches,
         &config.search,
         &config.vector,
     ));
