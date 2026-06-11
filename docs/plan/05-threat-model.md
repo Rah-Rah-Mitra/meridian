@@ -114,3 +114,38 @@ trivially linkable to each other at exit relays.
    mitigation via fixed header sets per lane; accepted.
 4. GDELT integrity: upstream serves no valid TLS; manifest MD5 is integrity-only,
    not authenticity. Analytics counters are non-security-critical; accepted.
+
+## 8. Compare-vantages cross-lane correlation (Phase 8, ADR-22)
+
+`compare=vantages` deliberately sends the SAME query over direct **and** Tor
+near-simultaneously. An upstream engine (or an observer of both vantages) that
+sees an identical rare query arrive twice within a small window can link the Tor
+request to the operator's direct IP — partially defeating the anon lane **for
+that request**.
+
+| Threat | Mitigation |
+|---|---|
+| Query-text correlation across vantages at upstream engines | Compare mode is an explicit per-request flag, never a default and never auto-triggered; documented in privacy.md as "this request is intentionally observable from two vantages" |
+| Timing correlation (two arrivals milliseconds apart) | Randomized inter-lane jitter before the anon-side dispatch (configurable window, default ON); an invariant test fails if compare dispatch runs without the jitter config |
+| State leakage between the lanes' halves | The orchestrator is post-hoc: each half runs the existing single-lane path unchanged; no shared-cache write of compare responses, no bandit reward from the anon half, anon cache stays ephemeral (all hermetically tested — invariant count ≥16) |
+| Persistent record of the comparison | The `divergence` block is computed per-response and not stored; no per-query cross-lane record persists anywhere (canary-tested at P8 exit) |
+
+**Residual (accepted, documented):** jitter narrows but cannot eliminate
+correlation by an adversary observing both vantages — the §4 "DOES NOT defeat a
+global passive adversary" caveat applies doubly to compare mode. The honest
+framing in user docs: compare mode trades one request's unlinkability for
+divergence evidence, by explicit choice.
+
+## 9. Routing decision log (Phase 9, ADR-24)
+
+A per-decision log {coarse context buckets, arm, propensity, reward} enables
+offline policy evaluation. It is the first persistent per-request artifact in
+Meridian, so it gets its own STRIDE row set:
+
+| Threat | Mitigation |
+|---|---|
+| Log reconstructs query content | Structurally impossible content: intent class (4 values), length bucket, language, time-of-day bucket, geo-filter-present flag — no query text, no URL, no result data |
+| Log links rows to a person | No IP, no session/user ID, no fine timestamp (time-of-day bucket only); rare bucket combinations (<5 occurrences/24h) are generalized before write (k-anonymity floor) |
+| Log deanonymizes anon-lane usage | Anon-lane decisions are NEVER logged — the §12.4 bandit firewall extends to the log; hermetic invariant test (count ≥17) |
+| Log grows into a profile over time | 30-day TTL sweep; ≤20MB hard cap (writes refused + alert past it); operator wipe path documented in the operator manual |
+| "No query logging" promise erosion | privacy.md amended in P9 to disclose exactly what is stored and why (bucketed routing metadata, not queries); the privacy smoke canary extends to the log file — query text or IP found there is a merge-blocking CI failure |

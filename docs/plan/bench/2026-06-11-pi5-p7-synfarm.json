@@ -1,0 +1,41 @@
+{
+  "version": "0.1.0",
+  "kernel": "6.18.33+rpt-rpi-2712",
+  "page_size": 16384,
+  "nproc": 4,
+  "compiled_suites": [
+    "fusion",
+    "synfarm",
+    "spike"
+  ],
+  "profile_note": "DEBUG BUILD — numbers are meaningless; use the CI release-bench artifact",
+  "suites": [
+    {
+      "name": "synfarm",
+      "gate": "pairwise F1 > 0.8 AND false-merge < 5% on BOTH generator variants",
+      "gate_passed": true,
+      "skipped": false,
+      "metrics": {
+        "baseline_domain_f1_held_out": 0.054,
+        "baseline_domain_f1_primary": 0.054,
+        "docs_held_out": 288,
+        "docs_primary": 288,
+        "f1_held_out": 0.894,
+        "f1_primary": 1.0,
+        "f1_variant_drop": 0.106,
+        "false_merge_held_out": 0.0,
+        "false_merge_primary": 0.0,
+        "recommended_measure": "containment",
+        "recommended_minhash_perms": 128,
+        "recommended_shingle_k": 4,
+        "recommended_simhash_hamming_gate": 33,
+        "recommended_threshold": 0.3
+      },
+      "notes": [
+        "winner: k=4 perms=128 measure=containment tau=0.3 — adopt these as the ADR-18 constants",
+        "false_merge = 1 − pairwise precision (fraction of merged pairs that are cross-origin); risk #21 hold-out variant uses block shuffles, lead rewrites and heavier word edits"
+      ],
+      "duration_ms": 4692.35205
+    }
+  ]
+}

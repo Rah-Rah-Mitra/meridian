@@ -1,4 +1,4 @@
-# MERIDIAN SEARCH PLATFORM — FULL IMPLEMENTATION PROMPT (PLAN-FIRST) — v2.1
+# MERIDIAN SEARCH PLATFORM — FULL IMPLEMENTATION PROMPT (PLAN-FIRST) — v2.2
 
 > Paste this entire document as the opening prompt to your implementation agent (e.g., Claude Code).
 > It encodes all architecture decisions, resource budgets, optimization requirements, the egress &
@@ -427,6 +427,11 @@ used as an open Tor search proxy. **Privacy-by-default (§13.4): the request/res
 query text and no client IP; `x-request-id` is random per request and is not a session/user
 identifier; no `Set-Cookie`, no tracking headers; CORS is closed by default.**
 
+**API evolution (v2.2 / ADR-20):** the contract stays `/v1` and evolves by **additive optional
+blocks only** (`evidence`, `confidence`, `divergence`, `analysis` — Phases 7–9). Each block carries
+its own `schema` integer for intra-block versioning; absent block = feature off/unavailable, never
+an error. Removing or re-typing an existing field requires `/v2`.
+
 ---
 
 ## 11. RANKING & RETRIEVAL DETAILS
@@ -751,6 +756,58 @@ data-retention/deletion guide**) · v0.1.0 multi-arch images.
 EXIT: soak green; backup/restore drill tested; security review of egress crate signed off;
 **privacy review signed off (no-log/IP smoke test, secret-scan clean, `mlock`/swap decision
 documented, no third-party phone-home verified via egress capture).**
+
+**Phase 7 — Evidence foundations + statistical rigor (post-v0.1.0 → v0.2.0)**
+SimHash+MinHash sketching at ingest (deletable: same txn as dedup/tombstone, ADR-18/19) · query-time
+derivation clustering post-RRF → `evidence` block (`independent_source_count`, source clusters;
+default-on with `evidence.enabled` kill-switch; web results `evidence: null` in v0.2.0 — snippet
+sketches are too weak to assert independence honestly) · empirical-Bayes shrinkage + Getis-Ord Gi*
++ Benjamini-Hochberg FDR replacing the naive latest/mean movers in trends + heatmap stat fields
+(ADR-21) · eval suites 9–11 (synfarm, spike, evidence-latency) + same-lane JSD noise-floor report
+(suite 12 probe — Phase-8 entry evidence).
+EXIT: synfarm pairwise F1 >0.8 AND false-merge <5% on BOTH generator variants; spike suite ≥3×
+false-spike reduction at equal TPR vs the ratio baseline on the Poisson variant, with no regression
+(≥1×) and held FDR on the overdispersed hold-out variant (detector constants fixed on the tuning
+variant only — risk #21); evidence stage adds ≤2ms p50 to the fast
+path @100k (Profile R); heatmap+Gi* ≤60ms R / ≤150ms F; ingest throughput regression ≤10% vs
+Phase 6; sketch store ≤64 B/doc; serving RSS no regression vs the ~250MB R plateau;
+**forget-correctness 100% including sketch removal (extended hermetic test)**; all 13 egress
+invariants + privacy smoke green; noise-floor report committed.
+
+**Phase 8 — Vantage divergence + confidence (v0.3.0)**
+`compare=vantages` orchestrator: same query over {direct, anon}, each lane resolved independently
+and fail-closed per §12.1, results compared post-hoc with ZERO shared state (no shared-cache write,
+no bandit reward, anon cache stays ephemeral; randomized inter-lane jitter, default-on) ·
+`divergence` block: Jensen-Shannon divergence over per-lane domain distributions + `domains_only_in`
++ bootstrap significance vs the Phase-7 noise floor (ADR-22: region lanes stay fetch-only; region
+metasearch is a Phase-10 candidate behind operator sign-off) · QPP confidence block (NQC + Clarity,
+ADR-23) · optional MMR diversity rerank (`diversity=mmr`).
+EXIT: cross-lane JSD on the curated divergence set exceeds the same-lane noise floor at p<0.05
+(bootstrap); ≥16 hermetic egress-invariant tests green (3 new fan-out invariants); fast path with
+the flag absent: zero p50/p95 change vs Phase 7; compare-mode p50 ≤ slowest-lane budget + 500ms
+(anon ≤8s holds); QPP confidence vs per-query nDCG@10 Spearman ρ ≥0.25 at ≤1ms added; MMR improves
+alpha-nDCG@10 on the duplicate-heavy set with ≤1% nDCG@10 loss; **no per-query cross-lane record
+persisted anywhere (canary-tested); compare responses never enter the shared cache (tested)**.
+
+**Phase 9 — Adaptive frontier: decision log, OPE, contextual routing, VoI (v0.4.0)**
+Privacy-vetted per-decision routing log (ADR-24: coarse buckets + arm + propensity + reward ONLY —
+no query text, no IPs; 30-day TTL; k-anonymity floor; wipe path; **anon-lane decisions never
+logged**, §12.4) · IPS/doubly-robust OPE harness (suite 14) · linear Thompson-sampling contextual
+policy over the same 3 arms, **feature-gated default-off**, enabled only by the ADR-25 ship gate
+(DR uplift 95% CI excludes zero on ≥10k decisions; inconclusive ⇒ ε-greedy retained, recorded at
+exit) · VoI next-best-fetch + stopping in deep mode (Pandora's-box reservation values; novelty from
+Phase-7 MinHash + embedding coverage; ADR-26).
+EXIT: decision log provably holds zero query text / zero IPs (extended privacy smoke); TTL sweep,
+wipe path, and k-anonymity guard tested; log ≤20MB; anon decisions provably absent (invariant count
+≥17); OPE recovers synthetic ground truth with bias <5% (suite 14); contextual policy ships only
+per the ADR-25 gate; VoI ≥25% fewer fetches at equal nDCG@10 (±1%) with non-degrading median
+`independent_source_count` (suite 15); deep p50 ≤2.5s holds; suites 1–13 + forget-correctness +
+RSS/latency re-validated.
+
+**Phase 10 — candidates (recorded, not planned).** Region-lane metasearch sidecars per ADR-22
+(operator sign-off + budget row first) · conformal risk control wrapping the Phase-8 confidence
+block · Kleinberg-burst/BOCPD change-point trends · DP release for published aggregates · binary
+quantization (trigger: >1.5M docs, Phase-2 deferral stands) · crates.io publication.
 
 ---
 
