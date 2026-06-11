@@ -57,6 +57,9 @@ pub struct SearchRequest {
     /// which would drown any real vantage signal; pinning makes the two
     /// halves differ by vantage only.
     pub pin_engines: bool,
+    /// MMR diversity rerank of the final list (Phase 8, `diversity=mmr`).
+    /// Off by default — relevance order is the contract unless asked.
+    pub diversity_mmr: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -115,6 +118,9 @@ pub struct SearchResponse {
     /// Vantage-divergence block (Phase 8, ADR-22); only on compare=vantages.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub divergence: Option<crate::compare::DivergenceBlock>,
+    /// QPP confidence block (Phase 8, ADR-23) — raw predictors, uncalibrated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<meridian_rank::qpp::ConfidenceBlock>,
 }
 
 /// Cached fusion output (SPEC §8.4 query cache: 128MB weighted, TTI 15m, TTL 2h
@@ -125,6 +131,7 @@ struct CachedSearch {
     results: Vec<SearchResult>,
     degraded: Vec<&'static str>,
     evidence: Option<crate::evidence::EvidenceBlock>,
+    confidence: Option<meridian_rank::qpp::ConfidenceBlock>,
 }
 
 /// Weighted cost of a cached entry. Counts every owned allocation (strings,
@@ -401,6 +408,7 @@ impl Planner {
                     degraded: hit.degraded.clone(),
                     evidence: hit.evidence.clone(),
                     divergence: None,
+                    confidence: hit.confidence.clone(),
                 });
             }
         }
@@ -780,6 +788,14 @@ impl Planner {
         scored.sort_unstable_by(|a, b| b.2.partial_cmp(&a.2).unwrap().then(a.0.cmp(&b.0)));
         timings.insert("ltr_ms", rank_start.elapsed().as_millis() as u64);
 
+        // QPP pool snapshot (Phase 8, ADR-23): fused scores + snippets of the
+        // whole candidate pool, captured before the diversity cap drains the
+        // map. ≤100 short clones — bounded.
+        let qpp_pool: Vec<(f32, String)> = scored
+            .iter()
+            .filter_map(|(key, rrf, _)| by_key.get(key).map(|r| (*rrf, r.snippet.clone())))
+            .collect();
+
         // Domain-diversity cap (SPEC §11: ≤3 per domain), then cut to limit.
         let mut per_domain: HashMap<String, usize> = HashMap::new();
         let mut results = Vec::with_capacity(limit);
@@ -869,6 +885,44 @@ impl Planner {
             }
         }
 
+        // MMR diversity rerank (Phase 8): opt-in, on the final list, after the
+        // deep rerank so it diversifies whatever order the caller paid for.
+        if req.diversity_mmr && results.len() > 2 {
+            let texts: Vec<String> = results
+                .iter()
+                .map(|r| format!("{} {}", r.title, r.snippet))
+                .collect();
+            let docs: Vec<meridian_rank::mmr::MmrDoc<'_>> = results
+                .iter()
+                .zip(texts.iter())
+                .map(|(r, t)| meridian_rank::mmr::MmrDoc {
+                    score: r.score,
+                    text: t,
+                })
+                .collect();
+            let order = meridian_rank::mmr::mmr_order(&docs, meridian_rank::mmr::MMR_LAMBDA);
+            let mut reordered = Vec::with_capacity(results.len());
+            for idx in order {
+                reordered.push(results[idx].clone());
+            }
+            results = reordered;
+        }
+
+        // QPP confidence (Phase 8, ADR-23): raw NQC + clarity-lite predictors
+        // over the response head vs the candidate pool. ≤1ms budget; absent
+        // when there is nothing to predict from.
+        let confidence = {
+            let qpp_start = Instant::now();
+            let top_scores: Vec<f32> = results.iter().map(|r| r.rank_signals.rrf).collect();
+            let top_snips: Vec<&str> = results.iter().map(|r| r.snippet.as_str()).collect();
+            let pool_scores: Vec<f32> = qpp_pool.iter().map(|(s, _)| *s).collect();
+            let pool_snips: Vec<&str> = qpp_pool.iter().map(|(_, t)| t.as_str()).collect();
+            let block =
+                meridian_rank::qpp::confidence(&top_scores, &top_snips, &pool_scores, &pool_snips);
+            timings.insert("qpp_ms", qpp_start.elapsed().as_millis() as u64);
+            block
+        };
+
         // Evidence layer (Phase 7, ADR-18): derivation clusters over the FINAL
         // result set — the block describes exactly what the caller sees.
         // (ADR-18 sketches a pre-LTR slot; clustering moves there when LTR/MMR
@@ -906,6 +960,7 @@ impl Planner {
                     results: results.clone(),
                     degraded: degraded.clone(),
                     evidence: evidence.clone(),
+                    confidence: confidence.clone(),
                 })
             };
             if cacheable {
@@ -930,6 +985,7 @@ impl Planner {
             degraded,
             evidence,
             divergence: None,
+            confidence,
         })
     }
 }

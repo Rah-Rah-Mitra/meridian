@@ -3386,6 +3386,7 @@ name = "meridian-rank"
 version = "0.1.0"
 dependencies = [
  "meridian-common",
+ "serde",
 ]
 
 [[package]]

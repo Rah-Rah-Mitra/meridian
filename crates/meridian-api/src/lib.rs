@@ -159,6 +159,9 @@ struct SearchParams {
     /// the query is intentionally observable from two vantages.
     #[serde(default)]
     compare: Option<String>,
+    /// `mmr` reorders the final list for diversity (Phase 8). Off by default.
+    #[serde(default)]
+    diversity: Option<String>,
     #[serde(default)]
     limit: Option<usize>,
     // Geo constraint (SPEC §10): lat+lon+radius_km together, OR h3.
@@ -282,6 +285,17 @@ async fn search(
         before: params.before,
         bypass_cache: false,
         pin_engines: false,
+        diversity_mmr: match params.diversity.as_deref() {
+            None => false,
+            Some("mmr") => true,
+            Some(_) => {
+                return Err(Problem::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid diversity",
+                    "diversity=mmr",
+                ));
+            }
+        },
     };
     if compare {
         // Compare governs lanes itself and is web-scoped by definition; a
