@@ -40,6 +40,7 @@ configured, gated endpoints answer `503 auth not configured`.
 | `h3` | string | — | Alternative to lat/lon: one H3 cell (hex like `871f1d489ffffff`, or decimal). Mutually exclusive with `lat`/`lon`. |
 | `after`, `before` | int | — | Unix-seconds document-timestamp window (inclusive). |
 | `compare` | `vantages` | — | v0.2.0: run the query over direct AND anon and attach the `divergence` block. Requires `scope=web`; the `lane` param must be omitted (compare governs lanes). See the privacy note below. |
+| `diversity` | `mmr` | — | v0.3.0: rerank the final list by Maximal Marginal Relevance (λ=0.7, term-overlap similarity) — near-duplicates are demoted below diverse results. Off by default; relevance order is the contract unless asked. |
 
 Geo/time filters apply to **local results only** — the SearXNG fan-out cannot
 be geo-filtered (recorded tradeoff, ADR-10). Under a geo/time filter the local
@@ -108,6 +109,21 @@ unavailable anon lane errors the whole request (`503`), never a silent
 direct-only answer. **Privacy:** compare mode intentionally sends the same
 query over Tor AND directly within one window — explicitly opt-in, jittered
 (`search.compare_jitter_ms_max`, default on), see privacy.md.
+
+**Confidence block** (v0.3.0, additive, ADR-23): every search response carries
+raw query-performance predictors —
+
+```json
+"confidence": { "schema": 1, "nqc": 0.84, "clarity": 1.92, "score": 0.61 }
+```
+
+`nqc` is the dispersion of the top results' fused scores against the candidate
+pool (a confident head separates); `clarity` is the KL divergence of the top
+results' vocabulary against the pool's (a focused result set reads
+distinctively). `score` is an **uncalibrated** [0,1] blend — comparable across
+queries on one deployment, NOT a probability; calibration against measured
+nDCG lands with the v0.3.0 eval suite. Honest use: treat low scores as "verify
+before trusting", not high scores as "true".
 
 **Evidence block** (v0.2.0, additive — absent when `[evidence] enabled =
 false`): results are clustered by text-derivation similarity (MinHash
