@@ -291,7 +291,10 @@ fn run_cross_lane(
          at p<0.05 (one-sample bootstrap)"
             .to_owned(),
     );
-    result.gate("cross-lane JSD > floor at p<0.05 (bootstrap)", p_value < 0.05);
+    result.gate(
+        "cross-lane JSD > floor at p<0.05 (bootstrap)",
+        p_value < 0.05,
+    );
     result.duration_ms = start.elapsed().as_secs_f64() * 1e3;
     result
 }
