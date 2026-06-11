@@ -59,6 +59,13 @@ jobs:
   gitleaks:
     name: gitleaks (secret scan)
     runs-on: ubuntu-latest
+    # The PR-scan path lists the PR's commits via the API; the workflow-level
+    # token (contents: read only) made that call fail with "Resource not
+    # accessible by integration" on the repo's first PR. Comments stay off —
+    # a finding fails the job, which is the signal we want.
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -66,6 +73,7 @@ jobs:
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
 
   cross-aarch64:
     name: cross-build aarch64-musl (Pi 5 target)
