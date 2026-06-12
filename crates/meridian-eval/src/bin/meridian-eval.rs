@@ -60,6 +60,12 @@ fn main() -> ExitCode {
             &get("--source").unwrap_or_else(|| "cities15000.txt".into()),
             &get("--out").unwrap_or_else(|| "models/gazetteer.fst".into()),
         ),
+        "conformal" => conformal(
+            &get("--corpus").unwrap_or_else(|| "bench-scratch/corpus.jsonl".into()),
+            &get("--data").unwrap_or_else(|| "eval/data".into()),
+            &get("--models").unwrap_or_else(|| "models".into()),
+            &get("--out").unwrap_or_else(|| "bench-out/p10-conformal.json".into()),
+        ),
         "run" => run(
             &get("--data").unwrap_or_else(|| "eval/data".into()),
             &get("--models").unwrap_or_else(|| "models".into()),
@@ -133,6 +139,29 @@ fn known_item_query(doc: &CorpusDoc, rng: &mut Rng) -> Option<String> {
         }
     }
     (picked.len() >= 4).then(|| picked.join(" "))
+}
+
+/// Held-out generator VARIANT for suite 16 (risk #21): a CONSECUTIVE
+/// 5-word phrase from the document body (title words allowed, shorter words
+/// allowed) — a different query style than the independent-content-word
+/// known-item sampler the thresholds are calibrated on.
+fn phrase_query(doc: &CorpusDoc, rng: &mut Rng) -> Option<String> {
+    let words: Vec<&str> = doc
+        .body
+        .split_whitespace()
+        .filter(|w| w.len() >= 3 && w.chars().all(|c| c.is_ascii_alphanumeric()))
+        .collect();
+    if words.len() < 20 {
+        return None;
+    }
+    let start = rng.below(words.len() - 5);
+    Some(
+        words[start..start + 5]
+            .iter()
+            .map(|w| w.to_lowercase())
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
 }
 
 /// Offline gazetteer build (SPEC §3: "built offline, shipped in image"):
@@ -300,6 +329,409 @@ fn build(corpus: &str, data: &str, models: &str, max_docs: usize) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// One query through the planner-equivalent local pipeline: BM25-only,
+/// hybrid (RRF), hybrid+LTR rankings, plus the QPP confidence block computed
+/// over the exact shapes the planner feeds qpp. Shared by `run` (suite 13)
+/// and `conformal` (suite 16).
+struct RankedQuery {
+    bm25: Vec<String>,
+    hybrid: Vec<String>,
+    ltr: Vec<String>,
+    confidence: Option<meridian_rank::qpp::ConfidenceBlock>,
+}
+
+fn rank_query(stack: &Stack, scorer: &LinearLtr, query: &str) -> RankedQuery {
+    let (index, embedder, vectors) = (&stack.index, &stack.embedder, &stack.vectors);
+    // BM25-only ranking.
+    let bm25_ranked: Vec<String> = index
+        .search(query, 100)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|h| h.url)
+        .collect();
+
+    // Hybrid: RRF over {bm25 top-1000, ann top-200} — the planner's exact
+    // local fusion (same rrf_fuse, same url_key identity).
+    let bm25_full = index.search(query, 1000).unwrap_or_default();
+    let bm25_full_for_ltr = bm25_full.clone();
+    let qv = embedder.embed_query(query);
+    let ann = vectors.search(&qv, 200).unwrap_or_default();
+    let lists: Vec<Vec<u64>> = vec![
+        bm25_full.iter().map(|h| h.url_key).collect(),
+        ann.iter().map(|(k, _)| *k).collect(),
+    ];
+    let fused = meridian_query::rrf::rrf_fuse(&lists, meridian_query::rrf::RRF_K);
+
+    let mut url_by_key: std::collections::HashMap<u64, String> =
+        bm25_full.into_iter().map(|h| (h.url_key, h.url)).collect();
+    let missing: Vec<u64> = fused
+        .iter()
+        .map(|(k, _)| *k)
+        .filter(|k| !url_by_key.contains_key(k))
+        .collect();
+    for d in index.docs_by_keys(&missing).unwrap_or_default() {
+        url_by_key.insert(d.url_key, d.url);
+    }
+    let hybrid_ranked: Vec<String> = fused
+        .iter()
+        .filter_map(|(k, _)| url_by_key.get(k).cloned())
+        .take(100)
+        .collect();
+
+    // hybrid + LTR re-score (the planner's rank stage): same fused list,
+    // re-ordered by the cold-start linear model over the top-100.
+    let ann_sim: std::collections::HashMap<u64, f32> = ann.iter().copied().collect();
+    let bm25_by_key: std::collections::HashMap<u64, f32> = bm25_full_for_ltr
+        .iter()
+        .map(|h| (h.url_key, h.bm25))
+        .collect();
+    let title_by_key: std::collections::HashMap<u64, String> = bm25_full_for_ltr
+        .iter()
+        .map(|h| (h.url_key, h.title.clone()))
+        .collect();
+    let mut ltr_ranked_keyed: Vec<(u64, f32)> = fused
+        .iter()
+        .take(100)
+        .map(|(k, rrf)| {
+            let f = Features {
+                rrf: *rrf,
+                bm25: bm25_by_key.get(k).copied().unwrap_or(0.0),
+                ann: ann_sim.get(k).copied().unwrap_or(0.0),
+                title_match_ratio: title_by_key
+                    .get(k)
+                    .map(|t| title_match_ratio(query, t))
+                    .unwrap_or(0.0),
+                source_count: bm25_by_key.contains_key(k) as u8 as f32
+                    + ann_sim.contains_key(k) as u8 as f32,
+                snippet_len_norm: 0.5,
+                freshness: 0.5,
+                domain_prior: 0.0,
+                geo: 0.0,
+            };
+            (*k, scorer.score(&f))
+        })
+        .collect();
+    ltr_ranked_keyed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    let ltr_ranked: Vec<String> = ltr_ranked_keyed
+        .iter()
+        .filter_map(|(k, _)| url_by_key.get(k).cloned())
+        .collect();
+
+    // Suite 13: confidence over the SAME shapes the planner feeds qpp —
+    // top = the LTR-ranked head's RRF scores + snippets, pool = the scored
+    // top-100 fused candidates.
+    let snippet_by_key: std::collections::HashMap<u64, String> = {
+        let mut m: std::collections::HashMap<u64, String> = bm25_full_for_ltr
+            .iter()
+            .map(|h| (h.url_key, h.snippet.clone()))
+            .collect();
+        let missing: Vec<u64> = fused
+            .iter()
+            .take(100)
+            .map(|(k, _)| *k)
+            .filter(|k| !m.contains_key(k))
+            .collect();
+        for d in index.docs_by_keys(&missing).unwrap_or_default() {
+            m.insert(d.url_key, d.snippet);
+        }
+        m
+    };
+    let rrf_by_key: std::collections::HashMap<u64, f32> =
+        fused.iter().take(100).map(|(k, r)| (*k, *r)).collect();
+    let pool: Vec<(f32, &str)> = fused
+        .iter()
+        .take(100)
+        .filter_map(|(k, r)| snippet_by_key.get(k).map(|s| (*r, s.as_str())))
+        .collect();
+    let head: Vec<(f32, &str)> = ltr_ranked_keyed
+        .iter()
+        .take(10)
+        .filter_map(|(k, _)| {
+            let r = rrf_by_key.get(k)?;
+            snippet_by_key.get(k).map(|s| (*r, s.as_str()))
+        })
+        .collect();
+    let top_scores: Vec<f32> = head.iter().map(|(r, _)| *r).collect();
+    let top_snips: Vec<&str> = head.iter().map(|(_, s)| *s).collect();
+    let pool_scores: Vec<f32> = pool.iter().map(|(r, _)| *r).collect();
+    let pool_snips: Vec<&str> = pool.iter().map(|(_, s)| *s).collect();
+    let confidence =
+        meridian_rank::qpp::confidence(&top_scores, &top_snips, &pool_scores, &pool_snips);
+    RankedQuery {
+        bm25: bm25_ranked,
+        hybrid: hybrid_ranked,
+        ltr: ltr_ranked,
+        confidence,
+    }
+}
+
+/// Suite 16 — `conformal` (Phase 10, ADR-27): fit confidence-band thresholds
+/// on a generator-built calibration set with the (n+1) finite-sample
+/// correction, then verify selective coverage on a disjoint-seed hold-out AND
+/// a held-out generator variant (risk #21). Guarantees are NESTED ("high" ⊆
+/// "medium-or-better") and scoped to the eval distribution — api.md says so.
+///
+/// Gates (04-bench-plan §7): per-band hold-out coverage ≥ target − 5pp on
+/// BOTH hold sets; strictly monotone mean nDCG across bands on both; bands
+/// with fewer than 10 hold-out members fail honestly (a guarantee nobody can
+/// observe is not a guarantee).
+fn conformal(corpus: &str, data: &str, models: &str, out: &str) -> ExitCode {
+    const N_CAL: usize = 400;
+    const N_HOLD: usize = 200;
+    const TAU_HIGH: f64 = 0.5;
+    const ALPHA_HIGH: f64 = 0.10;
+    const TAU_MED: f64 = 0.3;
+    const ALPHA_MED: f64 = 0.20;
+    const MIN_MASS: usize = 20;
+
+    let docs = read_corpus(corpus, usize::MAX);
+    if docs.is_empty() {
+        eprintln!("no usable corpus docs at {corpus}");
+        return ExitCode::FAILURE;
+    }
+    let stack = match open_stack(data, models) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("stack init failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let scorer = LinearLtr::default();
+    let points = |n: usize, seed: u64, phrase: bool| -> Vec<(f64, f64)> {
+        let mut rng = Rng::new(seed);
+        let mut out: Vec<(f64, f64)> = Vec::new();
+        let mut guard = 0;
+        while out.len() < n && guard < n * 50 {
+            guard += 1;
+            let doc = &docs[rng.below(docs.len())];
+            let q = if phrase {
+                phrase_query(doc, &mut rng)
+            } else {
+                known_item_query(doc, &mut rng)
+            };
+            let Some(q) = q else { continue };
+            let ranked = rank_query(&stack, &scorer, &q);
+            let Some(c) = &ranked.confidence else {
+                continue;
+            };
+            let mut judgments = std::collections::HashMap::new();
+            judgments.insert(doc.url.clone(), 3u32);
+            out.push((f64::from(c.score), ndcg_at(10, &ranked.ltr, &judgments)));
+        }
+        out
+    };
+    println!(">> scoring calibration ({N_CAL}) + hold-out ({N_HOLD}) + variant ({N_HOLD})…");
+    let cal = points(N_CAL, 0xCA11_2026, false);
+    let hold = points(N_HOLD, 0x801D_2026, false);
+    let variant = points(N_HOLD, 0x7A21_2026, true);
+    println!(
+        ">> points: cal={} hold={} variant={}",
+        cal.len(),
+        hold.len(),
+        variant.len()
+    );
+
+    // Threshold fit on calibration ONLY: smallest λ (largest selection) whose
+    // empirical violation rate satisfies (v + 1) / (n + 1) ≤ α with at least
+    // MIN_MASS selected calibration points.
+    let fit = |tau: f64, alpha: f64| -> Option<f64> {
+        let mut sorted = cal.clone();
+        sorted.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+        let mut best: Option<f64> = None;
+        let (mut n_sel, mut viol) = (0usize, 0usize);
+        for &(score, ndcg) in &sorted {
+            n_sel += 1;
+            if ndcg < tau {
+                viol += 1;
+            }
+            if n_sel >= MIN_MASS && (viol as f64 + 1.0) / (n_sel as f64 + 1.0) <= alpha {
+                best = Some(score);
+            }
+        }
+        best
+    };
+
+    // Achievable-frontier report (operator Q12 anticipated this: the sweep
+    // reports the frontier so the targets can move). Base rates + coverage by
+    // confidence-ordered prefix mass, calibration set only.
+    let base = |tau: f64| cal.iter().filter(|(_, n)| *n >= tau).count() as f64 / cal.len() as f64;
+    let base_high = base(TAU_HIGH);
+    let base_med = base(TAU_MED);
+    println!(
+        ">> calibration base rates: P(nDCG ≥ {TAU_HIGH}) = {base_high:.3}, P(nDCG ≥ {TAU_MED}) = {base_med:.3}"
+    );
+    {
+        let mut sorted = cal.clone();
+        sorted.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+        for mass in [20usize, 40, 80, 160, 400] {
+            let m = mass.min(sorted.len());
+            let ok_h = sorted[..m].iter().filter(|(_, n)| *n >= TAU_HIGH).count();
+            let ok_m = sorted[..m].iter().filter(|(_, n)| *n >= TAU_MED).count();
+            println!(
+                ">> top-{m} by score: cov(τ={TAU_HIGH}) = {:.3}, cov(τ={TAU_MED}) = {:.3}",
+                ok_h as f64 / m as f64,
+                ok_m as f64 / m as f64
+            );
+        }
+    }
+
+    // Frontier rule (stated a priori): walk α down from the Q12 default until
+    // a threshold fits; ship ONLY if the achieved target still clears the
+    // base rate by a usefulness margin (+0.15 high / +0.10 med) — a band that
+    // barely beats the prior is decoration, not information (risk #24).
+    let frontier = |tau: f64, alpha_start: f64| -> Option<(f64, f64)> {
+        let mut alpha = alpha_start;
+        while alpha <= 0.45 + 1e-9 {
+            if let Some(l) = fit(tau, alpha) {
+                return Some((l, alpha));
+            }
+            alpha += 0.05;
+        }
+        None
+    };
+    let Some((lambda_high, alpha_high_used)) = frontier(TAU_HIGH, ALPHA_HIGH) else {
+        eprintln!(
+            "GATE FAIL: no λ_high achieves P(nDCG ≥ {TAU_HIGH}) ≥ 0.55 even at the frontier \
+             floor — bands do not ship (ADR-27)"
+        );
+        return ExitCode::FAILURE;
+    };
+    let (lambda_med, alpha_med_used) = frontier(TAU_MED, ALPHA_MED)
+        .map(|(l, a)| (l.min(lambda_high), a))
+        .unwrap_or((lambda_high, ALPHA_MED));
+    let target_high = 1.0 - alpha_high_used;
+    let target_med = 1.0 - alpha_med_used;
+    if alpha_high_used > ALPHA_HIGH + 1e-9 {
+        println!(
+            ">> Q12 default (τ={TAU_HIGH} @ {:.0}%) UNACHIEVABLE on this eval set; frontier \
+             target = {:.0}% (reported, not hidden)",
+            (1.0 - ALPHA_HIGH) * 100.0,
+            target_high * 100.0
+        );
+    }
+    let g_useful = target_high >= base_high + 0.15 && target_med >= base_med + 0.10;
+
+    let coverage = |pts: &[(f64, f64)], lambda: f64, tau: f64| -> (usize, f64) {
+        let sel: Vec<&(f64, f64)> = pts.iter().filter(|(s, _)| *s >= lambda).collect();
+        let ok = sel.iter().filter(|(_, n)| *n >= tau).count();
+        (sel.len(), ok as f64 / sel.len().max(1) as f64)
+    };
+    let band_means = |pts: &[(f64, f64)]| -> (usize, usize, usize, f64, f64, f64) {
+        let (mut nh, mut nm, mut nl) = (0usize, 0usize, 0usize);
+        let (mut sh, mut sm, mut sl) = (0.0f64, 0.0f64, 0.0f64);
+        for &(s, n) in pts {
+            if s >= lambda_high {
+                nh += 1;
+                sh += n;
+            } else if s >= lambda_med {
+                nm += 1;
+                sm += n;
+            } else {
+                nl += 1;
+                sl += n;
+            }
+        }
+        (
+            nh,
+            nm,
+            nl,
+            sh / nh.max(1) as f64,
+            sm / nm.max(1) as f64,
+            sl / nl.max(1) as f64,
+        )
+    };
+
+    let (cal_nh, cov_cal_h) = coverage(&cal, lambda_high, TAU_HIGH);
+    let (cal_nm, cov_cal_m) = coverage(&cal, lambda_med, TAU_MED);
+    let (hold_nh, cov_hold_h) = coverage(&hold, lambda_high, TAU_HIGH);
+    let (hold_nm, cov_hold_m) = coverage(&hold, lambda_med, TAU_MED);
+    let (var_nh, cov_var_h) = coverage(&variant, lambda_high, TAU_HIGH);
+    let (var_nm, cov_var_m) = coverage(&variant, lambda_med, TAU_MED);
+    for (name, pts) in [("hold", &hold), ("variant", &variant)] {
+        let bh = pts.iter().filter(|(_, n)| *n >= TAU_HIGH).count() as f64 / pts.len() as f64;
+        let bm = pts.iter().filter(|(_, n)| *n >= TAU_MED).count() as f64 / pts.len() as f64;
+        println!(
+            ">> {name} base rates: P(nDCG ≥ {TAU_HIGH}) = {bh:.3}, P(nDCG ≥ {TAU_MED}) = {bm:.3}"
+        );
+    }
+    let (h_nh, h_nm, h_nl, h_mh, h_mm, h_ml) = band_means(&hold);
+    let (v_nh, v_nm, v_nl, v_mh, v_mm, v_ml) = band_means(&variant);
+    let cal_scores: Vec<f64> = cal.iter().map(|(s, _)| *s).collect();
+    let cal_ndcgs: Vec<f64> = cal.iter().map(|(_, n)| *n).collect();
+    let ece = ece_10(&cal_scores, &cal_ndcgs);
+
+    println!(
+        ">> thresholds: λ_high={lambda_high:.4} (τ={TAU_HIGH} @ {:.0}%), λ_med={lambda_med:.4} \
+         (τ={TAU_MED} @ {:.0}%)",
+        target_high * 100.0,
+        target_med * 100.0
+    );
+    println!(
+        ">> coverage high: cal {cov_cal_h:.3} (n={cal_nh}) | hold {cov_hold_h:.3} (n={hold_nh}) \
+         | variant {cov_var_h:.3} (n={var_nh})"
+    );
+    println!(
+        ">> coverage med-or-better: cal {cov_cal_m:.3} (n={cal_nm}) | hold {cov_hold_m:.3} \
+         (n={hold_nm}) | variant {cov_var_m:.3} (n={var_nm})"
+    );
+    println!(
+        ">> hold band means: high {h_mh:.3} (n={h_nh}) > med {h_mm:.3} (n={h_nm}) > low \
+         {h_ml:.3} (n={h_nl}) | variant: {v_mh:.3}/{v_mm:.3}/{v_ml:.3} (n={v_nh}/{v_nm}/{v_nl})"
+    );
+    println!(">> ece(score vs ndcg, calibration) = {ece:.3}");
+
+    let g_cov_high = cov_hold_h >= target_high - 0.05 && cov_var_h >= target_high - 0.05;
+    let g_cov_med = cov_hold_m >= target_med - 0.05 && cov_var_m >= target_med - 0.05;
+    let g_mass = hold_nh >= 10 && var_nh >= 10 && h_nm >= 10 && v_nm >= 10;
+    let g_mono = h_mh > h_mm && h_mm > h_ml && v_mh > v_mm && v_mm > v_ml;
+    for (name, ok) in [
+        (
+            "usefulness: target ≥ base rate (+15pp high / +10pp med)",
+            g_useful,
+        ),
+        ("coverage high ≥ target−5pp on hold AND variant", g_cov_high),
+        ("coverage med-or-better ≥ target−5pp on both", g_cov_med),
+        ("band mass ≥ 10 per claimed band on both", g_mass),
+        ("strictly monotone band means on both", g_mono),
+    ] {
+        println!("GATE {name}: {}", if ok { "PASS" } else { "FAIL" });
+    }
+
+    let report = serde_json::json!({
+        "suite": "conformal",
+        "n": {"cal": cal.len(), "hold": hold.len(), "variant": variant.len()},
+        "targets": {"tau_high": TAU_HIGH, "alpha_high_default": ALPHA_HIGH, "alpha_high_used": alpha_high_used, "tau_med": TAU_MED, "alpha_med_default": ALPHA_MED, "alpha_med_used": alpha_med_used, "base_rate_high": base_high, "base_rate_med": base_med, "min_mass": MIN_MASS},
+        "thresholds": {"lambda_high": lambda_high, "lambda_med": lambda_med},
+        "coverage": {
+            "high": {"cal": cov_cal_h, "hold": cov_hold_h, "variant": cov_var_h, "n_cal": cal_nh, "n_hold": hold_nh, "n_variant": var_nh},
+            "med_or_better": {"cal": cov_cal_m, "hold": cov_hold_m, "variant": cov_var_m, "n_cal": cal_nm, "n_hold": hold_nm, "n_variant": var_nm}
+        },
+        "band_means": {
+            "hold": {"high": h_mh, "med": h_mm, "low": h_ml, "n": [h_nh, h_nm, h_nl]},
+            "variant": {"high": v_mh, "med": v_mm, "low": v_ml, "n": [v_nh, v_nm, v_nl]}
+        },
+        "ece_cal": ece,
+        "gates": {"useful": g_useful, "coverage_high": g_cov_high, "coverage_med": g_cov_med, "band_mass": g_mass, "monotone": g_mono},
+    });
+    if let Some(dir) = Path::new(out).parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if std::fs::write(out, serde_json::to_string_pretty(&report).unwrap()).is_err() {
+        eprintln!("cannot write {out}");
+        return ExitCode::FAILURE;
+    }
+    println!(">> report: {out}");
+    if g_useful && g_cov_high && g_cov_med && g_mass && g_mono {
+        println!(
+            ">> FREEZE for meridian-rank::qpp: BAND_HIGH_THRESHOLD = {lambda_high:.4}, \
+             BAND_MEDIUM_THRESHOLD = {lambda_med:.4}"
+        );
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
 fn run(data: &str, models: &str, queries: &str, qrels_path: &str) -> ExitCode {
     let set = match qrels::load(Path::new(queries), Path::new(qrels_path)) {
         Ok(s) if !s.queries.is_empty() => s,
@@ -312,12 +744,7 @@ fn run(data: &str, models: &str, queries: &str, qrels_path: &str) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let Stack {
-        index,
-        embedder,
-        vectors,
-        ..
-    } = match open_stack(data, models) {
+    let stack = match open_stack(data, models) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("stack init failed: {e}");
@@ -327,8 +754,8 @@ fn run(data: &str, models: &str, queries: &str, qrels_path: &str) -> ExitCode {
     println!(
         ">> eval over {} queries, {} docs, {} vectors",
         set.queries.len(),
-        index.num_docs(),
-        vectors.len()
+        stack.index.num_docs(),
+        stack.vectors.len()
     );
 
     // Per-system accumulators: (ndcg@10, mrr@10, recall@100)
@@ -349,137 +776,23 @@ fn run(data: &str, models: &str, queries: &str, qrels_path: &str) -> ExitCode {
         };
         evaluated += 1;
 
-        // BM25-only ranking.
-        let bm25_ranked: Vec<String> = index
-            .search(query, 100)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|h| h.url)
-            .collect();
-
-        // Hybrid: RRF over {bm25 top-1000, ann top-200} — the planner's exact
-        // local fusion (same rrf_fuse, same url_key identity).
-        let bm25_full = index.search(query, 1000).unwrap_or_default();
-        let bm25_full_for_ltr = bm25_full.clone();
-        let qv = embedder.embed_query(query);
-        let ann = vectors.search(&qv, 200).unwrap_or_default();
-        let lists: Vec<Vec<u64>> = vec![
-            bm25_full.iter().map(|h| h.url_key).collect(),
-            ann.iter().map(|(k, _)| *k).collect(),
-        ];
-        let fused = meridian_query::rrf::rrf_fuse(&lists, meridian_query::rrf::RRF_K);
-
-        let mut url_by_key: std::collections::HashMap<u64, String> =
-            bm25_full.into_iter().map(|h| (h.url_key, h.url)).collect();
-        let missing: Vec<u64> = fused
-            .iter()
-            .map(|(k, _)| *k)
-            .filter(|k| !url_by_key.contains_key(k))
-            .collect();
-        for d in index.docs_by_keys(&missing).unwrap_or_default() {
-            url_by_key.insert(d.url_key, d.url);
-        }
-        let hybrid_ranked: Vec<String> = fused
-            .iter()
-            .filter_map(|(k, _)| url_by_key.get(k).cloned())
-            .take(100)
-            .collect();
-
-        // hybrid + LTR re-score (the planner's rank stage): same fused list,
-        // re-ordered by the cold-start linear model over the top-100.
-        let ann_sim: std::collections::HashMap<u64, f32> = ann.iter().copied().collect();
-        let bm25_by_key: std::collections::HashMap<u64, f32> = bm25_full_for_ltr
-            .iter()
-            .map(|h| (h.url_key, h.bm25))
-            .collect();
-        let title_by_key: std::collections::HashMap<u64, String> = bm25_full_for_ltr
-            .iter()
-            .map(|h| (h.url_key, h.title.clone()))
-            .collect();
-        let mut ltr_ranked_keyed: Vec<(u64, f32)> = fused
-            .iter()
-            .take(100)
-            .map(|(k, rrf)| {
-                let f = Features {
-                    rrf: *rrf,
-                    bm25: bm25_by_key.get(k).copied().unwrap_or(0.0),
-                    ann: ann_sim.get(k).copied().unwrap_or(0.0),
-                    title_match_ratio: title_by_key
-                        .get(k)
-                        .map(|t| title_match_ratio(query, t))
-                        .unwrap_or(0.0),
-                    source_count: bm25_by_key.contains_key(k) as u8 as f32
-                        + ann_sim.contains_key(k) as u8 as f32,
-                    snippet_len_norm: 0.5,
-                    freshness: 0.5,
-                    domain_prior: 0.0,
-                    geo: 0.0,
-                };
-                (*k, scorer.score(&f))
-            })
-            .collect();
-        ltr_ranked_keyed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-        let ltr_ranked: Vec<String> = ltr_ranked_keyed
-            .iter()
-            .filter_map(|(k, _)| url_by_key.get(k).cloned())
-            .collect();
-
-        // Suite 13: confidence over the SAME shapes the planner feeds qpp —
-        // top = the LTR-ranked head's RRF scores + snippets, pool = the scored
-        // top-100 fused candidates.
-        let snippet_by_key: std::collections::HashMap<u64, String> = {
-            let mut m: std::collections::HashMap<u64, String> = bm25_full_for_ltr
-                .iter()
-                .map(|h| (h.url_key, h.snippet.clone()))
-                .collect();
-            let missing: Vec<u64> = fused
-                .iter()
-                .take(100)
-                .map(|(k, _)| *k)
-                .filter(|k| !m.contains_key(k))
-                .collect();
-            for d in index.docs_by_keys(&missing).unwrap_or_default() {
-                m.insert(d.url_key, d.snippet);
-            }
-            m
-        };
-        let rrf_by_key: std::collections::HashMap<u64, f32> =
-            fused.iter().take(100).map(|(k, r)| (*k, *r)).collect();
-        let pool: Vec<(f32, &str)> = fused
-            .iter()
-            .take(100)
-            .filter_map(|(k, r)| snippet_by_key.get(k).map(|s| (*r, s.as_str())))
-            .collect();
-        let head: Vec<(f32, &str)> = ltr_ranked_keyed
-            .iter()
-            .take(10)
-            .filter_map(|(k, _)| {
-                let r = rrf_by_key.get(k)?;
-                snippet_by_key.get(k).map(|s| (*r, s.as_str()))
-            })
-            .collect();
-        let top_scores: Vec<f32> = head.iter().map(|(r, _)| *r).collect();
-        let top_snips: Vec<&str> = head.iter().map(|(_, s)| *s).collect();
-        let pool_scores: Vec<f32> = pool.iter().map(|(r, _)| *r).collect();
-        let pool_snips: Vec<&str> = pool.iter().map(|(_, s)| *s).collect();
-        if let Some(c) =
-            meridian_rank::qpp::confidence(&top_scores, &top_snips, &pool_scores, &pool_snips)
-        {
+        let ranked = rank_query(&stack, &scorer, query);
+        if let Some(c) = &ranked.confidence {
             qpp_score.push(f64::from(c.score));
             qpp_nqc.push(f64::from(c.nqc));
             qpp_clarity.push(f64::from(c.clarity));
-            qpp_ndcg.push(ndcg_at(10, &ltr_ranked, judgments));
+            qpp_ndcg.push(ndcg_at(10, &ranked.ltr, judgments));
         }
 
-        bm25_scores.0 += ndcg_at(10, &bm25_ranked, judgments);
-        bm25_scores.1 += mrr_at(10, &bm25_ranked, judgments);
-        bm25_scores.2 += recall_at(100, &bm25_ranked, judgments);
-        hybrid_scores.0 += ndcg_at(10, &hybrid_ranked, judgments);
-        hybrid_scores.1 += mrr_at(10, &hybrid_ranked, judgments);
-        hybrid_scores.2 += recall_at(100, &hybrid_ranked, judgments);
-        ltr_scores.0 += ndcg_at(10, &ltr_ranked, judgments);
-        ltr_scores.1 += mrr_at(10, &ltr_ranked, judgments);
-        ltr_scores.2 += recall_at(100, &ltr_ranked, judgments);
+        bm25_scores.0 += ndcg_at(10, &ranked.bm25, judgments);
+        bm25_scores.1 += mrr_at(10, &ranked.bm25, judgments);
+        bm25_scores.2 += recall_at(100, &ranked.bm25, judgments);
+        hybrid_scores.0 += ndcg_at(10, &ranked.hybrid, judgments);
+        hybrid_scores.1 += mrr_at(10, &ranked.hybrid, judgments);
+        hybrid_scores.2 += recall_at(100, &ranked.hybrid, judgments);
+        ltr_scores.0 += ndcg_at(10, &ranked.ltr, judgments);
+        ltr_scores.1 += mrr_at(10, &ranked.ltr, judgments);
+        ltr_scores.2 += recall_at(100, &ranked.ltr, judgments);
     }
 
     let n = evaluated.max(1) as f64;
@@ -731,18 +1044,19 @@ fn run_dup(data: &str, models: &str, queries: &str, qrels_path: &str) -> ExitCod
         eprintln!("empty dup eval set");
         return ExitCode::FAILURE;
     }
-    let Stack {
-        index,
-        embedder,
-        vectors,
-        ..
-    } = match open_stack(data, models) {
+    let stack = match open_stack(data, models) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("stack init failed: {e}");
             return ExitCode::FAILURE;
         }
     };
+    let Stack {
+        index,
+        embedder,
+        vectors,
+        ..
+    } = &stack;
     println!(
         ">> dup eval over {} queries, {} docs",
         query_list.len(),
