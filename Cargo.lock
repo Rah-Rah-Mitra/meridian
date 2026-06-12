@@ -3220,6 +3220,7 @@ dependencies = [
  "meridian-index",
  "meridian-privacy",
  "meridian-query",
+ "meridian-searx",
  "metrics",
  "metrics-exporter-prometheus",
  "serde",

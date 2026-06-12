@@ -13,6 +13,7 @@ publish.workspace = true
 meridian-common.workspace = true
 meridian-privacy.workspace = true
 meridian-query.workspace = true
+meridian-searx.workspace = true
 meridian-geo.workspace = true
 meridian-index.workspace = true
 meridian-analytics.workspace = true

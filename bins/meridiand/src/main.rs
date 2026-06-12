@@ -82,6 +82,7 @@ struct Components {
     shed: Arc<ShedState>,
     lanes: Arc<LaneRegistry>,
     analytics: Option<Arc<meridian_analytics::Analytics>>,
+    decision_log: Option<Arc<meridian_searx::decision_log::DecisionLog>>,
 }
 
 fn build_components(config: MeridianConfig) -> Result<Components, String> {
@@ -211,7 +212,7 @@ fn build_components(config: MeridianConfig) -> Result<Components, String> {
         searx_anon,
         reranker,
         bandit,
-        decision_log,
+        decision_log.clone(),
         lanes.clone(),
         shed.clone(),
         config.lanes.anon.max_concurrent_searches,
@@ -228,6 +229,7 @@ fn build_components(config: MeridianConfig) -> Result<Components, String> {
         shed,
         lanes,
         analytics,
+        decision_log,
     })
 }
 
@@ -376,6 +378,7 @@ fn serve() -> ExitCode {
             components.fetcher,
             components.shed,
             components.analytics.clone(),
+            components.decision_log.clone(),
             bearer,
             metrics_handle,
         );

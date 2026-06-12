@@ -100,6 +100,96 @@ fn request(lane: Lane, scope: Scope) -> SearchRequest {
     }
 }
 
+/// Invariant 18 (Phase 9, ADR-24): decision-log rows come ONLY from unpinned
+/// direct-lane searches. The anon lane cannot write one even when the log is
+/// enabled (the log call shares the bandit-reward site, which the anon branch
+/// never reaches — SPEC §12.4), and the pinned compare halves write none
+/// (pinning skips the bandit, so there is no decision to log).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn inv18_decision_log_direct_lane_only() {
+    let (direct_addr, _direct_hits) = canary().await;
+    let dir = std::env::temp_dir().join(format!(
+        "meridian-lane-inv-{}-{}",
+        std::process::id(),
+        DIR_SEQ.fetch_add(1, Ordering::SeqCst)
+    ));
+    let index_cfg = IndexConfig {
+        data_dir: dir.clone(),
+        writer_threads: 1,
+        writer_heap_bytes: 16 * 1024 * 1024,
+        merge_max_docs: 100_000,
+    };
+    let vector_cfg = VectorConfig::default();
+    let bandit =
+        Arc::new(meridian_searx::bandit::Bandit::open(&dir, 0.1).expect("bandit in temp dir"));
+    let dlog = Arc::new(
+        meridian_searx::decision_log::DecisionLog::new(bandit.database())
+            .expect("decision log on the bandit db"),
+    );
+    let planner = Planner::new(
+        Arc::new(LexicalIndex::open_or_create(&index_cfg).unwrap()),
+        Arc::new(Embedder::test_stub(64)),
+        Arc::new(VectorStore::open_or_create(&dir, 64, &vector_cfg).unwrap()),
+        Some(Arc::new(
+            SearxClient::new(&format!("http://{direct_addr}/"), 500, None).unwrap(),
+        )),
+        None,
+        Arc::new(Reranker::unavailable()),
+        Some(bandit),
+        Some(dlog.clone()),
+        Arc::new(
+            LaneRegistry::new(
+                &LanesConfig {
+                    anon_enabled: true,
+                    ..LanesConfig::default()
+                },
+                &dir,
+            )
+            .unwrap(),
+        ),
+        Arc::new(ShedState::default()),
+        2,
+        Arc::new(meridian_common::prior::NoPrior),
+        None,
+        &SearchConfig::default(),
+        &vector_cfg,
+    );
+
+    // (a) Unpinned direct web search: exactly one decision row (the write is
+    // spawn_blocking'd off the request path, so poll briefly).
+    planner
+        .search(request(Lane::Direct, Scope::Web))
+        .await
+        .expect("direct web search");
+    let mut rows = 0;
+    for _ in 0..40 {
+        rows = dlog.len().unwrap();
+        if rows == 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(rows, 1, "one unpinned direct search = one decision row");
+
+    // (b) Anon search attempt (lane down ⇒ fails closed): still one row.
+    let err = planner.search(request(Lane::Anon, Scope::Web)).await;
+    assert!(err.is_err(), "anon must fail closed here");
+
+    // (c) Pinned direct search (how BOTH compare halves run): still one row.
+    let mut pinned = request(Lane::Direct, Scope::Web);
+    pinned.pin_engines = true;
+    pinned.bypass_cache = true;
+    planner.search(pinned).await.expect("pinned direct search");
+
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(
+        dlog.len().unwrap(),
+        1,
+        "anon attempts and pinned compare halves must never log decisions"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Phase-8 invariant (ADR-22): compare-vantages fails CLOSED when the anon
 /// half cannot run — never a silent direct-only answer under a compare label —
 /// and the failed compare leaves the shared query cache untouched.

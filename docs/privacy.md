@@ -96,9 +96,10 @@ quietly grow into it. Safeguards, all enforced in code:
   that day, its rows are written with the context fields blanked — rare,
   potentially identifying combinations never land readable.
 - **30-day TTL** swept continuously and at startup; **20 MB hard cap** (oldest
-  days dropped first); a `wipe()` erasure path (operator API surface lands
-  with the v0.4.0 OPE tooling — until then, disabling the flag stops new rows
-  and the TTL erases the rest within 30 days).
+  days dropped first); erasure via `POST /v1/decision-log/wipe` (bearer-gated;
+  `GET /v1/decision-log` reports row count, size, and retained day range).
+  Disabling the flag stops new rows and the TTL erases the rest within 30
+  days.
 - **Anon-lane decisions are never logged.** The log call sits on the same
   code path that rewards the bandit, which the anon lane cannot reach
   (SPEC §12.4 firewall) — enforced by the hermetic lane-invariant suite.

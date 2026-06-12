@@ -33,6 +33,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/geo/heatmap", get(heatmap))
         .route("/v1/trends", get(trends))
         .route("/v1/forget", post(forget))
+        .route("/v1/decision-log", get(decision_log_status))
+        .route("/v1/decision-log/wipe", post(decision_log_wipe))
         .route("/healthz", get(healthz))
         .route("/metrics", get(metrics_endpoint))
         .layer(axum::middleware::from_fn_with_state(
@@ -729,6 +731,74 @@ async fn forget(
         "removed": removed,
         "caches_purged": purge,
     })))
+}
+
+/// `GET /v1/decision-log` (ADR-24 operator surface): row count, the same
+/// bytes-approximation the 20MB cap enforces, retained day range. Bearer-gated
+/// (routing telemetry is operator data); 404 while `searx.decision_log` is off.
+async fn decision_log_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, Problem> {
+    bearer_ok(&state, &headers)?;
+    let Some(dl) = &state.decision_log else {
+        return Err(Problem::new(
+            StatusCode::NOT_FOUND,
+            "decision log disabled",
+            "searx.decision_log = false",
+        ));
+    };
+    let dl = dl.clone();
+    let stats = tokio::task::spawn_blocking(move || dl.stats())
+        .await
+        .map_err(|_| Problem::new(StatusCode::INTERNAL_SERVER_ERROR, "status failed", "join"))?
+        .map_err(|e| {
+            Problem::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "status failed",
+                e.to_string(),
+            )
+        })?;
+    Ok(Json(serde_json::json!({
+        "enabled": true,
+        "rows": stats.rows,
+        "approx_bytes": stats.approx_bytes,
+        "oldest_day": stats.oldest_day,
+        "newest_day": stats.newest_day,
+        "retention_days": meridian_searx::decision_log::RETENTION_DAYS,
+        "max_bytes": meridian_searx::decision_log::MAX_BYTES,
+    })))
+}
+
+/// `POST /v1/decision-log/wipe` (ADR-24 erasure path): drop every retained
+/// decision row, now. The count is audit-logged; rows carry no user data to
+/// begin with (13-byte coarse buckets), but the wipe is still the operator's
+/// kill switch for the whole telemetry class.
+async fn decision_log_wipe(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, Problem> {
+    bearer_ok(&state, &headers)?;
+    let Some(dl) = &state.decision_log else {
+        return Err(Problem::new(
+            StatusCode::NOT_FOUND,
+            "decision log disabled",
+            "searx.decision_log = false",
+        ));
+    };
+    let dl = dl.clone();
+    let removed = tokio::task::spawn_blocking(move || dl.wipe())
+        .await
+        .map_err(|_| Problem::new(StatusCode::INTERNAL_SERVER_ERROR, "wipe failed", "join"))?
+        .map_err(|e| {
+            Problem::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "wipe failed",
+                e.to_string(),
+            )
+        })?;
+    tracing::info!(removed, "decision log wiped");
+    Ok(Json(serde_json::json!({ "removed": removed })))
 }
 
 async fn healthz(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {

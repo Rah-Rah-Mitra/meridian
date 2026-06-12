@@ -252,6 +252,15 @@ tombstones their content hashes so re-ingest is refused, and (default)
 purges the query + fetch caches. Returns `{ "removed": n, "caches_purged": true }`.
 The selector itself is never logged.
 
+## GET /v1/decision-log · POST /v1/decision-log/wipe  (bearer)
+
+Operator surface for the ADR-24 per-decision routing log (see the
+[privacy guide](privacy.md#decision-log-v030-off-by-default-adr-24)). Both
+return `404` while `searx.decision_log` is `false` (the default). `GET`
+reports `{ enabled, rows, approx_bytes, oldest_day, newest_day,
+retention_days, max_bytes }`; `wipe` drops every retained row and returns
+`{ "removed": n }`.
+
 ## GET /healthz
 
 `{ "status": "ok", "uptime_secs": n }`. Unauthenticated, not rate-limited.
