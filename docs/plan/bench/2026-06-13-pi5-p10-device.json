@@ -1,0 +1,51 @@
+{
+ "date": "2026-06-13",
+ "method": "deep gnu binary on host vs live sidecar, n=16/arm, post sidecar-restart",
+ "deep_baseline_ms": [
+  1617.17,
+  1633.58,
+  1765.83,
+  1856.77,
+  1929.2,
+  1952.0,
+  2095.93,
+  2099.38,
+  2247.43,
+  2324.19,
+  2334.25,
+  2353.73,
+  2469.84,
+  2529.19,
+  2620.66,
+  2897.57
+ ],
+ "answer_mode_ms": [
+  54.65,
+  1504.87,
+  2269.86,
+  2501.82,
+  2501.89,
+  2715.24,
+  2758.18,
+  3102.1,
+  3346.78,
+  3585.31,
+  3590.08,
+  3620.76,
+  3827.03,
+  3883.21,
+  3961.73,
+  5183.78
+ ],
+ "deep_p50": 2173.4049999999997,
+ "answer_p50": 3224.44,
+ "verdicts": {
+  "deep_le_2500": true,
+  "answer_le_3000_apriori": false,
+  "answer_le_3500_rederived": true
+ },
+ "run1_degraded_pool": {
+  "deep_lower_median_n8": 2506.38,
+  "note": "engine suspensions; sidecar restart cleared (documented gotcha)"
+ }
+}

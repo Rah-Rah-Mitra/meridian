@@ -238,8 +238,8 @@ verdict stays calendar-bound and is NOT a P10 gate.
 | 10.6 | Answer mode in production — **DONE 2026-06-12** (same train as 10.5): `answer=true` + validations, inline Pandora stop, per-fetch passage-CE realization (≤16 passages/doc, ≤500 chars), `best_passage` block + `answer_unavailable` marker, `search.answer_deadline_ms`, inv21, api/privacy/operator docs | `planner.rs`, `meridian-fetch/{voi,passage}.rs`, `meridian-api`, docs | 10.5 | 2.5d |
 | 10.7 | Suite 15b embedding-coverage study — **DONE 2026-06-13, RECORDED NO (carry closed)**: the signal exists (potion separates paraphrase registers 0.716 vs 0.052) but no swept combiner holds page quality — paraphrase reveals still buy nDCG; suite `voi-embed` is the standing judge for future candidates | `meridian-eval/src/bench/voi_embed.rs` | `models/`, suite 15 | 1.5d |
 | 10.8 | amd64 restoration — **WIRED 2026-06-13** (gnu/distroless `Dockerfile.amd64`, native-gnu build + boot smoke in CI per PR AND pre-publish in release.yml, arch tags stitched into one manifest, ≤120MB size tripwire, amd64 SBOM + binary assets); the multi-arch manifest itself confirms at the v0.5.0 tag | `.github/workflows/`, `deploy/Dockerfile.amd64` | — | 1.5d |
-| 10.9 | 1M ANN re-baseline (P7 carry): disk pre-flight (≤3GB transient, abort below), recall@10 + p50 vs Profile-F budget; honest record either way (insufficient disk ⇒ still-carried, with the measurement) | `bench/ann` run, `docs/plan/bench/` | disk | 1d |
-| 10.10 | Exit: budgets re-validated, `phase-exits/p10.md`, v0.5.0 | docs | all | 1d |
+| 10.9 | 1M ANN re-baseline — **DONE 2026-06-13, PASS at scale (carry closed)**: recall@10 0.98 @ ef=128, p99 1.73ms, 506MB resident measured; Profile-F `expansion_search` re-derived to 128 | `bench/2026-06-13-pi5-p10-ann-1m.md` | disk | 1d |
+| 10.10 | Exit — **DONE 2026-06-13**: budgets re-validated (answer row re-derived 3.0→3.5s per risk-#8; burst + ANN measured), `phase-exits/p10.md`, v0.5.0 | docs | all | 1d |
 
 **Exit gate:** SPEC §16 Phase 10. ≈ 16d.
 

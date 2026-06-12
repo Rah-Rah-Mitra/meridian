@@ -47,6 +47,6 @@
 
 | # | Question | Default assumed | Consumed by |
 |---|---|---|---|
-| Q12 | **Confidence-band risk targets**: which (τ, coverage) pairs should `band` certify? Tighter targets = honest but rarely-awarded `high`; looser = frequent but weak | τ_high = nDCG@10 ≥ 0.5 at 90% coverage; τ_med = 0.3 at 80% (suite-16 sweep reports the achievable frontier so the operator can move them) | Phase 10 (10.1–10.2), ADR-27 |
+| Q12 | **Confidence-band risk targets** — **MOOT (suite 16, 2026-06-12)**: the default (90%) was unachievable outright AND the absolute claim collapsed under a query-style shift; bands were withdrawn pre-ship, so no target needs choosing until a stronger predictor exists | — | ADR-27 (REFUTED), suite 16 standing |
 | Q13 | **Answer-mode passage cap** (length × count drive the second CE batch's cost) | ≤500 chars/passage, ≤32 passages/request | Phase 10 (10.6), ADR-29 |
-| Q14 | **amd64 image flavor**: gnu/distroless variant (two image flavors to maintain) or wait for an upstream `__GLIBC__` guard in numkong (one flavor, unknown timeline)? | gnu/distroless variant now; drop it if upstream lands a guard | Phase 10 (10.8) |
+| Q14 | **amd64 image flavor** — **default taken 2026-06-13**: gnu/distroless variant shipped (multi-arch manifest at v0.5.0); drop it if upstream lands a `__GLIBC__` guard | gnu/distroless | Phase 10 (10.8), done |
