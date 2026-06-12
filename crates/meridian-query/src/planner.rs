@@ -62,6 +62,11 @@ pub struct SearchRequest {
     /// exactly the pre-v0.4.0 behavior. Capped by `search.deep_fetch_max`;
     /// deep mode + direct lane only (the API enforces; the planner guards).
     pub fetch_budget: usize,
+    /// Answer mode (Phase 10, ADR-29): switch the fetch selector to the
+    /// single-best objective (`pandora_walk` regime) and attach the
+    /// `best_passage` block. Requires `fetch_budget` ≥ 1 and inherits every
+    /// fetch_budget restriction (the API enforces; the planner guards).
+    pub answer: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -127,6 +132,24 @@ pub struct SearchResponse {
     /// stopped reading. Only on deep responses with `fetch_budget` > 0.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub analysis: Option<AnalysisBlock>,
+    /// Answer mode (Phase 10, ADR-29): the best (query, passage) pair among
+    /// the FETCHED full texts — extractive only, never generated, and
+    /// `ce_score` is a relevance score, NOT a correctness probability
+    /// (api.md says so). Absent unless `answer=true` found a passage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub best_passage: Option<BestPassage>,
+}
+
+/// ADR-29 `best_passage` block (additive, ADR-20 — carries its own schema).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BestPassage {
+    pub schema: u32,
+    /// Sentence-aligned extract, ≤ 500 chars, verbatim from the fetched page.
+    pub text: String,
+    /// The page the passage was read from.
+    pub url: String,
+    /// Cross-encoder (query, passage) score — relevance, not correctness.
+    pub ce_score: f32,
 }
 
 /// ADR-26 `analysis` block (additive, ADR-20 — carries its own schema).
@@ -150,6 +173,7 @@ struct CachedSearch {
     evidence: Option<crate::evidence::EvidenceBlock>,
     confidence: Option<meridian_rank::qpp::ConfidenceBlock>,
     analysis: Option<AnalysisBlock>,
+    best_passage: Option<BestPassage>,
 }
 
 /// Weighted cost of a cached entry. Counts every owned allocation (strings,
@@ -311,6 +335,7 @@ impl Planner {
         hasher.update(&limit.to_le_bytes());
         // A budget-2 response is a different artifact than a budget-0 one.
         hasher.update(&req.fetch_budget.to_le_bytes());
+        hasher.update(&[u8::from(req.answer)]);
         // Geo + time constraints MUST key the cache — a filtered result set
         // cached under the unfiltered key would poison every later query.
         match &req.geo {
@@ -478,6 +503,7 @@ impl Planner {
                     divergence: None,
                     confidence: hit.confidence.clone(),
                     analysis: hit.analysis.clone(),
+                    best_passage: hit.best_passage.clone(),
                 });
             }
         }
@@ -990,6 +1016,7 @@ impl Planner {
         // only, never ingested; the ladder's 24h extract cache is the only
         // persistence (identical to /v1/fetch).
         let mut analysis: Option<AnalysisBlock> = None;
+        let mut best_passage: Option<BestPassage> = None;
         if req.fetch_budget > 0 && is_direct && matches!(req.mode, SearchMode::Deep) {
             let rss_shed = self
                 .shed
@@ -998,8 +1025,16 @@ impl Planner {
             match (&self.fetcher, self.reranker.available() && !rss_shed) {
                 (Some(fetcher), true) => {
                     let phase_start = Instant::now();
-                    let deadline =
-                        std::time::Duration::from_millis(self.cfg.deep_fetch_deadline_ms);
+                    let answer_mode = req.answer;
+                    // Answer mode does strictly more work per fetch (a
+                    // passage-CE batch realizes the walk's value), so it has
+                    // its own phase deadline (02-budgets: answer p50 ≤3.0s —
+                    // the deep 2.5s budget is not silently busted).
+                    let deadline = std::time::Duration::from_millis(if answer_mode {
+                        self.cfg.answer_deadline_ms
+                    } else {
+                        self.cfg.deep_fetch_deadline_ms
+                    });
                     let budget = req.fetch_budget.min(self.cfg.deep_fetch_max.max(1));
                     let head = results.len().min(20);
                     // Standardize head scores once — the value model's score_z.
@@ -1024,6 +1059,10 @@ impl Planner {
 
                     let mut fetched_sketches: Vec<meridian_index::sketch::Sketch> = Vec::new();
                     let mut fetched_docs: Vec<(usize, String, String)> = Vec::new();
+                    // Answer mode: the value in hand (best passage CE so far)
+                    // and per-doc realized CE for the head re-order.
+                    let mut best_value = 0.0f64;
+                    let mut doc_ce: Vec<(usize, f32)> = Vec::new();
                     let mut fetched_idx: std::collections::HashSet<usize> =
                         std::collections::HashSet::new();
                     let mut fetches_made = 0usize;
@@ -1049,35 +1088,79 @@ impl Planner {
                                         .map(|f| snip.containment(f))
                                         .fold(0.0f64, f64::max);
                                 let score_z = (r.score as f64 - mean) / sd;
-                                meridian_fetch::voi::candidate_from_signals(
-                                    i as u64,
-                                    dcg_headroom(i),
-                                    novelty,
-                                    score_z,
-                                    meridian_fetch::voi::DEFAULT_FETCH_COST,
-                                )
+                                if answer_mode {
+                                    // ADR-29: single-best regime, passage-CE
+                                    // units (gain = novelty, cost frozen by
+                                    // suite 18).
+                                    meridian_fetch::voi::answer_candidate(
+                                        i as u64, novelty, score_z,
+                                    )
+                                } else {
+                                    meridian_fetch::voi::candidate_from_signals(
+                                        i as u64,
+                                        dcg_headroom(i),
+                                        novelty,
+                                        score_z,
+                                        meridian_fetch::voi::DEFAULT_FETCH_COST,
+                                    )
+                                }
                             })
                             .collect();
                         if cands.is_empty() {
                             stopped = meridian_fetch::voi::StopReason::Exhausted;
                             break;
                         }
+                        // What stopping now would leave on the table, in the
+                        // mode's own units (page: best expected net value;
+                        // answer: best reservation index minus the passage
+                        // value already in hand).
+                        let est_left = if answer_mode {
+                            (cands
+                                .iter()
+                                .map(meridian_fetch::voi::reservation_index)
+                                .fold(f64::MIN, f64::max)
+                                - best_value)
+                                .max(0.0)
+                        } else {
+                            max_net(&cands)
+                        };
                         if fetches_made >= budget {
                             stopped = meridian_fetch::voi::StopReason::BudgetExhausted;
-                            est_remaining = max_net(&cands);
+                            est_remaining = est_left;
                             break;
                         }
                         if phase_start.elapsed() >= deadline {
                             stopped = meridian_fetch::voi::StopReason::Deadline;
-                            est_remaining = max_net(&cands);
+                            est_remaining = est_left;
                             break;
                         }
-                        let walk = meridian_fetch::voi::additive_walk(&cands, 1, |_| {});
-                        let Some(&open_id) = walk.opened.first() else {
-                            stopped = walk.stopped_because;
-                            break;
+                        let idx = if answer_mode {
+                            // Pandora's rule inline (the walk's callback is
+                            // sync; the fetch is not): open the best
+                            // reservation index unless the value in hand
+                            // already meets it — the optimal stop.
+                            let top = cands
+                                .iter()
+                                .map(|c| (meridian_fetch::voi::reservation_index(c), c.id))
+                                .max_by(|a, b| {
+                                    a.0.partial_cmp(&b.0)
+                                        .unwrap_or(std::cmp::Ordering::Equal)
+                                        .then(b.1.cmp(&a.1))
+                                })
+                                .expect("cands non-empty");
+                            if best_value >= top.0 {
+                                stopped = meridian_fetch::voi::StopReason::ValueBelowReservation;
+                                break;
+                            }
+                            top.1 as usize
+                        } else {
+                            let walk = meridian_fetch::voi::additive_walk(&cands, 1, |_| {});
+                            let Some(&open_id) = walk.opened.first() else {
+                                stopped = walk.stopped_because;
+                                break;
+                            };
+                            open_id as usize
                         };
-                        let idx = open_id as usize;
                         fetches_made += 1;
                         fetched_idx.insert(idx);
                         let remaining = deadline.saturating_sub(phase_start.elapsed());
@@ -1092,13 +1175,84 @@ impl Planner {
                             fetched_sketches
                                 .push(meridian_index::sketch::Sketch::compute(&doc.text));
                             let title = doc.title.unwrap_or_else(|| results[idx].title.clone());
+                            if answer_mode {
+                                // Realize the walk's value NOW: one CE batch
+                                // over this doc's passages (the stop decision
+                                // between opens needs it — suite-18 replay
+                                // semantics, mirrored exactly).
+                                let passages =
+                                    meridian_fetch::passage::split_passages(&doc.text, 500, 16);
+                                if !passages.is_empty() {
+                                    let pairs: Vec<Pair> = passages
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(pi, p)| Pair {
+                                            doc_key: pi as u64,
+                                            title: title.clone(),
+                                            snippet: p.clone(),
+                                        })
+                                        .collect();
+                                    let query = req.q.clone();
+                                    let reranker = self.reranker.clone();
+                                    let (tx, rx) = tokio::sync::oneshot::channel();
+                                    rayon::spawn(move || {
+                                        let r = reranker.rerank(
+                                            &query,
+                                            &pairs,
+                                            std::time::Duration::from_millis(800),
+                                        );
+                                        let _ = tx.send(r);
+                                    });
+                                    if let Ok(Ok(scored)) = rx.await {
+                                        if let Some(top) = scored.iter().max_by(|a, b| {
+                                            a.ce_score
+                                                .partial_cmp(&b.ce_score)
+                                                .unwrap_or(std::cmp::Ordering::Equal)
+                                        }) {
+                                            doc_ce.push((idx, top.ce_score));
+                                            best_value = best_value.max(f64::from(top.ce_score));
+                                            let better = best_passage
+                                                .as_ref()
+                                                .map(|bp| top.ce_score > bp.ce_score)
+                                                .unwrap_or(true);
+                                            if better {
+                                                best_passage = Some(BestPassage {
+                                                    schema: 1,
+                                                    text: passages[top.doc_key as usize].clone(),
+                                                    url: results[idx].url.clone(),
+                                                    ce_score: top.ce_score,
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             fetched_docs.push((idx, title, doc.text));
+                        }
+                    }
+                    // Answer mode already realized per-doc CE (max passage
+                    // score) during the walk — re-order the head from it and
+                    // skip the second full-text batch; the honesty marker
+                    // fires when answer mode came back empty-handed.
+                    if answer_mode {
+                        if !doc_ce.is_empty() {
+                            for (i, ce) in &doc_ce {
+                                results[*i].rank_signals.ce = Some(*ce);
+                            }
+                            results[..head].sort_by(|a, b| {
+                                let ka = a.rank_signals.ce.unwrap_or(f32::MIN);
+                                let kb = b.rank_signals.ce.unwrap_or(f32::MIN);
+                                kb.partial_cmp(&ka).unwrap_or(std::cmp::Ordering::Equal)
+                            });
+                        }
+                        if best_passage.is_none() {
+                            degraded.push("answer_unavailable");
                         }
                     }
                     // One CE batch over the fetched FULL texts; those results'
                     // ce values are replaced and the head re-orders by ce
                     // (same scale as the snippet-pair rerank above).
-                    if !fetched_docs.is_empty() {
+                    if !answer_mode && !fetched_docs.is_empty() {
                         let pairs: Vec<Pair> = fetched_docs
                             .iter()
                             .map(|(i, title, text)| Pair {
@@ -1234,6 +1388,7 @@ impl Planner {
                     evidence: evidence.clone(),
                     confidence: confidence.clone(),
                     analysis: analysis.clone(),
+                    best_passage: best_passage.clone(),
                 })
             };
             if cacheable {
@@ -1260,6 +1415,7 @@ impl Planner {
             divergence: None,
             confidence,
             analysis,
+            best_passage,
         })
     }
 }

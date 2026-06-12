@@ -10,6 +10,7 @@
 pub mod budget;
 pub mod extract;
 pub mod ladder;
+pub mod passage;
 pub mod robots;
 pub mod ssrf;
 pub mod voi;

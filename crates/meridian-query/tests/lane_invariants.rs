@@ -100,6 +100,7 @@ fn request(lane: Lane, scope: Scope) -> SearchRequest {
         bypass_cache: false,
         pin_engines: false,
         fetch_budget: 0,
+        answer: false,
     }
 }
 
@@ -132,6 +133,49 @@ async fn inv19_fetch_budget_fails_safe_without_reranker() {
         resp.analysis.is_none(),
         "no analysis block without a fetch phase"
     );
+}
+
+/// Invariant 21 (Phase 10, ADR-29): answer mode fails SAFE exactly like the
+/// fetch phase it rides on. With answer=true + fetch_budget but no
+/// cross-encoder, the response degrades (`fetch_unavailable`), carries NO
+/// best_passage block, and performs zero fetch egress; a non-direct lane
+/// never reaches the phase at all (planner guard behind the API validation).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn inv21_answer_mode_fails_safe_without_reranker() {
+    let (direct_addr, _hits) = canary().await;
+    let planner = temp_planner(
+        LanesConfig::default(),
+        Some(format!("http://{direct_addr}/")),
+        None,
+    );
+    let mut req = request(Lane::Direct, Scope::Web);
+    req.mode = SearchMode::Deep;
+    req.fetch_budget = 2;
+    req.answer = true;
+    let resp = planner
+        .search(req)
+        .await
+        .expect("answer mode degrades, never fails");
+    assert!(
+        resp.degraded.contains(&"fetch_unavailable"),
+        "must say WHY: {:?}",
+        resp.degraded
+    );
+    assert!(
+        resp.best_passage.is_none(),
+        "no passage can exist without a CE"
+    );
+    assert!(resp.analysis.is_none(), "no analysis without a fetch phase");
+
+    // The anon lane never reaches the fetch phase regardless of params —
+    // answer mode inherits the lane firewall wholesale.
+    let mut anon_req = request(Lane::Anon, Scope::Local);
+    anon_req.mode = SearchMode::Deep;
+    anon_req.fetch_budget = 2;
+    anon_req.answer = true;
+    let anon_resp = planner.search(anon_req).await.expect("local scope works");
+    assert!(anon_resp.best_passage.is_none());
+    assert!(anon_resp.analysis.is_none());
 }
 
 /// Invariant 18 (Phase 9, ADR-24): decision-log rows come ONLY from unpinned

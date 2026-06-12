@@ -168,6 +168,12 @@ struct SearchParams {
     /// domains — see privacy.md.
     #[serde(default)]
     fetch_budget: Option<usize>,
+    /// Answer mode (v0.5.0, ADR-29): switch the fetch selector to the
+    /// single-best objective and attach the extractive `best_passage`
+    /// block. Requires fetch_budget ≥ 1 (and therefore inherits every
+    /// fetch_budget restriction). Same egress surface as fetch_budget.
+    #[serde(default)]
+    answer: Option<bool>,
     #[serde(default)]
     limit: Option<usize>,
     // Geo constraint (SPEC §10): lat+lon+radius_km together, OR h3.
@@ -308,6 +314,14 @@ async fn search(
             n.min(state.config.search.deep_fetch_max)
         }
     };
+    let answer = params.answer.unwrap_or(false);
+    if answer && fetch_budget == 0 {
+        return Err(Problem::new(
+            StatusCode::BAD_REQUEST,
+            "answer requires fetch_budget",
+            "answer mode reads pages to extract a passage — set fetch_budget ≥ 1              (mode=deep, direct lane; ADR-29)",
+        ));
+    }
     let request = SearchRequest {
         q: params.q,
         mode,
@@ -320,6 +334,7 @@ async fn search(
         bypass_cache: false,
         pin_engines: false,
         fetch_budget,
+        answer,
     };
     if compare {
         // Compare governs lanes itself and is web-scoped by definition; a

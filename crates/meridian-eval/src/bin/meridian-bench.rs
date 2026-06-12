@@ -71,6 +71,10 @@ const SUITES: &[(&str, &str)] = &[
         "changepoint",
         "suite 17: multi-day-ramp burst study, two-state Viterbi vs EB-z — gate FPR≤z + TPR+0.2 + delay≤1d",
     ),
+    (
+        "answer",
+        "suite 18: best-passage replay, pandora vs additive vs snippet baseline — gate +10pp hit-rate",
+    ),
 ];
 
 fn main() -> ExitCode {
@@ -166,6 +170,10 @@ fn main() -> ExitCode {
 
     if wants("changepoint") {
         run_and_print(&mut report, meridian_eval::bench::changepoint::run(&cfg));
+    }
+
+    if wants("answer") {
+        run_and_print(&mut report, meridian_eval::bench::answer::run(&cfg));
     }
 
     if wants("embed") {
