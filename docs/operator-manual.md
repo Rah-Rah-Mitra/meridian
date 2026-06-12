@@ -97,6 +97,7 @@ transits the config layer.
 | `search.deep_fetch_max` | 2 | Hard cap on per-request `fetch_budget` (ADR-26 deep-mode fetching). |
 | `search.deep_fetch_deadline_ms` | 1200 | Wall-clock ceiling for the whole fetch phase inside one deep request — sized so deep p50 ≤2.5s holds. |
 | `search.answer_deadline_ms` | 1800 | Answer-mode fetch-phase ceiling (ADR-29): answer mode runs a passage-CE batch per fetch, so it has its own deadline and its own budget row (answer p50 ≤3.0s) instead of silently busting the deep 2.5s budget. |
+| `search.answer_passage_cap` | 8 | Passages CE-scored per fetched document (one CE pair each — the dominant answer-mode latency term). Default fixed by the 2026-06-13 device study: 8/9 winners live in the first 8 passages; cap 8 wins ~700ms p50. Raise for deeper-in-page passages at latency cost. |
 | `fetch.max_body_bytes` | 5 MB | Streamed cap. |
 | `fetch.max_redirects` | 3 | |
 | `fetch.per_domain_interval_ms` / `_burst` | 2000 / 2 | Politeness budget, global across lanes. |

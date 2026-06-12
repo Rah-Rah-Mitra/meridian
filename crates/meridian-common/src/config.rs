@@ -275,9 +275,17 @@ pub struct SearchConfig {
     pub deep_fetch_deadline_ms: u64,
     /// Answer-mode fetch-phase ceiling (Phase 10, ADR-29): answer mode runs a
     /// passage-CE batch per fetch, so it gets its OWN deadline and its own
-    /// budget row (answer p50 ≤3.0s) — the deep 2.5s budget is not silently
-    /// busted by a mode that does strictly more work.
+    /// budget row — the deep 2.5s budget is not silently busted by a mode
+    /// that does strictly more work.
     pub answer_deadline_ms: u64,
+    /// Per-fetched-document passage cap for the answer-mode CE batch — the
+    /// dominant term in answer-mode latency (each passage is one CE pair).
+    /// Default FIXED BY the carried latency study (2026-06-13, device):
+    /// 8/9 winning passages live in the first 8 (extraction puts main
+    /// content first), and cap 8 measures p50 2502ms vs cap 16's 3196ms —
+    /// winning the 3.0s budget row back. Raise it to trade latency for
+    /// deeper-in-page passages.
+    pub answer_passage_cap: usize,
 }
 
 impl Default for SearchConfig {
@@ -295,6 +303,7 @@ impl Default for SearchConfig {
             deep_fetch_max: 2,
             deep_fetch_deadline_ms: 1_200,
             answer_deadline_ms: 1_800,
+            answer_passage_cap: 8,
         }
     }
 }
