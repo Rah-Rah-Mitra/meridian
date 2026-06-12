@@ -825,17 +825,11 @@ variants with ramp TPR ≥ z+0.2 on tuning and ≥1.25×z on the hold-out (margi
 no-collapse-on-hold-out, the suite-10 pattern), delay past the 2× crossing ≤1d tuning / ≤2d
 hold-out, z spike parity, held-out generator variant honored (risk #21) — **MET 2026-06-12,
 s=2/γ=1 frozen**; suite 18 best-passage hit-rate ≥ the
-<<<<<<< HEAD
-snippet-head baseline with pandora-vs-additive fetch efficiency measured, answer-mode p50 ≤3.0s
-device-validated (its own budget row — the deep 2.5s budget is not silently busted); suite 15b
-ships only on a hold-out win, else the carry closes with a measured no — **CLOSED 2026-06-13
-with the no: signal calibratable (0.72 vs 0.05 cosine), no swept combiner profitable**; amd64 green on the same CI
-=======
 snippet-head baseline with pandora-vs-additive fetch efficiency measured — **MET 2026-06-12
 (+10.7pp; pandora 3.8× additive at fewer fetches; cost 0.1 frozen)** — with answer-mode p50 ≤3.0s
 device-validated at the exit (its own budget row — the deep 2.5s budget is not silently busted); suite 15b
-ships only on a hold-out win, else the carry closes with a measured no; amd64 green on the same CI
->>>>>>> origin/main
+ships only on a hold-out win, else the carry closes with a measured no — **CLOSED 2026-06-13
+with the no: signal calibratable (0.72 vs 0.05 cosine), no swept combiner profitable**; amd64 green on the same CI
 suite subset as arm64 or it stays suspended; 1M ANN re-baseline recorded (informational —
 insufficient disk ⇒ honestly still-carried with the pre-flight measurement); hermetic invariant
 count ≥20 holds; suites 1–8 + forget-correctness + RSS/latency re-validated.

@@ -72,13 +72,12 @@ const SUITES: &[(&str, &str)] = &[
         "suite 17: multi-day-ramp burst study, two-state Viterbi vs EB-z — gate FPR≤z + TPR+0.2 + delay≤1d",
     ),
     (
-<<<<<<< HEAD
-        "voi-embed",
-        "suite 15b: embedding-coverage study vs the frozen v0.4.0 selector — amend-or-record (needs models/)",
-=======
         "answer",
         "suite 18: best-passage replay, pandora vs additive vs snippet baseline — gate +10pp hit-rate",
->>>>>>> origin/main
+    ),
+    (
+        "voi-embed",
+        "suite 15b: embedding-coverage study vs the frozen v0.4.0 selector — amend-or-record (needs models/)",
     ),
 ];
 
@@ -177,13 +176,12 @@ fn main() -> ExitCode {
         run_and_print(&mut report, meridian_eval::bench::changepoint::run(&cfg));
     }
 
-<<<<<<< HEAD
-    if wants("voi-embed") {
-        run_and_print(&mut report, meridian_eval::bench::voi_embed::run(&cfg));
-=======
     if wants("answer") {
         run_and_print(&mut report, meridian_eval::bench::answer::run(&cfg));
->>>>>>> origin/main
+    }
+
+    if wants("voi-embed") {
+        run_and_print(&mut report, meridian_eval::bench::voi_embed::run(&cfg));
     }
 
     if wants("embed") {
