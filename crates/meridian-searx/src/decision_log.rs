@@ -63,6 +63,16 @@ pub struct Decision {
     pub reward: bool,
 }
 
+/// Operator status snapshot (`GET /v1/decision-log`).
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct LogStats {
+    pub rows: u64,
+    /// Same approximation the 20MB cap enforces (60 B/row incl. redb overhead).
+    pub approx_bytes: u64,
+    pub oldest_day: Option<u32>,
+    pub newest_day: Option<u32>,
+}
+
 pub struct DecisionLog {
     db: std::sync::Arc<Database>,
     seq: AtomicU32,
@@ -248,6 +258,27 @@ impl DecisionLog {
             .open_table(DECISIONS)
             .map_err(|e| LogError(e.to_string()))?;
         table.len().map_err(|e| LogError(e.to_string()))
+    }
+
+    /// Operator-facing status (the admin endpoint): row count, the same
+    /// bytes-approximation the size cap enforces, and the retained day range.
+    pub fn stats(&self) -> Result<LogStats, LogError> {
+        let rtx = self.db.begin_read().map_err(|e| LogError(e.to_string()))?;
+        let table = rtx
+            .open_table(DECISIONS)
+            .map_err(|e| LogError(e.to_string()))?;
+        let rows = table.len().map_err(|e| LogError(e.to_string()))?;
+        let day_of = |entry: Option<(redb::AccessGuard<'_, u64>, _)>| {
+            entry.map(|(k, _)| (k.value() >> 32) as u32)
+        };
+        let oldest_day = day_of(table.first().map_err(|e| LogError(e.to_string()))?);
+        let newest_day = day_of(table.last().map_err(|e| LogError(e.to_string()))?);
+        Ok(LogStats {
+            rows,
+            approx_bytes: rows * 60,
+            oldest_day,
+            newest_day,
+        })
     }
 
     pub fn is_empty(&self) -> Result<bool, LogError> {

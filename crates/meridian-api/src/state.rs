@@ -24,6 +24,9 @@ pub struct AppState {
     pub shed: Arc<ShedState>,
     /// `/v1/trends` backend; None = analytics disabled (404s).
     pub analytics: Option<Arc<meridian_analytics::Analytics>>,
+    /// ADR-24 decision-log admin surface; None = `searx.decision_log` off
+    /// (the v0.3.x default) — the endpoints 404.
+    pub decision_log: Option<Arc<meridian_searx::decision_log::DecisionLog>>,
     /// None = no token configured → mutating endpoints refuse outright.
     pub bearer: Option<SecretString>,
     pub iphash: IpHasher,
@@ -43,6 +46,7 @@ impl AppState {
         fetcher: Arc<Fetcher>,
         shed: Arc<ShedState>,
         analytics: Option<Arc<meridian_analytics::Analytics>>,
+        decision_log: Option<Arc<meridian_searx::decision_log::DecisionLog>>,
         bearer: Option<SecretString>,
         metrics: metrics_exporter_prometheus::PrometheusHandle,
     ) -> Arc<Self> {
@@ -56,6 +60,7 @@ impl AppState {
             fetcher,
             shed,
             analytics,
+            decision_log,
             bearer,
             iphash: IpHasher::new(),
             ip_limiter: governor::RateLimiter::keyed(quota),
