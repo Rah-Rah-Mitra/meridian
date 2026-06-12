@@ -92,6 +92,10 @@ direct IP, triggered by your query.** What bounds it:
 - Fetched text is used in RAM for scoring only. **A search never ingests or
   persists what it fetched**; the only retention is the fetch ladder's own
   24-hour extract cache (same as `/v1/fetch`, RAM only, see the table).
+- `answer=true` (v0.5.0, ADR-29) rides this exact surface — it changes WHICH
+  pages get selected (single-best objective) and extracts a passage from
+  what was already fetched, but creates no new egress class, no new
+  retention, and is impossible without `fetch_budget` (the same opt-in).
 
 ## Decision log (v0.3.0, **off by default**, ADR-24)
 

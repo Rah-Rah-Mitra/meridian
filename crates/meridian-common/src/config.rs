@@ -273,6 +273,11 @@ pub struct SearchConfig {
     /// Wall-clock ceiling for the whole fetch phase inside one deep request —
     /// sized so the deep p50 ≤2.5s gate holds (SPEC §16 P9).
     pub deep_fetch_deadline_ms: u64,
+    /// Answer-mode fetch-phase ceiling (Phase 10, ADR-29): answer mode runs a
+    /// passage-CE batch per fetch, so it gets its OWN deadline and its own
+    /// budget row (answer p50 ≤3.0s) — the deep 2.5s budget is not silently
+    /// busted by a mode that does strictly more work.
+    pub answer_deadline_ms: u64,
 }
 
 impl Default for SearchConfig {
@@ -289,6 +294,7 @@ impl Default for SearchConfig {
             compare_noise_floor_p90: 0.30,
             deep_fetch_max: 2,
             deep_fetch_deadline_ms: 1_200,
+            answer_deadline_ms: 1_800,
         }
     }
 }

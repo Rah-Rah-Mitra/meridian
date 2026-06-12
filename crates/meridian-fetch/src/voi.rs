@@ -162,6 +162,28 @@ pub enum StopReason {
 /// the suite if any of them moves).
 pub const DEFAULT_FETCH_COST: f64 = 0.6;
 
+/// Answer-mode per-fetch cost in PASSAGE-CE units (Phase 10, ADR-29) —
+/// FROZEN by the suite-18 sweep (2026-06-12, tuning seed: hit-rate 0.660 at
+/// cost 0.1, monotonically worse at higher costs;
+/// bench/2026-06-12-pi5-p10-answer.json). Answer mode is a different unit
+/// system from the page model: gain = novelty (the upside of reading a
+/// fresh doc is a passage in [0, 1]), realized value = the fetched doc's
+/// best passage CE, incumbent starts at 0 (no passage exists before the
+/// first fetch).
+pub const ANSWER_FETCH_COST: f64 = 0.1;
+
+/// Answer-mode candidate (ADR-29): single-best regime, passage-CE units.
+/// `p` reuses the suite-15 β mapping over the post-rerank score_z (the
+/// suite-18 replay validated the reuse); `gain` is pure novelty.
+pub fn answer_candidate(id: u64, novelty: f64, score_z: f64) -> Candidate {
+    Candidate {
+        id,
+        p: (P_BETA0 + P_BETA2 * score_z.clamp(-3.0, 3.0)).clamp(0.05, 0.95),
+        gain: novelty.clamp(0.0, 1.0),
+        cost: ANSWER_FETCH_COST,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct WalkResult {
     /// Candidate ids in the order they were opened.

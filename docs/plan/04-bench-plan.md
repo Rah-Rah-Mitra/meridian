@@ -118,6 +118,15 @@ device-only at the exit.
 | 18 | `answer` | Suite-15 replay corpus extended: decisive originals carry an answer-bearing passage (copies carry truncated/paraphrased versions); compare best-passage extraction (pandora_walk + fetched-text CE) vs the snippet-head baseline (no fetch, CE over snippets); measure pandora-vs-additive fetches-to-best-find on the single-best objective | **Hit-rate (best_passage from a decisive original) ≥ baseline + 10pp on the hold-out; pandora fetches-to-best ≤ additive's** (its theoretical regime — measured, not assumed) | CI |
 | 15b | `voi` ext. | Embedding-coverage study (P9 carry): real potion embeddings of the replay corpus; candidate value model = frozen v0.4.0 + coverage term; same hold-out protocol | **Amend-or-record:** ships ONLY if it beats the frozen selector on fetches-saved at equal nDCG with non-degrading clusters; a measured no closes the carry | CI |
 
+**Suite 18 result (2026-06-12): PASS with frozen ANSWER_FETCH_COST = 0.1**
+(`bench/2026-06-12-pi5-p10-answer.md`, n=1000 hold-out at the production
+budget cap): answer hit-rate 0.700 vs the no-fetch baseline's 0.593
+(+10.7pp; gate +10pp) and vs the additive page-selector's 0.183 at MORE
+fetches (3.8×) — ADR-26's regime split measured cleanly. One
+harness-construct correction recorded (v0 starved the selector of the
+post-rerank snippet-CE signal production gives it); an n=300 near-miss
+(+9.7pp) was resolved by more replay, not a gate change.
+
 **Suite 16 result (2026-06-12): FAIL on every condition — bands WITHDRAWN
 pre-ship** (`bench/2026-06-12-pi5-p10-conformal.md`; the suite-13b/MMR
 pattern repeating). The Q12 default is unachievable outright (top-5%
