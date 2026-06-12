@@ -116,9 +116,18 @@ jobs:
           docker buildx imagetools create -t "$IMAGE:$VERSION" -t "$IMAGE:latest" \
             "$IMAGE:$VERSION-arm64" "$IMAGE:$VERSION-amd64"
       - name: amd64 image size tripwire (budget ≤120MB compressed)
+        # buildx pushes an OCI INDEX (image + provenance attestation), so the
+        # tag-level manifest has no .layers — resolve through to the
+        # platform manifest first (v0.5.0 release attempt 1 failed here on
+        # `jq: Cannot iterate over null`).
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          BYTES=$(docker manifest inspect "$IMAGE:$VERSION-amd64" | jq '[.layers[].size] | add')
+          RAW=$(docker buildx imagetools inspect "$IMAGE:$VERSION-amd64" --raw)
+          if ! echo "$RAW" | jq -e '.layers' > /dev/null; then
+            DIGEST=$(echo "$RAW" | jq -r '[.manifests[] | select(.platform.architecture=="amd64" and .platform.os=="linux")][0].digest')
+            RAW=$(docker buildx imagetools inspect "$IMAGE@$DIGEST" --raw)
+          fi
+          BYTES=$(echo "$RAW" | jq '[.layers[].size] | add')
           echo "amd64 compressed layers: $BYTES bytes"
           test "$BYTES" -le 125829120
       # Direct syft (pinned): sbom-action cannot select a platform, and the
