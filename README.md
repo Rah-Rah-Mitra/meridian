@@ -85,11 +85,13 @@ The full, binding specification is [`docs/SPEC.md`](docs/SPEC.md) (v2.2).
 | 10 | Calibrated confidence, change-aware trends, answer mode → v0.5.0 | **Done** (2026-06-13) — [exit note](docs/plan/phase-exits/p10.md); suites 17+18 PASS; suites 16+15b honestly negative (features withdrawn pre-ship); amd64 + 1M ANN carries closed |
 | 11 | Candidates: region metasearch sidecars (operator sign-off), DP aggregates, BQ (>1.5M docs), crates.io | Recorded, not scheduled |
 
-Known pending beyond the phase table: hybrid-nDCG re-evaluation on the
-healed dense lane (the Phase-2 baseline understates it); the ADR-25
-contextual-policy verdict (calendar-bound dwell — `GET /v1/decision-log/ope`
-at ≥10k decisions or the ~2026-08-11 sunset); the answer-mode latency
-optimization study (win the 3.0s p50 row back from the measured 3.5s).
+Known pending beyond the phase table: the ADR-25 contextual-policy verdict
+(calendar-bound dwell — `GET /v1/decision-log/ope` at ≥10k decisions or the
+~2026-08-11 sunset); the answer-mode latency optimization study (win the
+3.0s p50 row back from the measured 3.5s). The hybrid-nDCG re-eval on the
+healed dense lane closed 2026-06-13 with a finding opposite to its premise
+(hybrid +0.85pp over BM25 on known-item queries — BM25's home turf by
+construction; see `docs/plan/bench/2026-06-13-pi5-hybrid-healed-lane.md`).
 
 ## Installing
 
