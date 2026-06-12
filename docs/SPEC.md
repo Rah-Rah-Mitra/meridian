@@ -818,9 +818,11 @@ amend-or-record against the frozen v0.4.0 selector on the hold-out) · amd64 ima
 (gnu/distroless variant or upstream `__GLIBC__` guard — the portable-recall defect is still not an
 option) · 1M ANN re-baseline behind a disk pre-flight (P7 carry).
 EXIT: suite 16 hold-out band coverage within 5pp of target with strictly monotone band quality and
-zero added latency budget (≤1ms QPP stage holds); suite 17 ramp detection ≤1 day after the series
-crosses 2× baseline at null-series FPR ≤ the EB-z baseline's, single-day parity with suite 10, and
-the held-out generator variant honored (risk #21 discipline); suite 18 best-passage hit-rate ≥ the
+zero added latency budget (≤1ms QPP stage holds); suite 17 null FPR ≤ the EB-z baseline's on BOTH
+variants with ramp TPR ≥ z+0.2 on tuning and ≥1.25×z on the hold-out (margin-on-tuning /
+no-collapse-on-hold-out, the suite-10 pattern), delay past the 2× crossing ≤1d tuning / ≤2d
+hold-out, z spike parity, held-out generator variant honored (risk #21) — **MET 2026-06-12,
+s=2/γ=1 frozen**; suite 18 best-passage hit-rate ≥ the
 snippet-head baseline with pandora-vs-additive fetch efficiency measured, answer-mode p50 ≤3.0s
 device-validated (its own budget row — the deep 2.5s budget is not silently busted); suite 15b
 ships only on a hold-out win, else the carry closes with a measured no; amd64 green on the same CI

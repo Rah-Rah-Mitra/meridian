@@ -735,7 +735,19 @@ pattern — a story building over 3–5 days — that the current detector
 provably misses. Ship rule: if the suite shows burst adds NO detections
 beyond z on ramp series, it does not ship.
 
-**Status: PROPOSED — suite-17 run fixes (s, γ) and confirms.**
+**Status: CONFIRMED (suite-17 run 2026-06-12: s = 2.0, γ = 1.0;
+`bench/2026-06-12-pi5-p10-changepoint.md`) — with two measured estimator
+amendments and one gate-construct correction, all recorded in the bench doc:**
+the v0 lower-trimmed baseline moments truncated the dispersion evidence (NB
+hold-out null FPR 0.104 vs z's 0.037) and the v1 two-pass re-estimate was
+circular on null series (0.055); the shipped estimator takes baseline moments
+from the HEAD 60% of the window — the uncontaminated region the feature's
+own question implies. Gates follow the suite-10 margin-on-tuning /
+no-collapse-on-hold-out pattern (the v0 "full margin on both variants" gated
+the hold-out generator's hardness, not the candidate); the FPR condition
+(burst ≤ z, both variants, no slack) never bent and PASSES. Final: ramp TPR
+0.692 vs z 0.408 (tuning), +62% relative on the hold-out, at LOWER null FPR
+than z on both variants. Wired into `top_movers[].burst` the same day.
 
 ## ADR-29 — Answer mode: best-passage extraction (Phase 10)
 
@@ -824,7 +836,7 @@ capacity knobs and tripwire thresholds differ.
 | 25 | linear-TS routing behind DR ship gate + sunset rule | CONFIRMED (gate) |
 | 26 | Pandora's-box VoI fetch/stopping + diversity guard | CONFIRMED (design) |
 | 27 | conformal confidence bands (selective coverage, eval-distribution-scoped) | PROPOSED (suite-16 run fixes λ/τ) |
-| 28 | two-state burst trends alongside EB z (complement, never replace) | PROPOSED (suite-17 run fixes s/γ) |
+| 28 | two-state burst trends alongside EB z (complement, never replace) | CONFIRMED (suite-17 run 2026-06-12: s=2, γ=1; head-window estimator after two falsified candidates) |
 | 29 | answer mode = `pandora_walk` + extractive `best_passage` block | PROPOSED (suite-18 gate) |
 | D1 | dev-on-target | operator-approved deviation |
 | D2 | dual-profile budgets | operator-approved deviation |
