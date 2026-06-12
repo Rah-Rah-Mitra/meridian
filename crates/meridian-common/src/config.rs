@@ -280,8 +280,11 @@ pub struct SearchConfig {
     pub answer_deadline_ms: u64,
     /// Per-fetched-document passage cap for the answer-mode CE batch — the
     /// dominant term in answer-mode latency (each passage is one CE pair).
-    /// The latency study (carried from the P10 exit) tunes this against the
-    /// measured position of winning passages.
+    /// Default FIXED BY the carried latency study (2026-06-13, device):
+    /// 8/9 winning passages live in the first 8 (extraction puts main
+    /// content first), and cap 8 measures p50 2502ms vs cap 16's 3196ms —
+    /// winning the 3.0s budget row back. Raise it to trade latency for
+    /// deeper-in-page passages.
     pub answer_passage_cap: usize,
 }
 
@@ -300,7 +303,7 @@ impl Default for SearchConfig {
             deep_fetch_max: 2,
             deep_fetch_deadline_ms: 1_200,
             answer_deadline_ms: 1_800,
-            answer_passage_cap: 16,
+            answer_passage_cap: 8,
         }
     }
 }
