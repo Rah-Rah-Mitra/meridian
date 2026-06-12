@@ -4,7 +4,16 @@
 hybrid index (BM25 + dense vectors) + geo analytics, sized for a Raspberry Pi 5 and scaling to
 edge servers without redesign.
 
-> Status: **v0.3.0 released — the divergence release.** The flagship claim is
+> Status: **v0.4.0 released — the adaptive frontier release.** Deep mode can
+> now read pages: `fetch_budget=N` fetches up to N results through a
+> value-of-information selector (suite-15-gated: equal nDCG to
+> fetch-everything at 30.5% fewer fetches, more distinct evidence clusters
+> than naive top-k) and the `analysis` block says why it stopped reading.
+> The ADR-25 machinery is complete and dark: decision log + IPS/DR offline
+> policy evaluation (`GET /v1/decision-log/ope` reports the uplift CI and
+> verdict) + a linear-TS contextual policy that stays off until the gate
+> passes on ≥10k real decisions. 20 hermetic invariants. Previous release:
+> **v0.3.0 — the divergence release.** The flagship claim is
 > now measured, per request: the same query over direct AND Tor returns
 > measurably different source distributions (cross-lane JSD ~7× the same-lane
 > noise floor, bootstrap p≈0 on this deployment), behind a fail-closed
@@ -65,7 +74,7 @@ The full, binding specification is [`docs/SPEC.md`](docs/SPEC.md) (v2.2).
 | 6 | Hardening + v0.1.0 release | **Done** (2026-06-11) |
 | 7 | Evidence foundations + statistical rigor → v0.2.0 | **Done** (2026-06-12) — [exit note](docs/plan/phase-exits/p7.md) |
 | 8 | Vantage divergence + confidence → v0.3.0 | **Done** (2026-06-12) — [exit note](docs/plan/phase-exits/p8.md); divergence + QPP gates PASS; MMR suite-rejected and withdrawn |
-| 9 | Adaptive frontier (decision log, OPE, contextual routing, VoI) → v0.4.0 | **In progress** — decision log (default off) + IPS/DR estimators landed, suite 14 PASS; pending: operator surface, OPE on real logs, ADR-25 ship gate, VoI |
+| 9 | Adaptive frontier (decision log, OPE, contextual routing, VoI) → v0.4.0 | **Done** (2026-06-12) — [exit note](docs/plan/phase-exits/p9.md); suites 14+15 PASS; ADR-25 flip trails on decision accrual (by design) |
 | 10 | Candidates: region metasearch sidecars, conformal calibration, change-point trends, amd64 image restoration | Recorded, not scheduled |
 
 Known pending beyond the phase table: 1M ANN re-baseline + hybrid-nDCG
