@@ -24,3 +24,7 @@ bench-scratch/
 bench-out*/
 .env
 deploy/compose.override.yaml
+
+# Generated eval index (meridian-eval build) — rebuild from corpus + seed;
+# queries.tsv/qrels.txt stay committed (tiny, seed-42 reproducible set)
+/eval/data

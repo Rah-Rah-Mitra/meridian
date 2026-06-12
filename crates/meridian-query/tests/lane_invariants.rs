@@ -162,6 +162,47 @@ async fn inv15_bypass_cache_writes_nothing() {
     assert_eq!(after_normal, 1, "normal search caches (control arm)");
 }
 
+/// Phase-8 invariant (ADR-22, found live): a compare whose direct half comes
+/// back EMPTY refuses before dispatching the anon half — an empty half is an
+/// outage, and jsd(∅,∅)=0 would fabricate "no divergence". The anon canary
+/// must see zero connections.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn inv17_compare_refuses_empty_direct_half() {
+    let (direct_addr, direct_hits) = canary().await;
+    let (anon_addr, anon_hits) = canary().await;
+    let lanes_cfg = LanesConfig {
+        anon_enabled: true, // enabled-not-started; must never be consulted
+        ..LanesConfig::default()
+    };
+    let planner = temp_planner(
+        lanes_cfg,
+        Some(format!("http://{direct_addr}/")), // canary returns {} = no results
+        Some(format!("http://{anon_addr}/")),
+    );
+
+    let err = meridian_query::compare::compare_vantages(
+        &planner,
+        request(Lane::Direct, Scope::Web),
+        0,
+        0.3,
+    )
+    .await
+    .expect_err("empty direct half must refuse the comparison");
+    assert!(
+        matches!(err, PlanError::Lane(EgressError::NotReady(_))),
+        "unexpected error: {err:?}"
+    );
+    assert!(
+        direct_hits.load(Ordering::SeqCst) >= 1,
+        "direct fan-out must have been attempted"
+    );
+    assert_eq!(
+        anon_hits.load(Ordering::SeqCst),
+        0,
+        "no anon dispatch after a doomed direct half"
+    );
+}
+
 /// Phase-8 invariant (risk #18 tripwire): the timing-decorrelation jitter is
 /// ON by default — a compare dispatched with default config never sends both
 /// halves back-to-back.

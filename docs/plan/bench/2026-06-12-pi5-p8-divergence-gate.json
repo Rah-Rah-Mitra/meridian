@@ -1,0 +1,40 @@
+{
+  "version": "0.1.0",
+  "kernel": "6.18.33+rpt-rpi-2712",
+  "page_size": 16384,
+  "nproc": 4,
+  "compiled_suites": [
+    "fusion",
+    "synfarm",
+    "spike",
+    "evidence",
+    "divergence"
+  ],
+  "profile_note": "DEBUG BUILD — numbers are meaningless; use the CI release-bench artifact",
+  "suites": [
+    {
+      "name": "divergence",
+      "gate": "cross-lane JSD > floor at p<0.05 (bootstrap)",
+      "gate_passed": true,
+      "skipped": false,
+      "metrics": {
+        "api_base": "http://127.0.0.1:8080",
+        "bootstrap_p_value": 0.0,
+        "cross_failed": 3,
+        "cross_jsd_mean": 0.7127,
+        "cross_jsd_p50": 0.8,
+        "cross_jsd_p90": 1.0,
+        "cross_samples": 45,
+        "floor_mean_reference": 0.096,
+        "mean_jitter_observed_ms": 0.0,
+        "mode": "cross-lane (compare=vantages)",
+        "queries": 12,
+        "repeats_per_query": 4
+      },
+      "notes": [
+        "gate per SPEC §16 P8: mean cross-lane JSD (shipped compare=vantages, engines pinned both halves) exceeds the committed same-lane floor mean at p<0.05 (one-sample bootstrap)"
+      ],
+      "duration_ms": 322868.44120500004
+    }
+  ]
+}
