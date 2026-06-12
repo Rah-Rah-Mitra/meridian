@@ -581,10 +581,8 @@ fn generate_dup(corpus: &str, out_dir: &str, n: usize, seed: u64) -> ExitCode {
             }
         }
     }
-    let mut candidates: Vec<(&String, &Vec<usize>)> = by_word
-        .iter()
-        .filter(|(_, ids)| ids.len() == 3)
-        .collect();
+    let mut candidates: Vec<(&String, &Vec<usize>)> =
+        by_word.iter().filter(|(_, ids)| ids.len() == 3).collect();
     candidates.sort_by_key(|(w, _)| w.to_string());
 
     let _ = std::fs::create_dir_all(out_dir);
@@ -888,8 +886,7 @@ fn run_dup(data: &str, models: &str, queries: &str, qrels_path: &str) -> ExitCod
         }
 
         // GATED regime: BM25-matching head, ordered by lexical score.
-        let mut b_head: Vec<(u64, f32)> =
-            bm25_full.iter().map(|h| (h.url_key, h.bm25)).collect();
+        let mut b_head: Vec<(u64, f32)> = bm25_full.iter().map(|h| (h.url_key, h.bm25)).collect();
         b_head.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         b_head.truncate(20);
         let b_texts: Vec<String> = b_head

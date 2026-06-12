@@ -118,7 +118,11 @@ pub fn run(_cfg: &BenchConfig) -> SuiteResult {
         (xs.iter().map(|x| (x - m).powi(2)).sum::<f64>() / xs.len() as f64).sqrt()
     };
 
-    let (m_ips, m_dr, m_naive) = (mean(&ips_estimates), mean(&dr_estimates), mean(&naive_means));
+    let (m_ips, m_dr, m_naive) = (
+        mean(&ips_estimates),
+        mean(&dr_estimates),
+        mean(&naive_means),
+    );
     let bias_ips = (m_ips - v_true).abs() / v_true;
     let bias_dr = (m_dr - v_true).abs() / v_true;
 

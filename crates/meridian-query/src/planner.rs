@@ -568,8 +568,7 @@ impl Planner {
                     (Some(b), true) => {
                         // Propensity is captured at choice time (ADR-24): the
                         // incumbent ε-greedy is the logging policy for free.
-                        let (arm, propensity) =
-                            b.choose_with_propensity(query_intent.key(), salt);
+                        let (arm, propensity) = b.choose_with_propensity(query_intent.key(), salt);
                         chosen_arm = Some(arm.id);
                         chosen_propensity = propensity;
                         arm.engines.iter().map(|e| e.to_string()).collect()

@@ -88,7 +88,11 @@ impl RewardModel {
     }
 
     fn predict(&self, context: u32, arm: usize) -> f64 {
-        let (s, n) = self.sums.get(&(context, arm)).copied().unwrap_or((0.0, 0.0));
+        let (s, n) = self
+            .sums
+            .get(&(context, arm))
+            .copied()
+            .unwrap_or((0.0, 0.0));
         (s + 0.5) / (n + 1.0) // prior mean 0.5, weight one pseudo-observation
     }
 }
@@ -106,13 +110,26 @@ mod tests {
         // (reward 0.8). Deterministic alternation approximates the rates.
         for i in 0..10_000 {
             if i % 10 == 0 {
-                log.push(Logged { context: 0, arm: 1, propensity: 0.1, reward: 0.8 });
+                log.push(Logged {
+                    context: 0,
+                    arm: 1,
+                    propensity: 0.1,
+                    reward: 0.8,
+                });
             } else {
-                log.push(Logged { context: 0, arm: 0, propensity: 0.9, reward: 0.2 });
+                log.push(Logged {
+                    context: 0,
+                    arm: 0,
+                    propensity: 0.9,
+                    reward: 0.2,
+                });
             }
         }
         let naive: f64 = log.iter().map(|d| d.reward).sum::<f64>() / log.len() as f64;
-        assert!(naive < 0.3, "naive mean reflects the logger, not the target");
+        assert!(
+            naive < 0.3,
+            "naive mean reflects the logger, not the target"
+        );
         let v_ips = ips(&log, |_| 1, 0.0);
         let v_dr = dr(&log, |_| 1);
         assert!((v_ips - 0.8).abs() < 0.01, "ips {v_ips}");
