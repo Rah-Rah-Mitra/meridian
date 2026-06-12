@@ -23,6 +23,9 @@ use std::collections::HashMap;
 pub struct ResultEvidence {
     /// Derivation-cluster id, dense within this response.
     pub cluster: u32,
+    /// This member has the most shingles in its cluster — the superset the
+    /// other members derive from (v0.6.0; drives `diversity=evidence`).
+    pub canonical: bool,
 }
 
 /// Response-level `evidence` block (additive, ADR-20; `schema` versions the
@@ -48,18 +51,28 @@ pub struct ClusterSummary {
     pub domains: u32,
 }
 
-/// Cluster `results` by sketch containment and annotate them in place.
-/// Returns the response-level block. O(s²) pairwise over sketched results —
+/// Per-result cluster tag: dense id + whether this member is the cluster's
+/// CANONICAL document — the one with the most shingles, i.e. the superset
+/// the others derive from. Truncated/syndicated copies carry strictly fewer
+/// shingles than their original, which is exactly why "best-ranked member"
+/// is the wrong representative: shorter copies outscore originals in BM25
+/// (the suite-13b MMR post-mortem), but they cannot out-SHINGLE them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClusterTag {
+    pub id: u32,
+    pub canonical: bool,
+}
+
+/// Per-key cluster tags by sketch containment, dense ids in first-appearance
+/// order; None for keys without a sketch. The union-find core shared by
+/// `annotate` (the response block) and the dup-eval diversity harness
+/// (the `diversity=evidence` gate). O(s²) pairwise over sketched keys —
 /// bounded by the response limit (≤50), microseconds in practice (suite 11).
-pub fn annotate(results: &mut [SearchResult], sketches: &HashMap<u64, Sketch>) -> EvidenceBlock {
-    // Sketched result indices, in response order.
-    let keyed: Vec<(usize, u64)> = results
+pub fn cluster_tags(keys: &[u64], sketches: &HashMap<u64, Sketch>) -> Vec<Option<ClusterTag>> {
+    let keyed: Vec<(usize, u64)> = keys
         .iter()
         .enumerate()
-        .filter_map(|(i, r)| {
-            let key = url_key(&r.url);
-            sketches.contains_key(&key).then_some((i, key))
-        })
+        .filter_map(|(i, &key)| sketches.contains_key(&key).then_some((i, key)))
         .collect();
 
     let mut parent: Vec<usize> = (0..keyed.len()).collect();
@@ -82,28 +95,64 @@ pub fn annotate(results: &mut [SearchResult], sketches: &HashMap<u64, Sketch>) -
         }
     }
 
-    // Dense cluster ids in first-appearance order; annotate results.
+    let mut out: Vec<Option<ClusterTag>> = vec![None; keys.len()];
     let mut id_by_root: HashMap<usize, u32> = HashMap::new();
-    let mut members: Vec<u32> = Vec::new();
-    let mut domains: Vec<std::collections::HashSet<String>> = Vec::new();
-    for (slot, &(result_idx, _)) in keyed.iter().enumerate() {
+    // (best shingle count, key index) per cluster id — the canonical member.
+    let mut best: Vec<(u32, usize)> = Vec::new();
+    for (slot, &(idx, key)) in keyed.iter().enumerate() {
         let root = find(&mut parent, slot);
         let next_id = id_by_root.len() as u32;
         let id = *id_by_root.entry(root).or_insert(next_id);
-        if id as usize == members.len() {
+        if id as usize == best.len() {
+            best.push((0, idx));
+        }
+        let shingles = sketches[&key].shingles;
+        if shingles > best[id as usize].0 {
+            best[id as usize] = (shingles, idx);
+        }
+        out[idx] = Some(ClusterTag {
+            id,
+            canonical: false,
+        });
+    }
+    for &(_, idx) in &best {
+        if let Some(tag) = &mut out[idx] {
+            tag.canonical = true;
+        }
+    }
+    out
+}
+
+/// Cluster `results` by sketch containment and annotate them in place.
+/// Returns the response-level block.
+pub fn annotate(results: &mut [SearchResult], sketches: &HashMap<u64, Sketch>) -> EvidenceBlock {
+    let keys: Vec<u64> = results.iter().map(|r| url_key(&r.url)).collect();
+    let tags = cluster_tags(&keys, sketches);
+
+    let mut members: Vec<u32> = Vec::new();
+    let mut domains: Vec<std::collections::HashSet<String>> = Vec::new();
+    let mut sketched = 0u32;
+    for (result_idx, tag) in tags.iter().enumerate() {
+        let Some(tag) = tag else { continue };
+        sketched += 1;
+        if tag.id as usize == members.len() {
             members.push(0);
             domains.push(std::collections::HashSet::new());
         }
-        members[id as usize] += 1;
-        domains[id as usize].insert(result_host(&results[result_idx].url));
-        results[result_idx].evidence = Some(ResultEvidence { cluster: id });
+        members[tag.id as usize] += 1;
+        domains[tag.id as usize].insert(result_host(&results[result_idx].url));
+        results[result_idx].evidence = Some(ResultEvidence {
+            cluster: tag.id,
+            canonical: tag.canonical,
+        });
     }
 
     EvidenceBlock {
-        schema: 1,
+        // schema 2 (v0.6.0): per-result annotations gain `canonical`.
+        schema: 2,
         independent_source_count: members.len() as u32,
         apparent_source_count: results.len() as u32,
-        sketched_results: keyed.len() as u32,
+        sketched_results: sketched,
         clusters: members
             .iter()
             .zip(domains.iter())
@@ -174,9 +223,15 @@ mod tests {
         ];
         let block = annotate(&mut results, &sketches);
 
-        assert_eq!(block.schema, 1);
+        assert_eq!(block.schema, 2);
         assert_eq!(block.apparent_source_count, 4);
         assert_eq!(block.sketched_results, 3);
+        // Verbatim copies have EQUAL shingle counts — the first one in
+        // response order is the deterministic canonical; exactly one per
+        // cluster either way.
+        assert!(results[0].evidence.as_ref().unwrap().canonical);
+        assert!(!results[1].evidence.as_ref().unwrap().canonical);
+        assert!(results[2].evidence.as_ref().unwrap().canonical);
         assert_eq!(
             block.independent_source_count, 2,
             "two copies + one independent = two origins"

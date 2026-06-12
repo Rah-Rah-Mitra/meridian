@@ -432,6 +432,16 @@ pub struct SketchReader {
 }
 
 impl SketchReader {
+    /// Standalone read handle for harnesses that own the process (the
+    /// dup-eval diversity gate): opens the dedup db directly, no Ingestor.
+    /// Production uses `Ingestor::sketch_reader` (redb is single-open per
+    /// process; a harness is the only opener in its process).
+    pub fn open(data_dir: &std::path::Path) -> Result<Self, IngestError> {
+        let db = Database::create(data_dir.join("dedup.redb"))
+            .map_err(|e| IngestError::Dedup(e.to_string()))?;
+        Ok(Self { db: Arc::new(db) })
+    }
+
     /// Fetch sketches for the given url_keys. Keys without a sketch (web
     /// results never ingested, docs from a pre-v0.2.0 volume) are simply
     /// absent from the map — the evidence layer reports them as un-asserted.

@@ -101,6 +101,7 @@ fn request(lane: Lane, scope: Scope) -> SearchRequest {
         pin_engines: false,
         fetch_budget: 0,
         answer: false,
+        diversity_evidence: false,
     }
 }
 

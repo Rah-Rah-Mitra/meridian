@@ -51,7 +51,7 @@ fn main() -> ExitCode {
             get("--seed").and_then(|v| v.parse().ok()).unwrap_or(42),
         ),
         "run-dup" => run_dup(
-            &get("--data").unwrap_or_else(|| "eval/dup-data".into()),
+            &get("--data").unwrap_or_else(|| "eval/dup-data5".into()),
             &get("--models").unwrap_or_else(|| "models".into()),
             &get("--queries").unwrap_or_else(|| "eval/dup-queries.tsv".into()),
             &get("--qrels").unwrap_or_else(|| "eval/dup-qrels.txt".into()),
@@ -1057,11 +1057,22 @@ fn run_dup(data: &str, models: &str, queries: &str, qrels_path: &str) -> ExitCod
         vectors,
         ..
     } = &stack;
+    // Evidence-cluster diversity (the MMR replacement): clusters come from
+    // the ADR-18 ingest-time sketches, read straight off the dup index's
+    // dedup store — exactly what the planner's evidence stage reads.
+    let sketch_reader = meridian_query::ingest::SketchReader::open(Path::new(data))
+        .expect("dup data dir has a dedup.redb");
     println!(
         ">> dup eval over {} queries, {} docs",
         query_list.len(),
         index.num_docs()
     );
+    if index.num_docs() == 0 {
+        // The first diversity run scored all-zeros against an empty index
+        // and PRINTED PASS — a vacuous gate is worse than a failed one.
+        eprintln!("refusing to gate against an empty index (wrong --data?)");
+        return ExitCode::FAILURE;
+    }
 
     const LAMBDA_SWEEP: [f32; 7] = [0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.95];
     let scorer = LinearLtr::default();
@@ -1070,6 +1081,8 @@ fn run_dup(data: &str, models: &str, queries: &str, qrels_path: &str) -> ExitCod
     // proxy for the query-matching WEB head that `diversity=mmr` exists for
     // (syndicated news); ANN noise never reaches those lists.
     let (mut ab_base, mut ab_mmr, mut nb_base, mut nb_mmr) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    let (mut ab_ev, mut nb_ev) = (0.0f64, 0.0f64);
+    let mut sketched_total = 0usize;
     let mut ab_sweep = [0.0f64; LAMBDA_SWEEP.len()];
     let mut nb_sweep = [0.0f64; LAMBDA_SWEEP.len()];
     // DIAGNOSTIC regime: the local hybrid+LTR head. On exclusive-term queries
@@ -1077,6 +1090,7 @@ fn run_dup(data: &str, models: &str, queries: &str, qrels_path: &str) -> ExitCod
     // demotion can only promote irrelevant docs — measured and reported, but
     // not what the gate is about.
     let (mut a_ltr, mut a_mmr, mut n_ltr, mut n_mmr) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    let (mut a_ev, mut n_ev) = (0.0f64, 0.0f64);
     let mut a_sweep = [0.0f64; LAMBDA_SWEEP.len()];
     let mut n_sweep = [0.0f64; LAMBDA_SWEEP.len()];
     let mut evaluated = 0usize;
@@ -1179,11 +1193,28 @@ fn run_dup(data: &str, models: &str, queries: &str, qrels_path: &str) -> ExitCod
             .filter_map(|&i| url_by_key.get(&head[i].0).cloned())
             .collect();
 
+        // Evidence-cluster diversity over the same head: first member of
+        // each ADR-18 cluster keeps its slot, copies defer to the back.
+        let head_keys: Vec<u64> = head.iter().map(|(k, _)| *k).collect();
+        let head_sketches = sketch_reader.get_many(&head_keys);
+        let head_tags: Vec<Option<(u32, bool)>> =
+            meridian_query::evidence::cluster_tags(&head_keys, &head_sketches)
+                .into_iter()
+                .map(|t| t.map(|t| (t.id, t.canonical)))
+                .collect();
+        let ev_order = meridian_rank::diversity::cluster_diversify(&head_tags);
+        let ev_ranked: Vec<String> = ev_order
+            .iter()
+            .filter_map(|&i| url_by_key.get(&head[i].0).cloned())
+            .collect();
+
         evaluated += 1;
         a_ltr += alpha_ndcg_at(10, &ltr_ranked, judg);
         a_mmr += alpha_ndcg_at(10, &mmr_ranked, judg);
+        a_ev += alpha_ndcg_at(10, &ev_ranked, judg);
         n_ltr += ndcg_at(10, &ltr_ranked, &plain);
         n_mmr += ndcg_at(10, &mmr_ranked, &plain);
+        n_ev += ndcg_at(10, &ev_ranked, &plain);
 
         // λ sweep (informational): the gate judges the SHIPPED constant; the
         // sweep is the evidence for choosing it. λ is chosen on this (tuning)
@@ -1230,10 +1261,26 @@ fn run_dup(data: &str, models: &str, queries: &str, qrels_path: &str) -> ExitCod
             .iter()
             .filter_map(|&i| url_by_key.get(&b_head[i].0).cloned())
             .collect();
+        let b_keys: Vec<u64> = b_head.iter().map(|(k, _)| *k).collect();
+        let b_sketches = sketch_reader.get_many(&b_keys);
+        sketched_total += b_sketches.len();
+        let b_tags: Vec<Option<(u32, bool)>> =
+            meridian_query::evidence::cluster_tags(&b_keys, &b_sketches)
+                .into_iter()
+                .map(|t| t.map(|t| (t.id, t.canonical)))
+                .collect();
+        let b_ev_order = meridian_rank::diversity::cluster_diversify(&b_tags);
+        let b_ev_ranked: Vec<String> = b_ev_order
+            .iter()
+            .filter_map(|&i| url_by_key.get(&b_head[i].0).cloned())
+            .collect();
+
         ab_base += alpha_ndcg_at(10, &b_base, judg);
         ab_mmr += alpha_ndcg_at(10, &b_mmr_ranked, judg);
+        ab_ev += alpha_ndcg_at(10, &b_ev_ranked, judg);
         nb_base += ndcg_at(10, &b_base, &plain);
         nb_mmr += ndcg_at(10, &b_mmr_ranked, &plain);
+        nb_ev += ndcg_at(10, &b_ev_ranked, &plain);
         for (si, &lam) in LAMBDA_SWEEP.iter().enumerate() {
             let o = meridian_rank::mmr::mmr_order(&b_docs, lam);
             let ranked: Vec<String> = o
@@ -1251,6 +1298,8 @@ fn run_dup(data: &str, models: &str, queries: &str, qrels_path: &str) -> ExitCod
     println!("|---|---|---|");
     println!("| BM25 | {:.4} | {:.4} |", ab_base / n, nb_base / n);
     println!("| MMR | {:.4} | {:.4} |", ab_mmr / n, nb_mmr / n);
+    println!("| evidence | {:.4} | {:.4} |", ab_ev / n, nb_ev / n);
+    println!("(sketched head docs: {sketched_total})");
     println!("\n| lambda (sweep) | alpha-nDCG@10 | nDCG@10 |");
     println!("|---|---|---|");
     for (si, &lam) in LAMBDA_SWEEP.iter().enumerate() {
@@ -1265,6 +1314,7 @@ fn run_dup(data: &str, models: &str, queries: &str, qrels_path: &str) -> ExitCod
     println!("|---|---|---|");
     println!("| LTR | {:.4} | {:.4} |", a_ltr / n, n_ltr / n);
     println!("| MMR | {:.4} | {:.4} |", a_mmr / n, n_mmr / n);
+    println!("| evidence | {:.4} | {:.4} |", a_ev / n, n_ev / n);
     println!("\n| lambda (sweep) | alpha-nDCG@10 | nDCG@10 |");
     println!("|---|---|---|");
     for (si, &lam) in LAMBDA_SWEEP.iter().enumerate() {
@@ -1274,17 +1324,25 @@ fn run_dup(data: &str, models: &str, queries: &str, qrels_path: &str) -> ExitCod
             n_sweep[si] / n
         );
     }
-    let diversity_gain = ab_mmr >= ab_base;
-    let relevance_held = nb_mmr >= 0.99 * nb_base;
+    // MMR verdicts stay printed as the measured baseline (13b: FAILED,
+    // withdrawn); the LIVE gate is the evidence-cluster diversifier — the
+    // carried replacement, judged by the same two conditions MMR failed.
     println!(
-        "\nGATE mmr improves alpha-ndcg@10 (bm25 head): {}",
-        if diversity_gain { "PASS" } else { "FAIL" }
+        "\nbaseline (13b, withdrawn): mmr alpha gain {} / ndcg held {}",
+        ab_mmr >= ab_base,
+        nb_mmr >= 0.99 * nb_base
+    );
+    let ev_gain = ab_ev >= ab_base;
+    let ev_held = nb_ev >= 0.99 * nb_base;
+    println!(
+        "GATE evidence-diversity improves alpha-ndcg@10 (bm25 head): {}",
+        if ev_gain { "PASS" } else { "FAIL" }
     );
     println!(
-        "GATE mmr ndcg@10 loss <= 1% (bm25 head): {}",
-        if relevance_held { "PASS" } else { "FAIL" }
+        "GATE evidence-diversity ndcg@10 loss <= 1% (bm25 head): {}",
+        if ev_held { "PASS" } else { "FAIL" }
     );
-    if diversity_gain && relevance_held {
+    if ev_gain && ev_held {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
