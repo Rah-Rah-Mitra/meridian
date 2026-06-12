@@ -103,8 +103,24 @@ bench/2026-06-12-pi5-p8-gates.md. **Suite 14 result (2026-06-12): PASS** —
 IPS rel. bias 2.0%, DR 0.74% (gate <5%), DR tighter (sd 0.024 vs 0.038);
 bench/2026-06-12-pi5-p9-ope.json.
 
+## 7. Phase-10 suites (added 2026-06-12)
+
+Same experiment-first protocol: suites 16–18 run and fix their constants
+BEFORE the features they gate merge; each carries a held-out generator
+variant per the risk-#21 discipline. All three are statistical replays —
+CI-runnable, build-profile-independent; the answer-mode latency row is
+device-only at the exit.
+
+| # | Suite | Method | Gate | Where it runs |
+|---|---|---|---|---|
+| 16 | `conformal` | Generator-built query sets (calibration + disjoint-seed hold-out + held-out generator variant) through the suite-13 harness → per-query (confidence score, nDCG@10); fit band thresholds λ_high/λ_med with the (n+1) finite-sample correction against targets (τ_high=0.5 @90%, τ_med=0.3 @80%, operator Q12); report hold-out selective coverage, band-quality monotonicity, ECE | **Hold-out coverage within 5pp of target per band AND strictly monotone mean nDCG across bands, on both generator variants** — else bands don't ship (risk #24) | CI |
+| 17 | `changepoint` | Suite-10 lattice reused: null (stationary NB noise), single-day spikes (suite-10 parity), and **multi-day ramps** (linear onset over 3–5 days to 2–4× baseline — the case latest-day z is structurally blind to); (s, γ) sweep on the tuning variant, judged on an overdispersed hold-out; baseline = the shipped EB+z+BH detector | **Ramp flagged ≤1 day after the series crosses 2× baseline, at null-series FPR ≤ the EB-z baseline's; single-day parity with suite 10; burst must add detections z misses or it does not ship** (ADR-28 ship rule) | CI |
+| 18 | `answer` | Suite-15 replay corpus extended: decisive originals carry an answer-bearing passage (copies carry truncated/paraphrased versions); compare best-passage extraction (pandora_walk + fetched-text CE) vs the snippet-head baseline (no fetch, CE over snippets); measure pandora-vs-additive fetches-to-best-find on the single-best objective | **Hit-rate (best_passage from a decisive original) ≥ baseline + 10pp on the hold-out; pandora fetches-to-best ≤ additive's** (its theoretical regime — measured, not assumed) | CI |
+| 15b | `voi` ext. | Embedding-coverage study (P9 carry): real potion embeddings of the replay corpus; candidate value model = frozen v0.4.0 + coverage term; same hold-out protocol | **Amend-or-record:** ships ONLY if it beats the frozen selector on fetches-saved at equal nDCG with non-degrading clusters; a measured no closes the carry | CI |
+
 **Standing gates at every post-v0.1.0 phase exit:** suites 1–8 re-run (no
 regression vs the Phase-6 baseline: BM25 0.48ms p50, ANN 0.45ms, fusion 0.144ms,
 heatmap 27ms, RSS ~250MB plateau); forget-correctness 100% (incl. ADR-19
 structures); privacy smoke green; hermetic egress-invariant count monotonically
-non-decreasing (13 → ≥16 at P8 → ≥17 at P9).
+non-decreasing (13 → ≥16 at P8 → ≥17 at P9; as built at the P9 exit: 20, so the
+floor is now ≥20).

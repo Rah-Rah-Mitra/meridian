@@ -42,3 +42,11 @@
 | Q9 | **BEIR subset** for the ranking-sanity eval (which 2–3 tasks fit Profile R's 100k-doc budget — SciFact ~5k docs and NFCorpus ~3.6k fit easily; FiQA ~57k is the stretch pick)? | SciFact + NFCorpus | Phase 8 (8.8), suite 13 eval set |
 | Q10 | **Curated region-sensitive query set** for suite 12b (news/geopolitics/local-services classes; ~50 queries): operator-supplied topics or generic defaults? | Generic defaults (news + local-services templates), operator may extend | Phase 8 divergence gate |
 | Q11 | **Compare-mode jitter window** (privacy/UX tradeoff: wider = less correlatable, slower) | 0–30s uniform, configurable; default ON | Phase 8 (8.5) |
+
+## Open (Phase 10; defaults assumed)
+
+| # | Question | Default assumed | Consumed by |
+|---|---|---|---|
+| Q12 | **Confidence-band risk targets**: which (τ, coverage) pairs should `band` certify? Tighter targets = honest but rarely-awarded `high`; looser = frequent but weak | τ_high = nDCG@10 ≥ 0.5 at 90% coverage; τ_med = 0.3 at 80% (suite-16 sweep reports the achievable frontier so the operator can move them) | Phase 10 (10.1–10.2), ADR-27 |
+| Q13 | **Answer-mode passage cap** (length × count drive the second CE batch's cost) | ≤500 chars/passage, ≤32 passages/request | Phase 10 (10.6), ADR-29 |
+| Q14 | **amd64 image flavor**: gnu/distroless variant (two image flavors to maintain) or wait for an upstream `__GLIBC__` guard in numkong (one flavor, unknown timeline)? | gnu/distroless variant now; drop it if upstream lands a guard | Phase 10 (10.8) |

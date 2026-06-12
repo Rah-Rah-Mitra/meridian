@@ -141,4 +141,9 @@ New analytical stages are budgeted against the **measured Phase-6 baseline**
 | Deep mode with `fetch_budget` (ADR-26) | p50 ≤2.5s holds | same | fetch phase wall-clock capped at `deep_fetch_deadline_ms` (1.2s default); device re-validation at the v0.4.0 exit |
 | QPP confidence stage | ≤1ms | ≤1ms | suite 13 |
 | Contextual-TS state (Phase 9, feature-gated) | negligible (d≈20 matrices, <1MB) | same | noted for completeness; covered by RSS gate |
-| Region SearXNG sidecars (Phase-10 candidate, ADR-22) | NOT BUDGETED — requires its own row + operator sign-off before any compose profile lands | — | risk #19: compose RAM accounting >6.5GB committed ⇒ feature stays off |
+| Region SearXNG sidecars (Phase-11 candidate, ADR-22) | NOT BUDGETED — requires its own row + operator sign-off before any compose profile lands | — | risk #19: compose RAM accounting >6.5GB committed ⇒ feature stays off |
+| Confidence bands (conformal, Phase 10) | inside the existing ≤1ms QPP stage (a 2-comparison lookup adds no row of its own) | same | suite 16; λ/τ threshold table frozen in repo with the calibration run |
+| Trends burst stage (Phase 10) | ≤+15ms on trends p50 | ≤+10ms | suite 17 micro-bench + trends re-measured at the P10 exit (O(2n) Viterbi over ≤90-day windows — should be far under) |
+| Answer mode end-to-end (opt-in, Phase 10) | p50 ≤3.0s | same | OWN row by design — answer mode does strictly more work than deep+fetch (second CE batch over ≤32 passages); the deep 2.5s budget is NOT silently busted; device-validated at the P10 exit |
+| 1M ANN re-baseline transient (Phase-10 bench, not serving) | ≤3GB disk transient (1M × 256-dim f32 + HNSW graph), pre-flight gated | bench ABORTS below 3GB free + headroom and records "still carried" | the SD card is shared; the bench never runs the disk past 85% |
+| amd64 image (Phase 10, gnu/distroless variant) | ≤120MB compressed | — | parity rule: the same CI suite subset green on amd64 as arm64, else amd64 stays suspended (the v0.2.0 rule stands) |
