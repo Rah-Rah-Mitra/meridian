@@ -158,6 +158,36 @@ fn cached_search_weight(v: &Arc<CachedSearch>) -> u32 {
     ((owned + fixed) * 2) as u32
 }
 
+/// Coarse, non-identifying decision context (ADR-24) — built identically at
+/// the contextual-choice site and the log site so a logged row replays the
+/// exact features the policy routed on.
+fn decision_context(
+    q: &str,
+    intent: intent::Intent,
+    geo_filter: bool,
+    now_unix: u64,
+) -> meridian_searx::decision_log::Context {
+    meridian_searx::decision_log::Context {
+        intent: intent.index(),
+        len_bucket: match q.chars().count() {
+            0..=20 => 0,
+            21..=40 => 1,
+            41..=80 => 2,
+            _ => 3,
+        },
+        lang: whichlang::detect_language(q) as u8,
+        tod_bucket: ((now_unix % 86_400) / 10_800) as u8,
+        geo_filter,
+    }
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 pub struct Planner {
     index: Arc<LexicalIndex>,
     embedder: Arc<Embedder>,
@@ -174,6 +204,11 @@ pub struct Planner {
     /// default). Written only where the bandit is rewarded — the anon branch
     /// reaches neither (SPEC §12.4).
     decision_log: Option<Arc<meridian_searx::decision_log::DecisionLog>>,
+    /// ADR-25 contextual routing (EXPERIMENTAL, dark by default): overrides
+    /// the ε-greedy arm choice on the direct lane when constructed. The
+    /// composition root only builds it when the decision log is also on —
+    /// the log is its training data and its persistence.
+    contextual: Option<Arc<std::sync::RwLock<meridian_searx::contextual::ContextualPolicy>>>,
     cache: moka::sync::Cache<[u8; 32], Arc<CachedSearch>>,
     /// Ephemeral anon cache (SPEC §8.4): in-memory only, never persisted, never
     /// shared with the direct cache (lane isolation, §12.4).
@@ -200,6 +235,7 @@ impl Planner {
         reranker: Arc<Reranker>,
         bandit: Option<Arc<meridian_searx::bandit::Bandit>>,
         decision_log: Option<Arc<meridian_searx::decision_log::DecisionLog>>,
+        contextual: Option<Arc<std::sync::RwLock<meridian_searx::contextual::ContextualPolicy>>>,
         lanes: Arc<LaneRegistry>,
         shed: Arc<ShedState>,
         anon_max_searches: usize,
@@ -231,6 +267,7 @@ impl Planner {
             reranker,
             bandit,
             decision_log,
+            contextual,
             cache,
             anon_cache,
             anon_permits: Arc::new(tokio::sync::Semaphore::new(anon_max_searches.max(1))),
@@ -567,10 +604,34 @@ impl Planner {
                 let engines: Vec<String> = match (&self.bandit, is_direct && !req.pin_engines) {
                     (Some(b), true) => {
                         // Propensity is captured at choice time (ADR-24): the
-                        // incumbent ε-greedy is the logging policy for free.
-                        let (arm, propensity) = b.choose_with_propensity(query_intent.key(), salt);
+                        // incumbent ε-greedy emits exact values; the ADR-25
+                        // contextual override (dark by default) estimates its
+                        // own by Monte Carlo (~1ms, documented imprecision).
+                        let arm = match &self.contextual {
+                            Some(cp) => {
+                                let ctx = decision_context(
+                                    &req.q,
+                                    query_intent,
+                                    req.geo.is_some(),
+                                    unix_now(),
+                                );
+                                let guard = cp.read().expect("contextual policy lock");
+                                let arm = guard.choose(&ctx, salt);
+                                let idx = meridian_searx::bandit::ARMS
+                                    .iter()
+                                    .position(|a| a.id == arm.id)
+                                    .unwrap_or(0);
+                                chosen_propensity = guard.propensity(&ctx, idx, salt);
+                                arm
+                            }
+                            None => {
+                                let (arm, propensity) =
+                                    b.choose_with_propensity(query_intent.key(), salt);
+                                chosen_propensity = propensity;
+                                arm
+                            }
+                        };
                         chosen_arm = Some(arm.id);
-                        chosen_propensity = propensity;
                         arm.engines.iter().map(|e| e.to_string()).collect()
                     }
                     _ => Vec::new(),
@@ -946,32 +1007,26 @@ impl Planner {
             // text, no URLs, no timestamp finer than the 3h bucket. redb
             // commits fsync, so the write rides spawn_blocking off the
             // request path.
-            if let Some(dl) = &self.decision_log {
+            if self.decision_log.is_some() || self.contextual.is_some() {
                 let arm = meridian_searx::bandit::ARMS
                     .iter()
                     .position(|a| a.id == arm_id)
                     .unwrap_or(0) as u8;
-                let now_unix = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                let ctx = meridian_searx::decision_log::Context {
-                    intent: query_intent.index(),
-                    len_bucket: match req.q.chars().count() {
-                        0..=20 => 0,
-                        21..=40 => 1,
-                        41..=80 => 2,
-                        _ => 3,
-                    },
-                    lang: whichlang::detect_language(&req.q) as u8,
-                    tod_bucket: ((now_unix % 86_400) / 10_800) as u8,
-                    geo_filter: req.geo.is_some(),
-                };
-                let dl = dl.clone();
-                let propensity = chosen_propensity;
-                tokio::task::spawn_blocking(move || {
-                    let _ = dl.log(now_unix, ctx, arm, propensity, appeared);
-                });
+                let now_unix = unix_now();
+                let ctx = decision_context(&req.q, query_intent, req.geo.is_some(), now_unix);
+                // Online update for the ADR-25 policy mirrors the log row.
+                if let Some(cp) = &self.contextual {
+                    if let Ok(mut guard) = cp.write() {
+                        guard.observe(&ctx, arm as usize, appeared);
+                    }
+                }
+                if let Some(dl) = &self.decision_log {
+                    let dl = dl.clone();
+                    let propensity = chosen_propensity;
+                    tokio::task::spawn_blocking(move || {
+                        let _ = dl.log(now_unix, ctx, arm, propensity, appeared);
+                    });
+                }
             }
         }
 

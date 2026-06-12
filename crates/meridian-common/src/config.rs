@@ -300,6 +300,13 @@ pub struct SearxConfig {
     /// flipping it on is the v0.4.0 exit decision (ADR-25). Anon-lane
     /// decisions are never logged regardless of this flag.
     pub decision_log: bool,
+    /// Linear Thompson-sampling contextual routing (Phase 9, ADR-25).
+    /// EXPERIMENTAL and OFF by default: the ship gate (doubly-robust uplift
+    /// CI excluding zero on ≥10k logged decisions) has not been evaluated;
+    /// enabling this early means routing on an unvalidated policy. Requires
+    /// `decision_log = true` (the log is both its training data and its
+    /// persistence).
+    pub contextual_policy: bool,
 }
 
 impl Default for SearxConfig {
@@ -309,6 +316,7 @@ impl Default for SearxConfig {
             url: "http://searxng:8080".to_owned(),
             anon_url: None,
             decision_log: false,
+            contextual_policy: false,
         }
     }
 }

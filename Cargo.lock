@@ -3280,6 +3280,7 @@ dependencies = [
  "meridian-index",
  "meridian-query",
  "meridian-rank",
+ "meridian-searx",
  "meridian-vector",
  "model2vec-rs",
  "reqwest",

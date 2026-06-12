@@ -9,4 +9,6 @@
 
 pub mod bandit;
 pub mod client;
+pub mod contextual;
 pub mod decision_log;
+pub mod ope;

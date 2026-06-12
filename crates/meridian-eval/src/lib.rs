@@ -7,7 +7,11 @@
 
 pub mod bench;
 pub mod metrics;
-pub mod ope;
 pub mod probe;
 pub mod qrels;
 pub mod stats;
+
+/// OPE estimators live beside the decision log they consume
+/// (`meridian-searx`); re-exported so suite 14 and future eval tooling keep a
+/// stable path.
+pub use meridian_searx::ope;

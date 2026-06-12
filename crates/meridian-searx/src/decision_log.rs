@@ -53,6 +53,29 @@ pub struct Context {
     pub geo_filter: bool,
 }
 
+impl Context {
+    /// Stable scalar encoding for the OPE estimators (their reward model
+    /// keys on `(context, arm)`); injective over the bucket ranges.
+    pub fn bucket_id(&self) -> u32 {
+        u32::from(self.intent & 0x3)
+            | (u32::from(self.len_bucket & 0x3) << 2)
+            | (u32::from(self.lang & 0xF) << 4)
+            | (u32::from(self.tod_bucket & 0x7) << 8)
+            | ((self.geo_filter as u32) << 11)
+    }
+
+    /// Inverse of [`Context::bucket_id`].
+    pub fn from_bucket_id(id: u32) -> Self {
+        Self {
+            intent: (id & 0x3) as u8,
+            len_bucket: ((id >> 2) & 0x3) as u8,
+            lang: ((id >> 4) & 0xF) as u8,
+            tod_bucket: ((id >> 8) & 0x7) as u8,
+            geo_filter: (id >> 11) & 1 == 1,
+        }
+    }
+}
+
 /// One logged decision, as read back for OPE.
 #[derive(Debug, Clone, Copy)]
 pub struct Decision {

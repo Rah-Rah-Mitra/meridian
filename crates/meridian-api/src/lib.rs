@@ -35,6 +35,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/forget", post(forget))
         .route("/v1/decision-log", get(decision_log_status))
         .route("/v1/decision-log/wipe", post(decision_log_wipe))
+        .route("/v1/decision-log/ope", get(decision_log_ope))
         .route("/healthz", get(healthz))
         .route("/metrics", get(metrics_endpoint))
         .layer(axum::middleware::from_fn_with_state(
@@ -799,6 +800,89 @@ async fn decision_log_wipe(
         })?;
     tracing::info!(removed, "decision log wiped");
     Ok(Json(serde_json::json!({ "removed": removed })))
+}
+
+/// `GET /v1/decision-log/ope` — the ADR-25 ship-gate report. Temporal 80/20
+/// split of the retained log: the linear-TS candidate trains on the older
+/// 80%, and its GREEDY policy is evaluated doubly-robust against the
+/// incumbent's realized reward on the held-out 20% (bootstrap 95% CI).
+/// Generalized rows (k-anonymity floor) carry no replayable features and are
+/// skipped — counted in the response. The verdict encodes ADR-25 verbatim:
+/// pass only if the CI excludes zero FROM ABOVE on ≥10k total decisions;
+/// a straddling CI is `inconclusive` (ε-greedy stays), an all-negative CI is
+/// `negative`. This endpoint only reports — flipping `contextual_policy` is
+/// the operator's call, recorded at the v0.4.0 exit either way.
+async fn decision_log_ope(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, Problem> {
+    bearer_ok(&state, &headers)?;
+    let Some(dl) = &state.decision_log else {
+        return Err(Problem::new(
+            StatusCode::NOT_FOUND,
+            "decision log disabled",
+            "searx.decision_log = false",
+        ));
+    };
+    let dl = dl.clone();
+    let report = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
+        use meridian_searx::contextual::ContextualPolicy;
+        use meridian_searx::decision_log::Context;
+        use meridian_searx::ope::{Logged, dr_uplift_ci};
+
+        let decisions = dl.read_all().map_err(|e| e.to_string())?;
+        let n_total = decisions.len();
+        let split = (n_total * 4) / 5;
+        let (train, eval) = decisions.split_at(split);
+
+        let policy = ContextualPolicy::from_decisions(train);
+        let mut skipped_generalized = 0usize;
+        let log: Vec<Logged> = eval
+            .iter()
+            .filter_map(|d| match &d.context {
+                Some(ctx) => Some(Logged {
+                    context: ctx.bucket_id(),
+                    arm: d.arm as usize,
+                    propensity: d.propensity as f64,
+                    reward: d.reward as u8 as f64,
+                }),
+                None => {
+                    skipped_generalized += 1;
+                    None
+                }
+            })
+            .collect();
+
+        let candidate = |bucket: u32| policy.greedy(&Context::from_bucket_id(bucket));
+        let report = dr_uplift_ci(&log, candidate, 200, 0x0ADE_2026);
+
+        const MIN_DECISIONS: usize = 10_000;
+        let verdict = if n_total < MIN_DECISIONS {
+            "insufficient_data"
+        } else if report.ci_lo > 0.0 {
+            "pass"
+        } else if report.ci_hi < 0.0 {
+            "negative"
+        } else {
+            "inconclusive"
+        };
+        Ok(serde_json::json!({
+            "n_total": n_total,
+            "n_train": split,
+            "n_eval": log.len(),
+            "n_eval_generalized_skipped": skipped_generalized,
+            "report": report,
+            "gate": {
+                "min_decisions": MIN_DECISIONS,
+                "rule": "95% bootstrap CI of DR uplift must exclude zero from above (ADR-25)",
+                "verdict": verdict,
+            },
+        }))
+    })
+    .await
+    .map_err(|_| Problem::new(StatusCode::INTERNAL_SERVER_ERROR, "ope failed", "join"))?
+    .map_err(|e| Problem::new(StatusCode::INTERNAL_SERVER_ERROR, "ope failed", e))?;
+    Ok(Json(report))
 }
 
 async fn healthz(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
