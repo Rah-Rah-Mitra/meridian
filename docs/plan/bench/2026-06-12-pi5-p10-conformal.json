@@ -1,0 +1,71 @@
+{
+  "band_means": {
+    "hold": {
+      "high": 0.6182435982254953,
+      "low": 0.49660917370140184,
+      "med": 0.0,
+      "n": [
+        23,
+        0,
+        177
+      ]
+    },
+    "variant": {
+      "high": 0.4254957501079576,
+      "low": 0.2947565261462165,
+      "med": 0.0,
+      "n": [
+        26,
+        0,
+        174
+      ]
+    }
+  },
+  "coverage": {
+    "high": {
+      "cal": 0.6756756756756757,
+      "hold": 0.6521739130434783,
+      "n_cal": 37,
+      "n_hold": 23,
+      "n_variant": 26,
+      "variant": 0.46153846153846156
+    },
+    "med_or_better": {
+      "cal": 0.8108108108108109,
+      "hold": 0.8260869565217391,
+      "n_cal": 37,
+      "n_hold": 23,
+      "n_variant": 26,
+      "variant": 0.5
+    }
+  },
+  "ece_cal": 0.0160528534089661,
+  "gates": {
+    "band_mass": false,
+    "coverage_high": false,
+    "coverage_med": false,
+    "monotone": false,
+    "useful": false
+  },
+  "n": {
+    "cal": 400,
+    "hold": 200,
+    "variant": 200
+  },
+  "suite": "conformal",
+  "targets": {
+    "alpha_high_default": 0.1,
+    "alpha_high_used": 0.35,
+    "alpha_med_default": 0.2,
+    "alpha_med_used": 0.2,
+    "base_rate_high": 0.51,
+    "base_rate_med": 0.69,
+    "min_mass": 20,
+    "tau_high": 0.5,
+    "tau_med": 0.3
+  },
+  "thresholds": {
+    "lambda_high": 0.5847901105880737,
+    "lambda_med": 0.5847901105880737
+  }
+}
