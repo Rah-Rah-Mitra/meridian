@@ -19,8 +19,8 @@
 //! informational diagnostic (DR should be tighter than IPS).
 
 use super::{BenchConfig, SuiteResult};
-use crate::ope::{Logged, dr, ips};
 use crate::stats::Rng;
+use meridian_searx::ope::{Logged, dr, ips};
 use std::time::Instant;
 
 const EPSILON: f64 = 0.1; // mirrors meridian-searx ε-greedy

@@ -177,6 +177,29 @@ fn build_components(config: MeridianConfig) -> Result<Components, String> {
         }
         _ => None,
     };
+    // ADR-25 contextual routing (EXPERIMENTAL): only constructible on top of
+    // the decision log — the log is its training data and its persistence
+    // (state rebuilds by replay at boot, no new tables). The loud warning is
+    // deliberate: the ship gate has not been evaluated yet.
+    let contextual = match (&decision_log, config.searx.contextual_policy) {
+        (Some(dl), true) => {
+            let decisions = dl.read_all().map_err(|e| e.to_string())?;
+            let policy = meridian_searx::contextual::ContextualPolicy::from_decisions(&decisions);
+            tracing::warn!(
+                replayed = policy.decisions_seen,
+                "contextual routing policy ENABLED — EXPERIMENTAL (ADR-25 ship gate not yet \
+                 evaluated; ε-greedy remains the validated incumbent)"
+            );
+            Some(Arc::new(std::sync::RwLock::new(policy)))
+        }
+        (None, true) => {
+            tracing::warn!(
+                "searx.contextual_policy=true IGNORED: requires searx.decision_log=true"
+            );
+            None
+        }
+        _ => None,
+    };
     // Analytics (SPEC §9.4): operator opt-in. When on, the store also feeds the
     // LTR domain_prior; when off, the prior is the cold default (0 everywhere).
     let analytics = if config.analytics.enabled {
@@ -213,6 +236,7 @@ fn build_components(config: MeridianConfig) -> Result<Components, String> {
         reranker,
         bandit,
         decision_log.clone(),
+        contextual,
         lanes.clone(),
         shed.clone(),
         config.lanes.anon.max_concurrent_searches,

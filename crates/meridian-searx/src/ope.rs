@@ -97,6 +97,75 @@ impl RewardModel {
     }
 }
 
+/// The ADR-25 ship-gate statistic: doubly-robust value of the candidate
+/// minus the incumbent's realized mean on the same rows, with a bootstrap
+/// percentile CI. The gate passes only if the 95% CI excludes zero on ≥10k
+/// decisions; this function just reports — the verdict (and the sunset rule)
+/// lives with the caller.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct UpliftReport {
+    pub n: usize,
+    /// Realized mean reward of the logged (incumbent) policy on these rows.
+    pub incumbent_mean: f64,
+    /// DR estimate of the candidate policy's value on the same rows.
+    pub candidate_dr: f64,
+    pub uplift: f64,
+    pub ci_lo: f64,
+    pub ci_hi: f64,
+}
+
+pub fn dr_uplift_ci(
+    log: &[Logged],
+    policy: impl Fn(u32) -> usize + Copy,
+    iters: usize,
+    seed: u64,
+) -> UpliftReport {
+    let incumbent_mean = log.iter().map(|d| d.reward).sum::<f64>() / log.len().max(1) as f64;
+    let candidate_dr = dr(log, policy);
+    let uplift = candidate_dr - incumbent_mean;
+    if log.is_empty() {
+        return UpliftReport {
+            n: 0,
+            incumbent_mean,
+            candidate_dr,
+            uplift,
+            ci_lo: f64::NAN,
+            ci_hi: f64::NAN,
+        };
+    }
+
+    // Percentile bootstrap over row resamples (paired: each resample
+    // re-evaluates BOTH the incumbent mean and the candidate DR, so shared
+    // sampling noise cancels in the uplift).
+    let mut rng = seed.max(1);
+    let mut next = move || {
+        // xorshift64* — deterministic, no global RNG (crate convention).
+        rng ^= rng >> 12;
+        rng ^= rng << 25;
+        rng ^= rng >> 27;
+        rng.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    };
+    let mut uplifts: Vec<f64> = (0..iters.max(100))
+        .map(|_| {
+            let sample: Vec<Logged> = (0..log.len())
+                .map(|_| log[(next() % log.len() as u64) as usize])
+                .collect();
+            let inc = sample.iter().map(|d| d.reward).sum::<f64>() / sample.len() as f64;
+            dr(&sample, policy) - inc
+        })
+        .collect();
+    uplifts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let pct = |p: f64| uplifts[((uplifts.len() - 1) as f64 * p).round() as usize];
+    UpliftReport {
+        n: log.len(),
+        incumbent_mean,
+        candidate_dr,
+        uplift,
+        ci_lo: pct(0.025),
+        ci_hi: pct(0.975),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,5 +209,46 @@ mod tests {
     fn empty_log_is_nan() {
         assert!(ips(&[], |_| 0, 0.0).is_nan());
         assert!(dr(&[], |_| 0).is_nan());
+    }
+
+    #[test]
+    fn uplift_ci_separates_better_and_equal_candidates() {
+        // Same biased log as above: incumbent realizes ~0.26 mean, arm 1 is
+        // worth 0.8. The candidate routing to arm 1 must show a strictly
+        // positive CI; the candidate equal to the logger must straddle zero.
+        let mut log = Vec::new();
+        for i in 0..5_000 {
+            if i % 10 == 0 {
+                log.push(Logged {
+                    context: 0,
+                    arm: 1,
+                    propensity: 0.1,
+                    reward: 0.8,
+                });
+            } else {
+                log.push(Logged {
+                    context: 0,
+                    arm: 0,
+                    propensity: 0.9,
+                    reward: 0.2,
+                });
+            }
+        }
+        let better = dr_uplift_ci(&log, |_| 1, 200, 42);
+        assert!(
+            better.ci_lo > 0.0,
+            "better candidate must clear zero: {better:?}"
+        );
+        // Always-arm-0 is strictly WORSE than the stochastic incumbent
+        // (0.20 vs the realized 0.26 mixture): the CI must sit below zero —
+        // the ADR-25 "negative" verdict, which must NOT pass the gate.
+        let worse = dr_uplift_ci(&log, |_| 0, 200, 42);
+        assert!(
+            worse.ci_hi < 0.0 && (worse.uplift + 0.06).abs() < 0.01,
+            "worse candidate shows its true −0.06 uplift: {worse:?}"
+        );
+        let empty = dr_uplift_ci(&[], |_| 0, 200, 42);
+        assert_eq!(empty.n, 0);
+        assert!(empty.ci_lo.is_nan());
     }
 }

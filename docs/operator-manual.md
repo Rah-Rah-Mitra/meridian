@@ -92,7 +92,8 @@ transits the config layer.
 | `search.max_per_domain` | 3 | Domain diversity cap. |
 | `searx.url` | `http://searxng:8080` | Direct sidecar (back network). |
 | `searx.anon_url` | — | Tor-proxied sidecar; unset = anon search fails closed. |
-| `searx.decision_log` | `false` | Per-decision routing log for offline policy evaluation (ADR-24): 13-byte coarse-bucket rows, 30d TTL, 20 MB cap, k-anonymity floor; anon lane never logged. Status via `GET /v1/decision-log`, erasure via `POST /v1/decision-log/wipe` (both bearer-gated). Leave off unless running the v0.4.0 OPE workflow — see `docs/privacy.md`. |
+| `searx.decision_log` | `false` | Per-decision routing log for offline policy evaluation (ADR-24): 13-byte coarse-bucket rows, 30d TTL, 20 MB cap, k-anonymity floor; anon lane never logged. Status via `GET /v1/decision-log`, erasure via `POST /v1/decision-log/wipe`, gate report via `GET /v1/decision-log/ope` (all bearer-gated). Leave off unless running the v0.4.0 OPE workflow — see `docs/privacy.md`. |
+| `searx.contextual_policy` | `false` | **EXPERIMENTAL** (ADR-25): linear Thompson-sampling routing over the decision-log context buckets, replacing ε-greedy on the direct lane. Requires `searx.decision_log = true` (ignored otherwise, with a warning). Leave off until `GET /v1/decision-log/ope` reports `verdict: pass` — enabling early routes on an unvalidated policy. |
 | `fetch.max_body_bytes` | 5 MB | Streamed cap. |
 | `fetch.max_redirects` | 3 | |
 | `fetch.per_domain_interval_ms` / `_burst` | 2000 / 2 | Politeness budget, global across lanes. |

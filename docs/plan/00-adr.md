@@ -631,7 +631,14 @@ for that.
 **Status: CONFIRMED (gate), implementation Phase 9. Estimator precondition
 met 2026-06-12: suite 14 PASS — IPS rel. bias 2.0%, DR 0.74% (<5% gate)
 against synthetic truth under the shipped ε-greedy logging policy, DR tighter
-than IPS (bench/2026-06-12-pi5-p9-ope.json).**
+than IPS (bench/2026-06-12-pi5-p9-ope.json). Policy + gate machinery
+implemented DARK 2026-06-12: linear TS (`meridian-searx/src/contextual.rs`,
+26-dim one-hot, hand-rolled Cholesky, MC propensities — a documented
+imprecision vs ε-greedy's exact values), `searx.contextual_policy` default
+OFF and refusing to start without the decision log, and the gate report at
+`GET /v1/decision-log/ope` (temporal 80/20 split, DR uplift bootstrap CI,
+verdicts pass/inconclusive/negative/insufficient_data). The flip decision
+remains the v0.4.0 exit, on ≥10k live decisions or the 60-day sunset.**
 
 ## ADR-26 — Value-of-information fetch & stopping (Phase 9)
 

@@ -75,6 +75,7 @@ fn temp_planner(
         Arc::new(Reranker::unavailable()),
         None,
         None,
+        None,
         lanes,
         Arc::new(ShedState::default()),
         2,
@@ -137,6 +138,7 @@ async fn inv18_decision_log_direct_lane_only() {
         Arc::new(Reranker::unavailable()),
         Some(bandit),
         Some(dlog.clone()),
+        None,
         Arc::new(
             LaneRegistry::new(
                 &LanesConfig {

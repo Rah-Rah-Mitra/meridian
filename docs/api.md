@@ -261,6 +261,15 @@ reports `{ enabled, rows, approx_bytes, oldest_day, newest_day,
 retention_days, max_bytes }`; `wipe` drops every retained row and returns
 `{ "removed": n }`.
 
+## GET /v1/decision-log/ope  (bearer)
+
+The ADR-25 ship-gate report: trains the linear-TS candidate on the older 80%
+of the retained log and reports its doubly-robust uplift vs the incumbent's
+realized reward on the held-out 20%, with a bootstrap 95% CI. The `gate`
+block names the verdict — `pass` only when the CI excludes zero from above
+on ≥10k decisions; `inconclusive` and `negative` mean ε-greedy stays (the
+ADR-25 sunset rule). Reporting only — it never changes routing.
+
 ## GET /healthz
 
 `{ "status": "ok", "uptime_secs": n }`. Unauthenticated, not rate-limited.
