@@ -42,6 +42,7 @@ configured, gated endpoints answer `503 auth not configured`.
 | `compare` | `vantages` | — | v0.2.0: run the query over direct AND anon and attach the `divergence` block. Requires `scope=web`; the `lane` param must be omitted (compare governs lanes). See the privacy note below. |
 
 | `fetch_budget` | int | 0 | v0.4.0, `mode=deep` + direct lane only: fetch up to N result pages (capped by `search.deep_fetch_max`) and re-score them on full text. Adds the `analysis` block. **Creates per-query egress to result domains** — see the privacy guide. Mutually exclusive with `compare`. |
+| `answer` | bool | false | v0.5.0 (ADR-29): switch the fetch selector to the single-best objective and attach the extractive `best_passage` block. Requires `fetch_budget ≥ 1` and inherits every fetch_budget restriction (deep, direct, never with compare). Same egress surface as `fetch_budget` — no new disclosure class. |
 
 A `diversity=mmr` parameter was built for v0.3.0 and **withdrawn before
 release**: its own gate (suite 13b, two generator seeds) showed token-overlap
@@ -293,7 +294,35 @@ optimal stop), `budget_exhausted`, `deadline`, `exhausted` (no candidates
 left). `estimated_marginal_gain_remaining` is the best expected net value
 left unfetched, in ranking-gain units — the engine says what it left on the
 table. Results re-scored on full text carry the new value in
-`rank_signals.ce`.
+`rank_signals.ce`. With `answer=true` the units change with the objective:
+the value is the best remaining reservation index minus the best passage
+score already in hand, in passage-score units.
+
+## The `best_passage` block (v0.5.0, `schema: 1`, ADR-29)
+
+On `answer=true` responses that fetched at least one page:
+
+```json
+"best_passage": {
+  "schema": 1,
+  "text": "…the sentence-aligned extract, ≤500 chars, verbatim…",
+  "url": "https://the-page-it-was-read-from.example/…",
+  "ce_score": 7.1
+}
+```
+
+The single best (query, passage) pair among the pages this request actually
+read, chosen by the cross-encoder. **Extractive only** — never generated,
+never stitched across documents; the text appears verbatim on the cited
+page. **`ce_score` is a relevance score, NOT a correctness probability**: a
+confidently relevant passage can still be wrong, and the engine cannot tell
+— treat the block as "the best place to start reading", not as "the
+answer". Answer mode selects fetches with the single-best objective
+(`pandora_walk`, the regime suite 15 retained it for; suite-18 gate: +10.7pp
+answer hit-rate over the no-fetch baseline, 3.8× the page-selector's at
+fewer fetches). When no passage materializes (fetches failed, CE
+unavailable), the response says so: `degraded: ["answer_unavailable"]` and
+the block is absent — silence never means "no answer exists".
 
 ## GET /healthz
 

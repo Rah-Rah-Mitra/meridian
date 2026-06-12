@@ -802,8 +802,22 @@ vs answering the question the user actually asked deep mode. Answer-mode
 latency gets its OWN budget row (p50 ≤3.0s) — the deep 2.5s budget is not
 silently busted by a mode that does strictly more work.
 
-**Status: PROPOSED — suite-18 gate decides; pandora efficiency measured, not
-assumed.**
+**Status: CONFIRMED (suite-18 run 2026-06-12, 1000-query hold-out:
+`bench/2026-06-12-pi5-p10-answer.md`) — with one harness-construct
+correction and one frozen constant.** Hold-out: answer hit-rate **0.700 vs
+the no-fetch snippet baseline's 0.593** (+10.7pp, gate +10pp) and vs the
+additive page-selector's **0.183 at MORE fetches** (3.8× — Weitzman's rule
+really is the single-best regime's policy, measured). `ANSWER_FETCH_COST =
+0.1` frozen by the tuning sweep (passage-CE units — a separate unit system
+from the page model's DCG units, by design). The construct correction is
+recorded in the suite docs: the v0 replay starved the selector of the
+snippet-CE signal production gives it (the fetch phase runs AFTER the deep
+rerank), measuring 0.10 vs the baseline's 0.54 purely through that. An
+n=300 run also measured +9.7pp (a sampling near-miss); the verdict is the
+n=1000 estimate, not a gate change. Production wiring shipped in the same
+train: `answer=true` param, inline Pandora stop, per-fetch passage-CE
+realization, `best_passage` block, `answer_unavailable` honesty marker,
+`search.answer_deadline_ms` (own budget row: answer p50 ≤3.0s), inv21.
 
 ---
 
@@ -862,7 +876,7 @@ capacity knobs and tripwire thresholds differ.
 | 26 | Pandora's-box VoI fetch/stopping + diversity guard | CONFIRMED (design) |
 | 27 | conformal confidence bands (selective coverage, eval-distribution-scoped) | REFUTED (suite-16 run 2026-06-12: absolute coverage collapses under query-style shift; bands withdrawn pre-ship, raw signals stand) |
 | 28 | two-state burst trends alongside EB z (complement, never replace) | CONFIRMED (suite-17 run 2026-06-12: s=2, γ=1; head-window estimator after two falsified candidates) |
-| 29 | answer mode = `pandora_walk` + extractive `best_passage` block | PROPOSED (suite-18 gate) |
+| 29 | answer mode = `pandora_walk` + extractive `best_passage` block | CONFIRMED (suite-18 run 2026-06-12: +10.7pp over no-fetch, 3.8× the page selector at fewer fetches; cost 0.1 frozen) |
 | D1 | dev-on-target | operator-approved deviation |
 | D2 | dual-profile budgets | operator-approved deviation |
 

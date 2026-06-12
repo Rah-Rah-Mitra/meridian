@@ -1,0 +1,34 @@
+{
+ "header": {
+  "version": "0.1.0",
+  "kernel": "6.18.33+rpt-rpi-2712",
+  "page_size": 16384,
+  "nproc": 4
+ },
+ "suite": {
+  "name": "answer",
+  "gate": "hold-out: answer hit-rate ≥ snippet baseline + 10pp AND pandora ≥ additive on hit-rate at ≤ its fetches (the ADR-26 single-best regime, measured)",
+  "gate_passed": true,
+  "skipped": false,
+  "metrics": {
+   "budget": 2,
+   "chosen_answer_fetch_cost": 0.1,
+   "gate_hit_lift_10pp": 1,
+   "gate_pandora_beats_additive_regime": 1,
+   "holdout_additive_hit_rate": 0.183,
+   "holdout_additive_mean_fetches": 2.0,
+   "holdout_answer_hit_rate": 0.7,
+   "holdout_answer_mean_fetches": 1.646,
+   "holdout_snippet_baseline_hit_rate": 0.593,
+   "queries": 1000
+  },
+  "notes": [
+   "sweep cost=0.1: tuning hit_rate=0.692 mean_fetches=1.65",
+   "sweep cost=0.2: tuning hit_rate=0.685 mean_fetches=1.36",
+   "sweep cost=0.3: tuning hit_rate=0.646 mean_fetches=1.17",
+   "sweep cost=0.4: tuning hit_rate=0.612 mean_fetches=1.09",
+   "answer mode = pandora_walk in passage-CE units (gain = novelty, realized = best fetched passage CE, initial_best = 0, cost frozen on tuning); additive comparator = the v0.4.0 page selector at the same budget; baseline = no-fetch CE over snippets; budget = production deep_fetch_max (2)"
+  ],
+  "duration_ms": 247.694108
+ }
+}

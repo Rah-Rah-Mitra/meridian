@@ -96,6 +96,7 @@ transits the config layer.
 | `searx.contextual_policy` | `false` | **EXPERIMENTAL** (ADR-25): linear Thompson-sampling routing over the decision-log context buckets, replacing ε-greedy on the direct lane. Requires `searx.decision_log = true` (ignored otherwise, with a warning). Leave off until `GET /v1/decision-log/ope` reports `verdict: pass` — enabling early routes on an unvalidated policy. |
 | `search.deep_fetch_max` | 2 | Hard cap on per-request `fetch_budget` (ADR-26 deep-mode fetching). |
 | `search.deep_fetch_deadline_ms` | 1200 | Wall-clock ceiling for the whole fetch phase inside one deep request — sized so deep p50 ≤2.5s holds. |
+| `search.answer_deadline_ms` | 1800 | Answer-mode fetch-phase ceiling (ADR-29): answer mode runs a passage-CE batch per fetch, so it has its own deadline and its own budget row (answer p50 ≤3.0s) instead of silently busting the deep 2.5s budget. |
 | `fetch.max_body_bytes` | 5 MB | Streamed cap. |
 | `fetch.max_redirects` | 3 | |
 | `fetch.per_domain_interval_ms` / `_burst` | 2000 / 2 | Politeness budget, global across lanes. |
