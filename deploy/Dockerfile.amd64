@@ -1,0 +1,20 @@
+# meridiand amd64 image — the Phase-10 restoration of the platform suspended
+# at v0.2.0 (P7 exit). The suspension reason was BUILD tooling, not product:
+# numkong's x86 capabilities.h forward-declares `syscall(...) noexcept`
+# assuming glibc, which hard-conflicts with zig-musl's unistd.h — so amd64
+# returns exactly the way the suspension note prescribed: a gnu binary
+# (native glibc build, full numkong SIMD dispatch — never the portable
+# fallback, which is a recall defect per ADR-07) on a distroless cc base.
+#
+# Build context = deploy/, staging assembled by CI:
+#   stage-amd64/meridiand            (x86_64-gnu release binary)
+#   stage-amd64/models/...           (fetched + SHA256-verified)
+#
+# Parity rule (risk #27): the same CI suite subset must stay green on amd64
+# (the x86_64 test job + the boot smoke) or the platform re-suspends.
+
+FROM gcr.io/distroless/cc-debian13:nonroot
+
+COPY stage-amd64/meridiand /meridiand
+COPY stage-amd64/models /models
+ENTRYPOINT ["/meridiand"]

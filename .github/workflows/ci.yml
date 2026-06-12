@@ -37,6 +37,39 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
 
+  amd64-smoke:
+    # Phase-10 amd64 restoration (risk #27 parity evidence, alongside the
+    # x86_64 test job): the gnu binary must BOOT on amd64 — numkong's x86
+    # kernels compile on native glibc (the v0.2.0 suspension was zig-musl
+    # tooling, not product). Release.yml ships this exact binary in the
+    # distroless amd64 image.
+    name: amd64 boot smoke (gnu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: amd64-smoke
+      - run: cargo build --release -p meridiand
+      - name: fetch models
+        run: bash deploy/fetch-models.sh /tmp/models && bash deploy/fetch-gazetteer.sh /tmp/models
+      - name: boot + healthz
+        run: |
+          MERIDIAN_INDEX__DATA_DIR=/tmp/amd64-smoke-data \
+          MERIDIAN_MODELS__DIR=/tmp/models \
+          MERIDIAN_SERVER__PORT=18099 \
+          ./target/release/meridiand &
+          PID=$!
+          ok=""
+          for i in $(seq 1 60); do
+            if curl -sf localhost:18099/healthz > /dev/null; then ok=1; break; fi
+            sleep 1
+          done
+          curl -s localhost:18099/healthz
+          kill "$PID"
+          test -n "$ok"
+
   deny:
     name: cargo-deny (licenses, bans, sources)
     runs-on: ubuntu-latest
