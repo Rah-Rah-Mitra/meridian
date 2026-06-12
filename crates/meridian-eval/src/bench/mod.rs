@@ -8,6 +8,7 @@ use crate::stats::Rng;
 use serde::Serialize;
 use std::path::PathBuf;
 
+pub mod changepoint;
 pub mod evidence;
 pub mod fusion;
 pub mod ope;

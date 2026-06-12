@@ -1,0 +1,62 @@
+{
+ "header": {
+  "version": "0.1.0",
+  "kernel": "6.18.33+rpt-rpi-2712",
+  "page_size": 16384,
+  "nproc": 4
+ },
+ "suite": {
+  "name": "changepoint",
+  "gate": "null FPR ≤ z (BOTH variants, no slack) AND ramp TPR ≥ z+0.2 on tuning AND ≥1.25×z on the hold-out AND median delay ≤1d tuning / ≤2d (2× bound) hold-out AND z spike parity",
+  "gate_passed": true,
+  "skipped": false,
+  "metrics": {
+   "burst_median_delay_days_held_out": 2.0,
+   "burst_median_delay_days_tuning": 1.0,
+   "burst_null_fpr_held_out": 0.025,
+   "burst_null_fpr_tuning": 0.00893,
+   "burst_onset_mae_days_held_out": 2.67,
+   "burst_onset_mae_days_tuning": 1.65,
+   "burst_ramp_tpr_held_out": 0.325,
+   "burst_ramp_tpr_tuning": 0.692,
+   "burst_spike_fire_rate_held_out": 0.242,
+   "burst_spike_fire_rate_tuning": 0.483,
+   "chosen_gamma": 1.0,
+   "chosen_s": 2.0,
+   "days": 28,
+   "gate_delay_1d_tuning_2d_held_out": 1,
+   "gate_null_fpr_le_z_both": 1,
+   "gate_ramp_tpr_1_25x_z_held_out": 1,
+   "gate_ramp_tpr_plus_0_2_tuning": 1,
+   "gate_spike_parity_tuning": 1,
+   "replicates": 40,
+   "series_per_replicate": 20,
+   "z_null_fpr_held_out": 0.0375,
+   "z_null_fpr_tuning": 0.01964,
+   "z_ramp_tpr_held_out": 0.2,
+   "z_ramp_tpr_tuning": 0.408,
+   "z_spike_tpr_held_out": 0.442,
+   "z_spike_tpr_tuning": 0.617
+  },
+  "notes": [
+   "sweep s=1.5 γ=0.5: tuning ramp_tpr=0.750 null_fpr=0.05179 delay=0.0",
+   "sweep s=1.5 γ=1: tuning ramp_tpr=0.675 null_fpr=0.00714 delay=1.0",
+   "sweep s=1.5 γ=2: tuning ramp_tpr=0.433 null_fpr=0.00000 delay=1.0",
+   "sweep s=1.5 γ=3: tuning ramp_tpr=0.350 null_fpr=0.00000 delay=2.0",
+   "sweep s=1.5 γ=4: tuning ramp_tpr=0.317 null_fpr=0.00000 delay=2.0",
+   "sweep s=2 γ=0.5: tuning ramp_tpr=0.767 null_fpr=0.05714 delay=0.0",
+   "sweep s=2 γ=1: tuning ramp_tpr=0.692 null_fpr=0.00893 delay=1.0",
+   "sweep s=2 γ=2: tuning ramp_tpr=0.525 null_fpr=0.00000 delay=1.0",
+   "sweep s=2 γ=3: tuning ramp_tpr=0.392 null_fpr=0.00000 delay=2.0",
+   "sweep s=2 γ=4: tuning ramp_tpr=0.350 null_fpr=0.00000 delay=2.0",
+   "sweep s=3 γ=0.5: tuning ramp_tpr=0.675 null_fpr=0.04464 delay=0.0",
+   "sweep s=3 γ=1: tuning ramp_tpr=0.600 null_fpr=0.00893 delay=1.0",
+   "sweep s=3 γ=2: tuning ramp_tpr=0.517 null_fpr=0.00000 delay=1.0",
+   "sweep s=3 γ=3: tuning ramp_tpr=0.408 null_fpr=0.00000 delay=2.0",
+   "sweep s=3 γ=4: tuning ramp_tpr=0.367 null_fpr=0.00000 delay=2.0",
+   "candidate = two-state NB Viterbi (meridian_analytics::burst), (s, γ) fixed on the tuning variant; baseline = the SHIPPED mover_stats EB+quasi-NB z+BH (q ≤ 0.05) over the same 20-series BH family; delay = online prefix-decode emulation vs the PLANTED 2×-crossing day; hold-out = NB counts + convex weaker ramps (risk #21)",
+   "spike_fire_rate is informational: a single-day spike is z's case by the ADR-28 division of labor — burst firing on it is neither required nor counted as a false positive against the null gate"
+  ],
+  "duration_ms": 538.026475
+ }
+}

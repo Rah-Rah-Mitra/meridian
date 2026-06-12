@@ -220,10 +220,12 @@ Requires `[analytics] enabled = true` (GDELT opt-in), else `404`.
   "series": [[20608, 17], [20609, 25]],
   "top_movers": [
     { "root": 14, "latest": 25, "mean": 11.5, "ratio": 2.17,
-      "shrunk_rate": 18.2, "z": 4.7, "q_value": 0.001, "significant": true },
+      "shrunk_rate": 18.2, "z": 4.7, "q_value": 0.001, "significant": true,
+      "burst": { "active": false, "days_active": 0 } },
     { "root": 3, "latest": 4, "mean": 1.2, "ratio": 3.33,
       "shrunk_rate": 2.1, "z": 1.1, "q_value": 0.41, "significant": false,
-      "label": "likely low-sample noise" }
+      "label": "likely low-sample noise",
+      "burst": { "active": true, "onset_day": 20605, "days_active": 4 } }
   ]
 }
 ```
@@ -234,8 +236,18 @@ empirical-Bayes-shrunk, overdispersion-aware standardized excess of the latest
 day over the window baseline, with Benjamini-Hochberg FDR across roots.
 `significant` (q ≤ 0.05) is the defensible "this moved" flag; `ratio` is the
 raw latest/mean kept for explainability, and an elevated ratio WITHOUT
-significance carries the `label` honesty marker. GDELT caveat: all trends
-describe *media coverage*, not ground truth about the world (ADR-15).
+significance carries the `label` honesty marker.
+
+`burst` (v0.5.0, ADR-28) answers the question `z` cannot: whether the series
+is inside a **sustained multi-day elevation**, and since when (`onset_day`,
+days-since-epoch). A story building over several days never makes any single
+day extreme — each elevated day inflates the baseline the next is judged
+against — so `significant` and `burst.active` are independent flags from two
+detectors with different blind spots: a one-day spike sets `significant` but
+not `burst.active`; a slow sustained ramp does the reverse (the second
+example above). Constants frozen by the suite-17 study; absent when the
+window is shorter than 7 days. GDELT caveat: all trends describe *media
+coverage*, not ground truth about the world (ADR-15).
 
 ## POST /v1/forget  (bearer)
 

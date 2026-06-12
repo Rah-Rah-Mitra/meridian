@@ -25,6 +25,7 @@ bench-anon = ["dep:arti-client", "dep:tokio", "dep:rustls"]
 bench-divergence = ["dep:reqwest", "dep:tokio"]
 
 [dependencies]
+meridian-analytics.workspace = true
 meridian-common.workspace = true
 meridian-embed.workspace = true
 meridian-index.workspace = true

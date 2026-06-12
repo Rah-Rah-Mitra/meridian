@@ -3274,6 +3274,7 @@ dependencies = [
  "arti-client",
  "cxx",
  "libc",
+ "meridian-analytics",
  "meridian-common",
  "meridian-embed",
  "meridian-fetch",

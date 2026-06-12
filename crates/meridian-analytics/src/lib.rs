@@ -5,6 +5,7 @@
 //! `meridian_common::prior::DomainPriorSource` — no crate edge to the query
 //! path; the composition root wires it).
 
+pub mod burst;
 pub mod gdelt;
 pub mod graph;
 pub mod stats;

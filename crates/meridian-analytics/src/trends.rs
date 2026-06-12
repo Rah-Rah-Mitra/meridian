@@ -7,6 +7,7 @@
 //! single-digit-count noise (suite-10 study). The raw values stay in the
 //! payload for explainability; `significant` is the defensible flag.
 
+use crate::burst::{BurstParams, decode as burst_decode, summarize as burst_summarize};
 use crate::stats::{MoverInput, mover_stats};
 use crate::store::{AnalyticsStore, StoreError};
 use std::collections::HashMap;
@@ -38,6 +39,26 @@ pub struct Mover {
     /// statistics cannot back it (ADR-21 honesty label).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<&'static str>,
+    /// Two-state burst decode over this root's window (Phase 10, ADR-28):
+    /// answers the question z cannot — "is this series inside a SUSTAINED
+    /// elevation, and since when" (a multi-day ramp never makes any single
+    /// day extreme, so the latest-day z is structurally blind to it). An
+    /// independent flag alongside `significant`, never a replacement. Absent
+    /// when the window is too short to decode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub burst: Option<MoverBurst>,
+}
+
+/// Burst summary with the onset converted to an absolute day epoch.
+#[derive(Debug, serde::Serialize)]
+pub struct MoverBurst {
+    /// The latest day is inside an elevated run.
+    pub active: bool,
+    /// Day epoch where the trailing elevated run began (present when active).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub onset_day: Option<u32>,
+    /// Length of the trailing elevated run in days.
+    pub days_active: usize,
 }
 
 /// `topic` = GDELT EventRootCode; `h3_r5` = a res-5 cell (both optional).
@@ -105,6 +126,14 @@ pub fn trends(
         .map(|((root, input), s)| {
             let latest = *input.days.last().unwrap_or(&0);
             let mean = input.days.iter().sum::<u32>() as f32 / input.days.len() as f32;
+            let burst = burst_decode(&input.days, &BurstParams::default()).map(|states| {
+                let sum = burst_summarize(&states);
+                MoverBurst {
+                    active: sum.active,
+                    onset_day: sum.onset_index.map(|i| first_day + i as u32),
+                    days_active: sum.days_active,
+                }
+            });
             Mover {
                 root: *root,
                 latest,
@@ -119,6 +148,7 @@ pub fn trends(
                 q_value: s.q_value,
                 significant: s.significant,
                 label: s.label,
+                burst,
             }
         })
         .collect();
@@ -187,5 +217,50 @@ mod tests {
         // Topic filter narrows the series.
         let only14 = trends(&store, 100, 104, Some(14), None).unwrap();
         assert!(only14.series.iter().all(|(_, n)| *n == 5));
+
+        // 5-day window is below the burst decode minimum — field absent.
+        assert!(report.top_movers.iter().all(|m| m.burst.is_none()));
+    }
+
+    #[test]
+    fn sustained_ramp_gets_a_burst_flag() {
+        let dir = std::env::temp_dir().join(format!("meridian-burst-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = AnalyticsStore::open(&dir).unwrap();
+
+        let mut counters = std::collections::HashMap::new();
+        // 14 days: root 14 steady at 5; root 3 quiet at 2 then SUSTAINED at 10
+        // for the last 5 days — the multi-day shape ADR-28 exists for.
+        for day in 200..=213u32 {
+            counters.insert(
+                CounterKey {
+                    day,
+                    h3_r5: 1,
+                    root: 14,
+                },
+                5,
+            );
+            counters.insert(
+                CounterKey {
+                    day,
+                    h3_r5: 1,
+                    root: 3,
+                },
+                if day >= 209 { 10 } else { 2 },
+            );
+        }
+        store.apply(&counters, &Default::default()).unwrap();
+
+        let report = trends(&store, 200, 213, None, None).unwrap();
+        let ramp = report.top_movers.iter().find(|m| m.root == 3).unwrap();
+        let burst = ramp.burst.as_ref().expect("14-day window decodes");
+        assert!(burst.active, "{burst:?}");
+        let onset = burst.onset_day.unwrap();
+        assert!((208..=210).contains(&onset), "onset {onset}");
+        assert!(burst.days_active >= 4, "{burst:?}");
+
+        let steady = report.top_movers.iter().find(|m| m.root == 14).unwrap();
+        let sb = steady.burst.as_ref().unwrap();
+        assert!(!sb.active, "steady root must not burst: {sb:?}");
     }
 }
