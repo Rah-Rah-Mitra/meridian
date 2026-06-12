@@ -67,6 +67,10 @@ const SUITES: &[(&str, &str)] = &[
         "voi",
         "suite 15: VoI fetch replay — gate ≥25% fewer fetches at equal nDCG@10 + diversity guard",
     ),
+    (
+        "changepoint",
+        "suite 17: multi-day-ramp burst study, two-state Viterbi vs EB-z — gate FPR≤z + TPR+0.2 + delay≤1d",
+    ),
 ];
 
 fn main() -> ExitCode {
@@ -158,6 +162,10 @@ fn main() -> ExitCode {
 
     if wants("voi") {
         run_and_print(&mut report, meridian_eval::bench::voi::run(&cfg));
+    }
+
+    if wants("changepoint") {
+        run_and_print(&mut report, meridian_eval::bench::changepoint::run(&cfg));
     }
 
     if wants("embed") {
