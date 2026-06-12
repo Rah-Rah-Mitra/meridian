@@ -827,7 +827,8 @@ hold-out, z spike parity, held-out generator variant honored (risk #21) — **ME
 s=2/γ=1 frozen**; suite 18 best-passage hit-rate ≥ the
 snippet-head baseline with pandora-vs-additive fetch efficiency measured, answer-mode p50 ≤3.0s
 device-validated (its own budget row — the deep 2.5s budget is not silently busted); suite 15b
-ships only on a hold-out win, else the carry closes with a measured no; amd64 green on the same CI
+ships only on a hold-out win, else the carry closes with a measured no — **CLOSED 2026-06-13
+with the no: signal calibratable (0.72 vs 0.05 cosine), no swept combiner profitable**; amd64 green on the same CI
 suite subset as arm64 or it stays suspended; 1M ANN re-baseline recorded (informational —
 insufficient disk ⇒ honestly still-carried with the pre-flight measurement); hermetic invariant
 count ≥20 holds; suites 1–8 + forget-correctness + RSS/latency re-validated.

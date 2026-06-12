@@ -1,0 +1,27 @@
+{
+ "header": {
+  "version": "0.1.0",
+  "kernel": "6.18.33+rpt-rpi-2712",
+  "page_size": 16384,
+  "nproc": 4
+ },
+ "suite": {
+  "name": "voi-embed",
+  "gate": "amend-or-record: an admissible combiner exists on tuning (a FAIL is a valid              verdict that closes the carry)",
+  "gate_passed": false,
+  "skipped": false,
+  "metrics": {
+   "calibration_inter_topic_cosine": 0.0516,
+   "calibration_intra_topic_cosine": 0.7161,
+   "gate_calibratable_signal": 1,
+   "queries": 200
+  },
+  "notes": [
+   "sweep min: tuning nDCG 0.6964 vs all 0.7394, fetches 5.17, clusters 2 — INADMISSIBLE (quality)",
+   "sweep product: tuning nDCG 0.6963 vs all 0.7394, fetches 5.15, clusters 2 — INADMISSIBLE (quality)",
+   "sweep mean: tuning nDCG 0.7244 vs all 0.7394, fetches 7.90, clusters 2 — INADMISSIBLE (quality)",
+   "VERDICT: a calibratable embedding signal EXISTS (0.72 vs 0.05 cosine separation)              but no swept combiner holds quality on tuning — the coverage discount prices out              paraphrase copies whose reveal still buys page nDCG, so the saved fetches cost              more than they earn. The P9 carry closes with this measured no (ADR-26); a value              model that spends the signal profitably remains future work, and this suite is              its standing judge."
+  ],
+  "duration_ms": 7549.3613589999995
+ }
+}

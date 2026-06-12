@@ -118,6 +118,15 @@ device-only at the exit.
 | 18 | `answer` | Suite-15 replay corpus extended: decisive originals carry an answer-bearing passage (copies carry truncated/paraphrased versions); compare best-passage extraction (pandora_walk + fetched-text CE) vs the snippet-head baseline (no fetch, CE over snippets); measure pandora-vs-additive fetches-to-best-find on the single-best objective | **Hit-rate (best_passage from a decisive original) ≥ baseline + 10pp on the hold-out; pandora fetches-to-best ≤ additive's** (its theoretical regime — measured, not assumed) | CI |
 | 15b | `voi` ext. | Embedding-coverage study (P9 carry): real potion embeddings of the replay corpus; candidate value model = frozen v0.4.0 + coverage term; same hold-out protocol | **Amend-or-record:** ships ONLY if it beats the frozen selector on fetches-saved at equal nDCG with non-degrading clusters; a measured no closes the carry | CI |
 
+**Suite 15b result (2026-06-13): RECORDED NO — the P9 embedding-coverage
+carry is CLOSED** (`bench/2026-06-13-pi5-p10-voi-embed.md`). The signal is
+real (potion separates same-field paraphrase registers at 0.716 cosine vs
+0.052 cross-field — exactly what MinHash novelty cannot see) but no swept
+gain-discount is profitable: up to 41% fetch savings always at a page-nDCG
+cost beyond the bar, because a paraphrase reveal still buys rank mass for a
+relevant doc. `voi-embed` (skips without models/) is the standing judge for
+any future use of the signal.
+
 **Suite 16 result (2026-06-12): FAIL on every condition — bands WITHDRAWN
 pre-ship** (`bench/2026-06-12-pi5-p10-conformal.md`; the suite-13b/MMR
 pattern repeating). The Q12 default is unachievable outright (top-5%

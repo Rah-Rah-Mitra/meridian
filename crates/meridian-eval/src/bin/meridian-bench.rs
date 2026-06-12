@@ -71,6 +71,10 @@ const SUITES: &[(&str, &str)] = &[
         "changepoint",
         "suite 17: multi-day-ramp burst study, two-state Viterbi vs EB-z — gate FPR≤z + TPR+0.2 + delay≤1d",
     ),
+    (
+        "voi-embed",
+        "suite 15b: embedding-coverage study vs the frozen v0.4.0 selector — amend-or-record (needs models/)",
+    ),
 ];
 
 fn main() -> ExitCode {
@@ -166,6 +170,10 @@ fn main() -> ExitCode {
 
     if wants("changepoint") {
         run_and_print(&mut report, meridian_eval::bench::changepoint::run(&cfg));
+    }
+
+    if wants("voi-embed") {
+        run_and_print(&mut report, meridian_eval::bench::voi_embed::run(&cfg));
     }
 
     if wants("embed") {
