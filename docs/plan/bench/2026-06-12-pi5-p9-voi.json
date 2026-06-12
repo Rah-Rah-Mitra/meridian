@@ -1,0 +1,40 @@
+{
+  "version": "0.1.0",
+  "kernel": "6.18.33+rpt-rpi-2712",
+  "page_size": 16384,
+  "nproc": 4,
+  "compiled_suites": [
+    "fusion",
+    "synfarm",
+    "spike",
+    "evidence",
+    "ope",
+    "voi"
+  ],
+  "profile_note": "DEBUG BUILD — numbers are meaningless; use the CI release-bench artifact",
+  "suites": [
+    {
+      "name": "voi",
+      "gate": "VoI nDCG@10 within 0.01 of fetch-all with ≥25% fewer fetches AND median fetched-cluster count ≥ rank-greedy at equal budget",
+      "gate_passed": true,
+      "skipped": false,
+      "metrics": {
+        "holdout_fetch_all_fetches": 10.0,
+        "holdout_fetch_all_ndcg10": 0.7434,
+        "holdout_fetch_saving": 0.305,
+        "holdout_greedy_median_clusters": 2.0,
+        "holdout_rank_greedy_ndcg10": 0.7058,
+        "holdout_voi_fetches_mean": 6.95,
+        "holdout_voi_median_clusters": 3.0,
+        "holdout_voi_ndcg10": 0.7411,
+        "sweep_best_beta0": 0.2,
+        "sweep_best_beta2": 0.3
+      },
+      "notes": [
+        "tuning sweep: (β0=0.05,β2=0.1: nDCG 0.6161 vs all 0.7353, fetches 1.32) (β0=0.05,β2=0.2: nDCG 0.6779 vs all 0.7353, fetches 3.71) (β0=0.05,β2=0.3: nDCG 0.6896 vs all 0.7353, fetches 4.34) (β0=0.1,β2=0.1: nDCG 0.6834 vs all 0.7353, fetches 4.21) (β0=0.1,β2=0.2: nDCG 0.7016 vs all 0.7353, fetches 5.01) (β0=0.1,β2=0.3: nDCG 0.7042 vs all 0.7353, fetches 5.24) (β0=0.2,β2=0.1: nDCG 0.7481 vs all 0.7353, fetches 9.53) (β0=0.2,β2=0.2: nDCG 0.7318 vs all 0.7353, fetches 7.74) (β0=0.2,β2=0.3: nDCG 0.7273 vs all 0.7353, fetches 7.00) ",
+        "shipped constants P_BETA0=0.2, P_BETA2=0.3 — must match the sweep winner or the divergence is recorded here"
+      ],
+      "duration_ms": 975.39401
+    }
+  ]
+}

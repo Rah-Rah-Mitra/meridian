@@ -86,6 +86,15 @@ subset (for alpha-nDCG@10) and a curated region-sensitive subset (for suite 12b)
 a small BEIR subset is added for ranking sanity (task choice = operator Q9).
 New metrics in `meridian-eval::metrics`: alpha-nDCG@10, ECE.
 
+**Suite 15 result (2026-06-12): PASS on hold-out with frozen constants** —
+VoI (additive-objective selector; see the ADR-26 amendment: Pandora's rule
+measured wrong for page-level nDCG) reaches nDCG@10 within 0.0023 of
+fetch-all at **30.5% fewer fetches**, median fetched clusters 3 vs
+rank-greedy 2; two interim harness defects documented in module docs
+(novelty-only value model opened chaff; per-round best-reset disabled the
+stop). bench/2026-06-12-pi5-p9-voi.json. Planner wiring re-validates the
+deep 2.5s gate on-device.
+
 **Suite 13b result (2026-06-12, seeds 42 + 1337):** the duplicate-heavy MMR
 gate **FAILED** on both seeds at every λ in a 0.5–0.95 sweep (alpha-nDCG gain
 only at 7–11% plain-nDCG cost; symmetric token similarity demotes canonical
