@@ -41,6 +41,8 @@ configured, gated endpoints answer `503 auth not configured`.
 | `after`, `before` | int | — | Unix-seconds document-timestamp window (inclusive). |
 | `compare` | `vantages` | — | v0.2.0: run the query over direct AND anon and attach the `divergence` block. Requires `scope=web`; the `lane` param must be omitted (compare governs lanes). See the privacy note below. |
 
+| `fetch_budget` | int | 0 | v0.4.0, `mode=deep` + direct lane only: fetch up to N result pages (capped by `search.deep_fetch_max`) and re-score them on full text. Adds the `analysis` block. **Creates per-query egress to result domains** — see the privacy guide. Mutually exclusive with `compare`. |
+
 A `diversity=mmr` parameter was built for v0.3.0 and **withdrawn before
 release**: its own gate (suite 13b, two generator seeds) showed token-overlap
 MMR demotes canonical originals along with their near-duplicate copies —
@@ -269,6 +271,17 @@ realized reward on the held-out 20%, with a bootstrap 95% CI. The `gate`
 block names the verdict — `pass` only when the CI excludes zero from above
 on ≥10k decisions; `inconclusive` and `negative` mean ε-greedy stays (the
 ADR-25 sunset rule). Reporting only — it never changes routing.
+
+## The `analysis` block (v0.4.0, `schema: 1`)
+
+On deep responses with `fetch_budget > 0`: `{ fetches_made,
+search_stopped_because, estimated_marginal_gain_remaining }`. Stop reasons:
+`value_below_reservation` (reading more is expected to be a net loss — the
+optimal stop), `budget_exhausted`, `deadline`, `exhausted` (no candidates
+left). `estimated_marginal_gain_remaining` is the best expected net value
+left unfetched, in ranking-gain units — the engine says what it left on the
+table. Results re-scored on full text carry the new value in
+`rank_signals.ce`.
 
 ## GET /healthz
 

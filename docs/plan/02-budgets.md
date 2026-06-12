@@ -138,6 +138,7 @@ New analytical stages are budgeted against the **measured Phase-6 baseline**
 | Evidence transient RAM (clustering top-1000 candidates) | ≤32MB | ≤32MB | included in the soak RSS gate — plateau must not move |
 | Heatmap/trends + EB+Gi*+BH | ≤150ms p50 | ≤60ms p50 | re-measured at P7 exit (Phase-6 baseline 27ms) |
 | Compare-mode end-to-end (flag set) | ≤ slowest lane budget + 500ms | same (anon ≤8s binds) | suite 12 cross-lane run at P8 exit |
+| Deep mode with `fetch_budget` (ADR-26) | p50 ≤2.5s holds | same | fetch phase wall-clock capped at `deep_fetch_deadline_ms` (1.2s default); device re-validation at the v0.4.0 exit |
 | QPP confidence stage | ≤1ms | ≤1ms | suite 13 |
 | Contextual-TS state (Phase 9, feature-gated) | negligible (d≈20 matrices, <1MB) | same | noted for completeness; covered by RSS gate |
 | Region SearXNG sidecars (Phase-10 candidate, ADR-22) | NOT BUDGETED — requires its own row + operator sign-off before any compose profile lands | — | risk #19: compose RAM accounting >6.5GB committed ⇒ feature stays off |

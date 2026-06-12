@@ -673,9 +673,12 @@ nDCG@10 0.7411 vs fetch-all 0.7434 at 30.5% fewer fetches, median fetched
 clusters 3 vs rank-greedy 2 (bench/2026-06-12-pi5-p9-voi.json). Deviations
 recorded: the ingest-frontier hook is DEFERRED (no in-process frontier queue
 exists to reorder); embedding-coverage joins the value model at planner
-wiring time (the hermetic replay has no embedding space). Planner wiring +
-`fetch_budget` + the `analysis` block + privacy disclosure land together in
-the v0.4.0 train per 07-voi-design.md §2.**
+wiring time (the hermetic replay has no embedding space). Planner wiring SHIPPED
+2026-06-12 in the same train as this note: `fetch_budget` (deep + direct
+only, capped, never with compare), the `analysis` block, the standard-ladder
+fetch path with in-RAM-only usage, inv19 (fails safe without a CE) and the
+privacy.md/api.md/operator-manual disclosures. Device re-validation of the
+deep ≤2.5s gate is the v0.4.0 exit row.**
 
 ---
 

@@ -38,9 +38,8 @@ const DECISIVE: usize = 3;
 const COPIES_PER: usize = 2;
 const QUERIES: usize = 200;
 const FETCH_ALL_N: usize = 10;
-/// Per-fetch cost in DCG-gain units (calibrated so one decisive find at
-/// rank ~10 clearly pays for itself and chaff clearly does not).
-const COST: f64 = 0.6;
+/// The shipped cost constant — the suite calibrates the βs against it.
+const COST: f64 = meridian_fetch::voi::DEFAULT_FETCH_COST;
 
 struct Cand {
     /// Evidence cluster (copies share their original's).
