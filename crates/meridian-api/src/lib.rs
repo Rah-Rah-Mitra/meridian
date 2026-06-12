@@ -174,6 +174,11 @@ struct SearchParams {
     /// fetch_budget restriction). Same egress surface as fetch_budget.
     #[serde(default)]
     answer: Option<bool>,
+    /// `evidence` (v0.6.0): cluster-aware result diversification — each
+    /// ADR-18 cluster's canonical document leads, syndicated copies defer.
+    /// The MMR replacement; `mmr` was withdrawn by suite 13b pre-release.
+    #[serde(default)]
+    diversity: Option<String>,
     #[serde(default)]
     limit: Option<usize>,
     // Geo constraint (SPEC §10): lat+lon+radius_km together, OR h3.
@@ -314,6 +319,17 @@ async fn search(
             n.min(state.config.search.deep_fetch_max)
         }
     };
+    let diversity_evidence = match params.diversity.as_deref() {
+        None => false,
+        Some("evidence") => true,
+        Some(_) => {
+            return Err(Problem::new(
+                StatusCode::BAD_REQUEST,
+                "invalid diversity",
+                "diversity=evidence (mmr was withdrawn by its own gate — see api.md)",
+            ));
+        }
+    };
     let answer = params.answer.unwrap_or(false);
     if answer && fetch_budget == 0 {
         return Err(Problem::new(
@@ -335,6 +351,7 @@ async fn search(
         pin_engines: false,
         fetch_budget,
         answer,
+        diversity_evidence,
     };
     if compare {
         // Compare governs lanes itself and is web-scoped by definition; a

@@ -43,13 +43,14 @@ configured, gated endpoints answer `503 auth not configured`.
 
 | `fetch_budget` | int | 0 | v0.4.0, `mode=deep` + direct lane only: fetch up to N result pages (capped by `search.deep_fetch_max`) and re-score them on full text. Adds the `analysis` block. **Creates per-query egress to result domains** — see the privacy guide. Mutually exclusive with `compare`. |
 | `answer` | bool | false | v0.5.0 (ADR-29): switch the fetch selector to the single-best objective and attach the extractive `best_passage` block. Requires `fetch_budget ≥ 1` and inherits every fetch_budget restriction (deep, direct, never with compare). Same egress surface as `fetch_budget` — no new disclosure class. |
+| `diversity` | `evidence` | — | v0.6.0: cluster-aware diversification. Each ADR-18 evidence cluster's **canonical** document (the superset its copies derive from) takes the cluster's best slot; syndicated copies defer to the back; unsketched results never move. Pure local reordering, no privacy surface. Dup-harness gate: alpha-nDCG@10 **+0.19/+0.23** AND plain nDCG@10 **+0.14/+0.20** (tuning/hold-out) — it beats the un-diversified ranking on BOTH axes because canonical originals outrank their truncated copies. |
 
 A `diversity=mmr` parameter was built for v0.3.0 and **withdrawn before
 release**: its own gate (suite 13b, two generator seeds) showed token-overlap
 MMR demotes canonical originals along with their near-duplicate copies —
-alpha-nDCG gains came only at >1% plain-nDCG cost at every λ tried. An
-evidence-cluster-aware diversifier (reusing the Phase-7 sketch clusters) is
-the planned replacement.
+alpha-nDCG gains came only at >1% plain-nDCG cost at every λ tried. The
+carried replacement shipped in v0.6.0 as `diversity=evidence` (above) and
+dominates MMR on both metrics on the same harness.
 
 Geo/time filters apply to **local results only** — the SearXNG fan-out cannot
 be geo-filtered (recorded tradeoff, ADR-10). Under a geo/time filter the local
@@ -74,7 +75,7 @@ Response:
       "source": "local",
       "h3": 608533319155138559,
       "ts": 1749600000,
-      "evidence": { "cluster": 0 }
+      "evidence": { "cluster": 0, "canonical": true }
     }
   ],
   "timings": { "plan": 1, "lexical": 9, "fusion": 2, "evidence_ms": 0, "total": 14 },
@@ -135,8 +136,9 @@ nDCG lands with the v0.3.0 eval suite. Honest use: treat low scores as "verify
 before trusting", not high scores as "true".
 
 **Evidence block** (v0.2.0, additive — absent when `[evidence] enabled =
-false`): results are clustered by text-derivation similarity (MinHash
-containment over ingest-time sketches); each cluster is one apparent ORIGIN, so
+false`; `schema: 2` since v0.6.0): results are clustered by text-derivation
+similarity (MinHash containment over ingest-time sketches); each cluster is
+one apparent ORIGIN, so
 `independent_source_count` < `apparent_source_count` means some results are
 copies/syndications of each other, not independent corroboration. A cluster
 with `members > domains` is cross-domain syndication — the case plain domain
@@ -145,6 +147,10 @@ ingested (and therefore sketched from full text) participate; web results
 never fetched carry `evidence: null` and are excluded from the count —
 independence is never guessed from a snippet. `sketched_results` states the
 basis. Documents ingested before v0.2.0 lack sketches until re-ingested.
+Per-result annotations carry `canonical` (v0.6.0): the cluster member with
+the most shingles — the superset its copies derive from. It marks which
+member `diversity=evidence` promotes, and it is honest about ties (verbatim
+copies tie on shingles; the first in response order wins, deterministically).
 
 ## POST /v1/ingest  (bearer)
 

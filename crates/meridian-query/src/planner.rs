@@ -67,6 +67,11 @@ pub struct SearchRequest {
     /// `best_passage` block. Requires `fetch_budget` ≥ 1 and inherits every
     /// fetch_budget restriction (the API enforces; the planner guards).
     pub answer: bool,
+    /// `diversity=evidence` (v0.6.0, the MMR replacement): reorder the final
+    /// list so each ADR-18 cluster's CANONICAL document leads and its
+    /// syndicated copies defer to the back. Pure local reordering — no
+    /// privacy surface; a no-op when the evidence layer is off.
+    pub diversity_evidence: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -336,6 +341,7 @@ impl Planner {
         // A budget-2 response is a different artifact than a budget-0 one.
         hasher.update(&req.fetch_budget.to_le_bytes());
         hasher.update(&[u8::from(req.answer)]);
+        hasher.update(&[u8::from(req.diversity_evidence)]);
         // Geo + time constraints MUST key the cache — a filtered result set
         // cached under the unfiltered key would poison every later query.
         match &req.geo {
@@ -1335,6 +1341,28 @@ impl Planner {
             timings.insert("evidence_ms", ev_start.elapsed().as_millis() as u64);
             block
         });
+
+        // Evidence-cluster diversity (v0.6.0, the carried MMR replacement —
+        // gated by the same dup harness that withdrew MMR): each cluster's
+        // canonical document takes the cluster's best slot, copies defer to
+        // the back, unsketched results never move. `rank_signals` stay raw —
+        // the promoted canonical can show a lower score than a copy below
+        // it, and that is the explainable truth of what happened.
+        if req.diversity_evidence && evidence.is_some() {
+            let tags: Vec<Option<(u32, bool)>> = results
+                .iter()
+                .map(|r| r.evidence.as_ref().map(|e| (e.cluster, e.canonical)))
+                .collect();
+            let order = meridian_rank::diversity::cluster_diversify(&tags);
+            let mut pos = vec![usize::MAX; results.len()];
+            for (rank, &i) in order.iter().enumerate() {
+                pos[i] = rank;
+            }
+            let drained: Vec<SearchResult> = std::mem::take(&mut results);
+            let mut paired: Vec<(usize, SearchResult)> = pos.into_iter().zip(drained).collect();
+            paired.sort_by_key(|(p, _)| *p);
+            results = paired.into_iter().map(|(_, r)| r).collect();
+        }
 
         // Bandit reward (SPEC §11): chosen arm "appeared" if any web-sourced
         // result is in the final top-10. Direct lane only by construction —

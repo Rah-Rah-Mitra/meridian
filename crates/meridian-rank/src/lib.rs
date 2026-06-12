@@ -14,6 +14,7 @@
 
 /// Per-candidate features (SPEC §11). Fields not yet plumbed are fed neutral
 /// values by the planner and documented there (freshness/domain_prior/geo).
+pub mod diversity;
 pub mod mmr;
 pub mod qpp;
 

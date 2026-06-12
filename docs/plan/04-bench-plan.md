@@ -118,6 +118,17 @@ device-only at the exit.
 | 18 | `answer` | Suite-15 replay corpus extended: decisive originals carry an answer-bearing passage (copies carry truncated/paraphrased versions); compare best-passage extraction (pandora_walk + fetched-text CE) vs the snippet-head baseline (no fetch, CE over snippets); measure pandora-vs-additive fetches-to-best-find on the single-best objective | **Hit-rate (best_passage from a decisive original) ≥ baseline + 10pp on the hold-out; pandora fetches-to-best ≤ additive's** (its theoretical regime — measured, not assumed) | CI |
 | 15b | `voi` ext. | Embedding-coverage study (P9 carry): real potion embeddings of the replay corpus; candidate value model = frozen v0.4.0 + coverage term; same hold-out protocol | **Amend-or-record:** ships ONLY if it beats the frozen selector on fetches-saved at equal nDCG with non-degrading clusters; a measured no closes the carry | CI |
 
+**Suite 13c result (2026-06-13): PASS — the P8 diversity carry ships as
+`diversity=evidence`** (`bench/2026-06-13-pi5-13c-evidence-diversity.md`).
+Judged by the same dup harness and the same two gates MMR failed: the
+canonical-aware cluster diversifier improves alpha-nDCG@10 by +0.19/+0.23
+(tuning/hold-out) AND plain nDCG@10 by +0.14/+0.20 — both metrics, both
+seeds, dominating MMR everywhere. One falsified intermediate recorded (v1
+"best-ranked member keeps the slot" crowned the truncated copies: nDCG
+−13%); the shipped rule promotes the most-shingled member — the superset
+the copies derive from. Harness honesty fix in the same train: run-dup now
+refuses empty indexes (the first run gated all-zeros as PASS).
+
 **Suite 18 result (2026-06-12): PASS with frozen ANSWER_FETCH_COST = 0.1**
 (`bench/2026-06-12-pi5-p10-answer.md`, n=1000 hold-out at the production
 budget cap): answer hit-rate 0.700 vs the no-fetch baseline's 0.593
