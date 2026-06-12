@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 pub mod evidence;
 pub mod fusion;
+pub mod ope;
 pub mod spike;
 pub mod synfarm;
 
@@ -269,7 +270,7 @@ pub(crate) fn synthetic_sentences(n: usize, rng: &mut Rng) -> Vec<String> {
 fn compiled_suites() -> Vec<&'static str> {
     // `mut` is unused only when every bench feature is off.
     #[allow(unused_mut)]
-    let mut v = vec!["fusion", "synfarm", "spike", "evidence"];
+    let mut v = vec!["fusion", "synfarm", "spike", "evidence", "ope"];
     #[cfg(feature = "bench-embed")]
     v.extend(["embed", "thermal"]);
     #[cfg(feature = "bench-ann")]

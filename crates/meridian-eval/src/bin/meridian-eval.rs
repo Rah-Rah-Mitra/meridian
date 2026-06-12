@@ -44,6 +44,18 @@ fn main() -> ExitCode {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(usize::MAX),
         ),
+        "gen-dup" => generate_dup(
+            &get("--corpus").unwrap_or_else(|| "bench-scratch/corpus.jsonl".into()),
+            &get("--out-dir").unwrap_or_else(|| "eval".into()),
+            get("--n").and_then(|v| v.parse().ok()).unwrap_or(30),
+            get("--seed").and_then(|v| v.parse().ok()).unwrap_or(42),
+        ),
+        "run-dup" => run_dup(
+            &get("--data").unwrap_or_else(|| "eval/dup-data".into()),
+            &get("--models").unwrap_or_else(|| "models".into()),
+            &get("--queries").unwrap_or_else(|| "eval/dup-queries.tsv".into()),
+            &get("--qrels").unwrap_or_else(|| "eval/dup-qrels.txt".into()),
+        ),
         "gazetteer" => gazetteer(
             &get("--source").unwrap_or_else(|| "cities15000.txt".into()),
             &get("--out").unwrap_or_else(|| "models/gazetteer.fst".into()),
@@ -522,6 +534,446 @@ fn run(data: &str, models: &str, queries: &str, qrels_path: &str) -> ExitCode {
         if ltr_no_regression { "PASS" } else { "FAIL" }
     );
     if hybrid_beats_bm25 && ltr_no_regression && qpp_gate {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+/// Suite 13b (Phase 8, MMR gate): duplicate-heavy eval set. Each query targets
+/// THREE distinct documents sharing a query word EXCLUSIVE to them (three
+/// subtopics); each document additionally appears as THREE near-duplicate
+/// copies (truncation + boilerplate — the suite-9 syndication shape), so the
+/// 12 matching docs exceed the 10 evaluated slots and redundancy has a real
+/// cost. A diversity-aware ranking covers the three subtopics before the
+/// copies; a redundancy-blind one drowns rank 2-3 in duplicates. Output:
+/// dup-corpus.jsonl (5k background + originals + copies), dup-queries.tsv,
+/// dup-qrels.txt (qid url grade subtopic).
+fn generate_dup(corpus: &str, out_dir: &str, n: usize, seed: u64) -> ExitCode {
+    let docs = read_corpus(corpus, 20_000);
+    if docs.len() < 6_000 {
+        eprintln!("corpus too small for dup-heavy gen ({})", docs.len());
+        return ExitCode::FAILURE;
+    }
+    let mut rng = Rng::new(seed);
+
+    // Inverted index over title+body with INDEX-LIKE tokenization (split on
+    // non-alphanumeric, lowercase — what tantivy does), full document scan.
+    // The first cut scanned only the first 120 whitespace tokens and allowed
+    // df ≤ 40, so dozens of UNJUDGED background docs matched each query and
+    // the gate measured retrieval noise, not duplicate demotion (LTR nDCG@10
+    // was 0.41 against 0.89 on clean separation). The query word must be
+    // EXCLUSIVE to its three subtopic docs: df == 3 across everything that
+    // ends up in the corpus.
+    let mut by_word: std::collections::HashMap<String, Vec<usize>> =
+        std::collections::HashMap::new();
+    for (i, d) in docs.iter().enumerate().take(6_000) {
+        let mut seen = HashSet::new();
+        for w in d
+            .title
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .chain(d.body.split(|c: char| !c.is_ascii_alphanumeric()))
+        {
+            let w = w.to_lowercase();
+            if w.len() >= 6 && w.chars().all(|c| c.is_ascii_alphabetic()) && seen.insert(w.clone())
+            {
+                by_word.entry(w).or_default().push(i);
+            }
+        }
+    }
+    let mut candidates: Vec<(&String, &Vec<usize>)> = by_word
+        .iter()
+        .filter(|(_, ids)| ids.len() == 3)
+        .collect();
+    candidates.sort_by_key(|(w, _)| w.to_string());
+
+    let _ = std::fs::create_dir_all(out_dir);
+    let mut queries = String::new();
+    let mut qrels = String::new();
+    let mut extra_docs = String::new();
+    let mut used_docs: HashSet<usize> = HashSet::new();
+    let mut made = 0usize;
+
+    while made < n && !candidates.is_empty() {
+        let pick = rng.below(candidates.len());
+        let (word, ids) = candidates.swap_remove(pick);
+        let group: Vec<usize> = ids
+            .iter()
+            .copied()
+            .filter(|i| !used_docs.contains(i))
+            .take(3)
+            .collect();
+        if group.len() < 3 {
+            continue;
+        }
+        // The copies are 75%-truncations: the query word must survive into
+        // every copy (title or kept body prefix), or the copies are simply
+        // not retrievable for this query and the "duplicate-heavy" premise
+        // evaporates at retrieval time.
+        let survives = group.iter().all(|&di| {
+            let d = &docs[di];
+            let in_title = d
+                .title
+                .split(|c: char| !c.is_ascii_alphanumeric())
+                .any(|t| t.to_lowercase() == **word);
+            let body_words: Vec<&str> = d.body.split_whitespace().collect();
+            let keep = (body_words.len() * 3 / 4).max(40).min(body_words.len());
+            let in_kept = body_words[..keep].iter().any(|t| {
+                t.split(|c: char| !c.is_ascii_alphanumeric())
+                    .any(|p| p.to_lowercase() == **word)
+            });
+            in_title || in_kept
+        });
+        if !survives {
+            continue;
+        }
+        used_docs.extend(&group);
+        let qid = format!("dq{made}");
+        queries.push_str(&format!("{qid}\t{word}\n"));
+        for (sub, &di) in group.iter().enumerate() {
+            let d = &docs[di];
+            qrels.push_str(&format!("{qid} {} 3 {sub}\n", d.url));
+            // Two near-duplicate copies per original: 75% truncation + outlet
+            // boilerplate (the suite-9 syndication shape). `build` derives the
+            // URL from the TITLE, so copies need DISTINCT titles — which is
+            // also what real syndication does (retitled wire copy). The first
+            // cut of this generator reused the original title; all copies
+            // collapsed into one URL and the dup eval silently measured plain
+            // nDCG (alpha == nDCG exactly was the tell).
+            let words: Vec<&str> = d.body.split_whitespace().collect();
+            let keep = (words.len() * 3 / 4).max(40).min(words.len());
+            for c in 0..3 {
+                let copy_title = format!("{} syndicated {c}", d.title);
+                let body = format!(
+                    "{} syndication outlet{c} footer attribution reporting",
+                    words[..keep].join(" ")
+                );
+                extra_docs.push_str(
+                    &serde_json::json!({"title": copy_title.clone(), "body": body}).to_string(),
+                );
+                extra_docs.push('\n');
+                qrels.push_str(&format!(
+                    "{qid} https://simple.wikipedia.org/wiki/{} 2 {sub}\n",
+                    copy_title.replace(' ', "_")
+                ));
+            }
+        }
+        made += 1;
+    }
+    if made < n {
+        eprintln!("warning: only {made}/{n} dup queries generated");
+    }
+
+    // dup corpus = 5k background + the originals of every group + copies.
+    let mut corpus_out = String::new();
+    let group_set: HashSet<usize> = used_docs.clone();
+    let mut background = 0usize;
+    for (i, d) in docs.iter().enumerate() {
+        let include = group_set.contains(&i) || background < 5_000;
+        if include {
+            if !group_set.contains(&i) {
+                background += 1;
+            }
+            corpus_out.push_str(
+                &serde_json::json!({"title": d.title.clone(), "body": d.body.clone()}).to_string(),
+            );
+            corpus_out.push('\n');
+        }
+    }
+    corpus_out.push_str(&extra_docs);
+
+    let w = |name: &str, content: &str| std::fs::write(format!("{out_dir}/{name}"), content);
+    if w("dup-corpus.jsonl", &corpus_out).is_err()
+        || w("dup-queries.tsv", &queries).is_err()
+        || w("dup-qrels.txt", &qrels).is_err()
+    {
+        eprintln!("write failed");
+        return ExitCode::FAILURE;
+    }
+    println!(
+        ">> dup-heavy set: {made} queries, {} group docs ×4 copies-incl, 5k background → {out_dir}",
+        used_docs.len()
+    );
+    ExitCode::SUCCESS
+}
+
+/// Suite 13b runner: alpha-nDCG@10 + nDCG@10 for the LTR ranking vs the SAME
+/// ranking reordered by MMR (the shipped diversity=mmr path). Gates (SPEC §16
+/// P8): MMR improves mean alpha-nDCG@10 AND loses ≤1% mean nDCG@10.
+fn run_dup(data: &str, models: &str, queries: &str, qrels_path: &str) -> ExitCode {
+    use meridian_eval::metrics::alpha_ndcg_at;
+    // 4-column qrels: qid url grade subtopic.
+    let mut subtopic_qrels: std::collections::HashMap<
+        String,
+        std::collections::HashMap<String, (u32, u32)>,
+    > = std::collections::HashMap::new();
+    for line in std::fs::read_to_string(qrels_path)
+        .unwrap_or_default()
+        .lines()
+    {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        if f.len() == 4 {
+            if let (Ok(g), Ok(sub)) = (f[2].parse::<u32>(), f[3].parse::<u32>()) {
+                subtopic_qrels
+                    .entry(f[0].to_owned())
+                    .or_default()
+                    .insert(f[1].to_owned(), (g, sub));
+            }
+        }
+    }
+    let query_list: Vec<(String, String)> = std::fs::read_to_string(queries)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| {
+            let (qid, q) = l.split_once('\t')?;
+            Some((qid.to_owned(), q.to_owned()))
+        })
+        .collect();
+    if query_list.is_empty() || subtopic_qrels.is_empty() {
+        eprintln!("empty dup eval set");
+        return ExitCode::FAILURE;
+    }
+    let Stack {
+        index,
+        embedder,
+        vectors,
+        ..
+    } = match open_stack(data, models) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("stack init failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    println!(
+        ">> dup eval over {} queries, {} docs",
+        query_list.len(),
+        index.num_docs()
+    );
+
+    const LAMBDA_SWEEP: [f32; 7] = [0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.95];
+    let scorer = LinearLtr::default();
+    // GATED regime: the BM25-matching head — every candidate contains the
+    // query term, near-dup copies crowd out subtopics. This is the hermetic
+    // proxy for the query-matching WEB head that `diversity=mmr` exists for
+    // (syndicated news); ANN noise never reaches those lists.
+    let (mut ab_base, mut ab_mmr, mut nb_base, mut nb_mmr) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    let mut ab_sweep = [0.0f64; LAMBDA_SWEEP.len()];
+    let mut nb_sweep = [0.0f64; LAMBDA_SWEEP.len()];
+    // DIAGNOSTIC regime: the local hybrid+LTR head. On exclusive-term queries
+    // RRF interleaves the few BM25 matches 1:1 with ANN noise, so duplicate
+    // demotion can only promote irrelevant docs — measured and reported, but
+    // not what the gate is about.
+    let (mut a_ltr, mut a_mmr, mut n_ltr, mut n_mmr) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    let mut a_sweep = [0.0f64; LAMBDA_SWEEP.len()];
+    let mut n_sweep = [0.0f64; LAMBDA_SWEEP.len()];
+    let mut evaluated = 0usize;
+
+    for (qid, query) in &query_list {
+        let Some(judg) = subtopic_qrels.get(qid) else {
+            continue;
+        };
+        let plain: std::collections::HashMap<String, u32> =
+            judg.iter().map(|(d, (g, _))| (d.clone(), *g)).collect();
+
+        // Same retrieval as `run`: hybrid fusion + LTR top-100.
+        let bm25_full = index.search(query, 1000).unwrap_or_default();
+        let qv = embedder.embed_query(query);
+        let ann = vectors.search(&qv, 200).unwrap_or_default();
+        let lists: Vec<Vec<u64>> = vec![
+            bm25_full.iter().map(|h| h.url_key).collect(),
+            ann.iter().map(|(k, _)| *k).collect(),
+        ];
+        let fused = meridian_query::rrf::rrf_fuse(&lists, meridian_query::rrf::RRF_K);
+        let mut url_by_key: std::collections::HashMap<u64, String> = bm25_full
+            .iter()
+            .map(|h| (h.url_key, h.url.clone()))
+            .collect();
+        let mut snip_by_key: std::collections::HashMap<u64, String> = bm25_full
+            .iter()
+            .map(|h| (h.url_key, h.snippet.clone()))
+            .collect();
+        let mut title_by_key: std::collections::HashMap<u64, String> = bm25_full
+            .iter()
+            .map(|h| (h.url_key, h.title.clone()))
+            .collect();
+        let missing: Vec<u64> = fused
+            .iter()
+            .take(100)
+            .map(|(k, _)| *k)
+            .filter(|k| !url_by_key.contains_key(k))
+            .collect();
+        for d in index.docs_by_keys(&missing).unwrap_or_default() {
+            url_by_key.insert(d.url_key, d.url);
+            snip_by_key.insert(d.url_key, d.snippet);
+            title_by_key.insert(d.url_key, d.title);
+        }
+        let ann_sim: std::collections::HashMap<u64, f32> = ann.iter().copied().collect();
+        let bm25_by_key: std::collections::HashMap<u64, f32> =
+            bm25_full.iter().map(|h| (h.url_key, h.bm25)).collect();
+        let mut ltr_keyed: Vec<(u64, f32)> = fused
+            .iter()
+            .take(100)
+            .map(|(k, rrf)| {
+                let f = Features {
+                    rrf: *rrf,
+                    bm25: bm25_by_key.get(k).copied().unwrap_or(0.0),
+                    ann: ann_sim.get(k).copied().unwrap_or(0.0),
+                    title_match_ratio: title_by_key
+                        .get(k)
+                        .map(|t| title_match_ratio(query, t))
+                        .unwrap_or(0.0),
+                    source_count: bm25_by_key.contains_key(k) as u8 as f32
+                        + ann_sim.contains_key(k) as u8 as f32,
+                    snippet_len_norm: 0.5,
+                    freshness: 0.5,
+                    domain_prior: 0.0,
+                    geo: 0.0,
+                };
+                (*k, scorer.score(&f))
+            })
+            .collect();
+        ltr_keyed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        let head: Vec<(u64, f32)> = ltr_keyed.into_iter().take(20).collect();
+        let ltr_ranked: Vec<String> = head
+            .iter()
+            .filter_map(|(k, _)| url_by_key.get(k).cloned())
+            .collect();
+
+        // The SHIPPED MMR path over the same head. Text MUST mirror the
+        // planner's MMR input — "{title} {snippet}" — an earlier cut passed
+        // snippet-only and measured a similarity production never computes.
+        let texts: Vec<String> = head
+            .iter()
+            .map(|(k, _)| {
+                format!(
+                    "{} {}",
+                    title_by_key.get(k).map(String::as_str).unwrap_or(""),
+                    snip_by_key.get(k).map(String::as_str).unwrap_or("")
+                )
+            })
+            .collect();
+        let docs: Vec<meridian_rank::mmr::MmrDoc<'_>> = head
+            .iter()
+            .zip(texts.iter())
+            .map(|((_, score), t)| meridian_rank::mmr::MmrDoc {
+                score: *score,
+                text: t,
+            })
+            .collect();
+        let order = meridian_rank::mmr::mmr_order(&docs, meridian_rank::mmr::MMR_LAMBDA);
+        let mmr_ranked: Vec<String> = order
+            .iter()
+            .filter_map(|&i| url_by_key.get(&head[i].0).cloned())
+            .collect();
+
+        evaluated += 1;
+        a_ltr += alpha_ndcg_at(10, &ltr_ranked, judg);
+        a_mmr += alpha_ndcg_at(10, &mmr_ranked, judg);
+        n_ltr += ndcg_at(10, &ltr_ranked, &plain);
+        n_mmr += ndcg_at(10, &mmr_ranked, &plain);
+
+        // λ sweep (informational): the gate judges the SHIPPED constant; the
+        // sweep is the evidence for choosing it. λ is chosen on this (tuning)
+        // seed and judged frozen on a held-out generator seed — never the
+        // reverse (risk #21 protocol).
+        for (si, &lam) in LAMBDA_SWEEP.iter().enumerate() {
+            let o = meridian_rank::mmr::mmr_order(&docs, lam);
+            let ranked: Vec<String> = o
+                .iter()
+                .filter_map(|&i| url_by_key.get(&head[i].0).cloned())
+                .collect();
+            a_sweep[si] += alpha_ndcg_at(10, &ranked, judg);
+            n_sweep[si] += ndcg_at(10, &ranked, &plain);
+        }
+
+        // GATED regime: BM25-matching head, ordered by lexical score.
+        let mut b_head: Vec<(u64, f32)> =
+            bm25_full.iter().map(|h| (h.url_key, h.bm25)).collect();
+        b_head.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        b_head.truncate(20);
+        let b_texts: Vec<String> = b_head
+            .iter()
+            .map(|(k, _)| {
+                format!(
+                    "{} {}",
+                    title_by_key.get(k).map(String::as_str).unwrap_or(""),
+                    snip_by_key.get(k).map(String::as_str).unwrap_or("")
+                )
+            })
+            .collect();
+        let b_docs: Vec<meridian_rank::mmr::MmrDoc<'_>> = b_head
+            .iter()
+            .zip(b_texts.iter())
+            .map(|((_, score), t)| meridian_rank::mmr::MmrDoc {
+                score: *score,
+                text: t,
+            })
+            .collect();
+        let b_base: Vec<String> = b_head
+            .iter()
+            .filter_map(|(k, _)| url_by_key.get(k).cloned())
+            .collect();
+        let b_order = meridian_rank::mmr::mmr_order(&b_docs, meridian_rank::mmr::MMR_LAMBDA);
+        let b_mmr_ranked: Vec<String> = b_order
+            .iter()
+            .filter_map(|&i| url_by_key.get(&b_head[i].0).cloned())
+            .collect();
+        ab_base += alpha_ndcg_at(10, &b_base, judg);
+        ab_mmr += alpha_ndcg_at(10, &b_mmr_ranked, judg);
+        nb_base += ndcg_at(10, &b_base, &plain);
+        nb_mmr += ndcg_at(10, &b_mmr_ranked, &plain);
+        for (si, &lam) in LAMBDA_SWEEP.iter().enumerate() {
+            let o = meridian_rank::mmr::mmr_order(&b_docs, lam);
+            let ranked: Vec<String> = o
+                .iter()
+                .filter_map(|&i| url_by_key.get(&b_head[i].0).cloned())
+                .collect();
+            ab_sweep[si] += alpha_ndcg_at(10, &ranked, judg);
+            nb_sweep[si] += ndcg_at(10, &ranked, &plain);
+        }
+    }
+
+    let n = evaluated.max(1) as f64;
+    println!("\n== GATED regime: BM25-matching head (web-head proxy) ==");
+    println!("\n| ranking | alpha-nDCG@10 | nDCG@10 |");
+    println!("|---|---|---|");
+    println!("| BM25 | {:.4} | {:.4} |", ab_base / n, nb_base / n);
+    println!("| MMR | {:.4} | {:.4} |", ab_mmr / n, nb_mmr / n);
+    println!("\n| lambda (sweep) | alpha-nDCG@10 | nDCG@10 |");
+    println!("|---|---|---|");
+    for (si, &lam) in LAMBDA_SWEEP.iter().enumerate() {
+        println!(
+            "| {lam} | {:.4} | {:.4} |",
+            ab_sweep[si] / n,
+            nb_sweep[si] / n
+        );
+    }
+    println!("\n== DIAGNOSTIC regime: local hybrid+LTR head ==");
+    println!("\n| ranking | alpha-nDCG@10 | nDCG@10 |");
+    println!("|---|---|---|");
+    println!("| LTR | {:.4} | {:.4} |", a_ltr / n, n_ltr / n);
+    println!("| MMR | {:.4} | {:.4} |", a_mmr / n, n_mmr / n);
+    println!("\n| lambda (sweep) | alpha-nDCG@10 | nDCG@10 |");
+    println!("|---|---|---|");
+    for (si, &lam) in LAMBDA_SWEEP.iter().enumerate() {
+        println!(
+            "| {lam} | {:.4} | {:.4} |",
+            a_sweep[si] / n,
+            n_sweep[si] / n
+        );
+    }
+    let diversity_gain = ab_mmr >= ab_base;
+    let relevance_held = nb_mmr >= 0.99 * nb_base;
+    println!(
+        "\nGATE mmr improves alpha-ndcg@10 (bm25 head): {}",
+        if diversity_gain { "PASS" } else { "FAIL" }
+    );
+    println!(
+        "GATE mmr ndcg@10 loss <= 1% (bm25 head): {}",
+        if relevance_held { "PASS" } else { "FAIL" }
+    );
+    if diversity_gain && relevance_held {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE

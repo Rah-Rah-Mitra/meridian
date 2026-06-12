@@ -74,6 +74,7 @@ fn temp_planner(
         searx_anon,
         Arc::new(Reranker::unavailable()),
         None,
+        None,
         lanes,
         Arc::new(ShedState::default()),
         2,
@@ -96,7 +97,6 @@ fn request(lane: Lane, scope: Scope) -> SearchRequest {
         before: None,
         bypass_cache: false,
         pin_engines: false,
-        diversity_mmr: false,
     }
 }
 

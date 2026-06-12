@@ -159,9 +159,6 @@ struct SearchParams {
     /// the query is intentionally observable from two vantages.
     #[serde(default)]
     compare: Option<String>,
-    /// `mmr` reorders the final list for diversity (Phase 8). Off by default.
-    #[serde(default)]
-    diversity: Option<String>,
     #[serde(default)]
     limit: Option<usize>,
     // Geo constraint (SPEC §10): lat+lon+radius_km together, OR h3.
@@ -285,17 +282,6 @@ async fn search(
         before: params.before,
         bypass_cache: false,
         pin_engines: false,
-        diversity_mmr: match params.diversity.as_deref() {
-            None => false,
-            Some("mmr") => true,
-            Some(_) => {
-                return Err(Problem::new(
-                    StatusCode::BAD_REQUEST,
-                    "invalid diversity",
-                    "diversity=mmr",
-                ));
-            }
-        },
     };
     if compare {
         // Compare governs lanes itself and is web-scoped by definition; a
@@ -314,10 +300,23 @@ async fn search(
                 "omit the lane parameter",
             ));
         }
+        // The decorrelation jitter must FIT the synchronous request ceiling:
+        // ceiling − direct deadline − anon deadline − 1s slack. With defaults
+        // (12s − 2.5s − 8s − 1s) that leaves ~0.5s — weak decorrelation, which
+        // is the honest truth of a sync API (privacy.md: strong decorrelation
+        // wants the configured window AND a raised request ceiling; an async
+        // compare is a Phase-10 candidate). Found live: 30s jitter inside a
+        // 12s ceiling made default-config compares 504 most of the time.
+        let budget_ms = state.config.server.request_timeout_ms.saturating_sub(
+            state.config.search.searx_deadline_ms
+                + state.config.search.anon_searx_deadline_ms
+                + 1_000,
+        );
+        let effective_jitter = state.config.search.compare_jitter_ms_max.min(budget_ms);
         let response = meridian_query::compare::compare_vantages(
             &state.planner,
             request,
-            state.config.search.compare_jitter_ms_max,
+            effective_jitter,
             state.config.search.compare_noise_floor_p90,
         )
         .await

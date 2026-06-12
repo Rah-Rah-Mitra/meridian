@@ -153,6 +153,29 @@ fn build_components(config: MeridianConfig) -> Result<Components, String> {
     } else {
         None
     };
+    // Per-decision routing log (Phase 9, ADR-24): shares the bandit's redb
+    // file, OFF by default through v0.3.x. Startup runs the TTL/size sweep so
+    // a node that was down past a retention boundary catches up immediately.
+    let decision_log = match (&bandit, config.searx.decision_log) {
+        (Some(b), true) => {
+            let dl = Arc::new(
+                meridian_searx::decision_log::DecisionLog::new(b.database())
+                    .map_err(|e| e.to_string())?,
+            );
+            let today = (std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0)
+                / 86_400) as u32;
+            dl.sweep(today).map_err(|e| e.to_string())?;
+            tracing::info!(
+                "per-decision routing log ENABLED (ADR-24: coarse buckets only, 30d TTL, \
+                 k-anonymity floor, 20MB cap)"
+            );
+            Some(dl)
+        }
+        _ => None,
+    };
     // Analytics (SPEC §9.4): operator opt-in. When on, the store also feeds the
     // LTR domain_prior; when off, the prior is the cold default (0 everywhere).
     let analytics = if config.analytics.enabled {
@@ -188,6 +211,7 @@ fn build_components(config: MeridianConfig) -> Result<Components, String> {
         searx_anon,
         reranker,
         bandit,
+        decision_log,
         lanes.clone(),
         shed.clone(),
         config.lanes.anon.max_concurrent_searches,

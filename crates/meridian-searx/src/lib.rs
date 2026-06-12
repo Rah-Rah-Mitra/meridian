@@ -9,3 +9,4 @@
 
 pub mod bandit;
 pub mod client;
+pub mod decision_log;

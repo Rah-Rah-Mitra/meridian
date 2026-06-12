@@ -28,6 +28,18 @@ impl Intent {
             Intent::Keyword => "keyword",
         }
     }
+
+    /// Stable numeric index for the decision log (ADR-24). Append-only: new
+    /// classes take the next free value; existing values never change (logged
+    /// rows outlive code by up to 30 days).
+    pub fn index(self) -> u8 {
+        match self {
+            Intent::Question => 0,
+            Intent::Navigational => 1,
+            Intent::Geo => 2,
+            Intent::Keyword => 3,
+        }
+    }
 }
 
 const QUESTION_WORDS: &[&str] = &[

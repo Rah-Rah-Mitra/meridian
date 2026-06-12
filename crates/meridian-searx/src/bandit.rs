@@ -59,7 +59,7 @@ impl Stat {
 }
 
 pub struct Bandit {
-    db: Database,
+    db: std::sync::Arc<Database>,
     epsilon: f64,
     /// In-memory mirror of the redb arm stats; redb is the durable backing.
     stats: Mutex<HashMap<String, Stat>>,
@@ -68,8 +68,10 @@ pub struct Bandit {
 impl Bandit {
     pub fn open(data_dir: &std::path::Path, epsilon: f64) -> Result<Self, BanditError> {
         std::fs::create_dir_all(data_dir).map_err(|e| BanditError(e.to_string()))?;
-        let db = Database::create(data_dir.join("egress.redb"))
-            .map_err(|e| BanditError(e.to_string()))?;
+        let db = std::sync::Arc::new(
+            Database::create(data_dir.join("egress.redb"))
+                .map_err(|e| BanditError(e.to_string()))?,
+        );
         let mut stats = HashMap::new();
         {
             let wtx = db.begin_write().map_err(|e| BanditError(e.to_string()))?;
@@ -96,6 +98,45 @@ impl Bandit {
             epsilon: epsilon.clamp(0.0, 1.0),
             stats: Mutex::new(stats),
         })
+    }
+
+    /// Shared handle on `egress.redb` — the decision log (Phase 9, ADR-24)
+    /// lives in the same database (one file, one durability story).
+    pub fn database(&self) -> std::sync::Arc<Database> {
+        self.db.clone()
+    }
+
+    /// [`Bandit::choose`] plus the chosen arm's PROPENSITY under this ε-greedy
+    /// policy: (1−ε)+ε/K for the greedy arm, ε/K otherwise (Phase 9, ADR-24 —
+    /// logging today's propensities makes the incumbent the logging policy).
+    pub fn choose_with_propensity(&self, intent: &str, salt: u64) -> (&'static Arm, f32) {
+        let chosen = self.choose(intent, salt);
+        let greedy = {
+            let stats = self.stats.lock().expect("bandit stats");
+            ARMS.iter()
+                .max_by(|a, b| {
+                    let ma = stats
+                        .get(&Self::arm_key(intent, a.id))
+                        .copied()
+                        .unwrap_or_default()
+                        .mean();
+                    let mb = stats
+                        .get(&Self::arm_key(intent, b.id))
+                        .copied()
+                        .unwrap_or_default()
+                        .mean();
+                    ma.partial_cmp(&mb).unwrap()
+                })
+                .map(|a| a.id)
+                .unwrap_or(ARMS[0].id)
+        };
+        let k = ARMS.len() as f64;
+        let p = if chosen.id == greedy {
+            (1.0 - self.epsilon) + self.epsilon / k
+        } else {
+            self.epsilon / k
+        };
+        (chosen, p as f32)
     }
 
     fn arm_key(intent: &str, arm_id: &str) -> String {

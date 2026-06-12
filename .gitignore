@@ -28,3 +28,7 @@ deploy/compose.override.yaml
 # Generated eval index (meridian-eval build) — rebuild from corpus + seed;
 # queries.tsv/qrels.txt stay committed (tiny, seed-42 reproducible set)
 /eval/data
+# Suite-13b dup-heavy artifacts — fully regenerable: gen-dup --seed 42 (tuning)
+# / --seed 1337 (hold-out, eval/holdout), then build
+/eval/dup-*
+/eval/holdout

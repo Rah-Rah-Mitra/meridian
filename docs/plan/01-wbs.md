@@ -191,7 +191,7 @@ meaningless without a measured floor).
 | 8.4 | +3 egress invariants (≥16 total): (a) Arti-down ⇒ anon half errors, zero direct retry; (b) no shared-cache write from compare; (c) no `Bandit::reward` from the anon half | hermetic tests w/ MockDialer | 8.2 | 1.5d |
 | 8.5 | Timing decorrelation: randomized inter-lane jitter (configurable, default-on) + threat-model residual-risk write-up | `compare.rs`, `docs/plan/05-threat-model.md`, `docs/privacy.md` | 8.2 | 1d |
 | 8.6 | QPP confidence: NQC + Clarity post-LTR; `confidence` block | `meridian-rank/src/qpp.rs` (new), `planner.rs` | — | 2d |
-| 8.7 | MMR diversity rerank (`diversity=mmr`, off by default; existing embeddings) | `meridian-rank/src/mmr.rs` (new), `planner.rs` | — | 1.5d |
+| 8.7 | MMR diversity rerank (`diversity=mmr`, off by default; existing embeddings) — **built, suite-rejected (13b, both seeds), API surface withdrawn pre-release**; deviation: similarity was token-Jaccard (web results carry no vectors); carried forward: evidence-cluster diversity over ADR-18 clusters | `meridian-rank/src/mmr.rs` (library only), bench/2026-06-12-pi5-p8-gates.md | — | 1.5d |
 | 8.8 | Suites 12 (cross-lane mode) + 13 (`qpp`) wired into meridian-bench; alpha-nDCG@10 in `metrics.rs` | `meridian-eval/` | 8.3, 8.6 | 1.5d |
 | 8.9 | Docs: api.md (`compare`/`confidence`/`diversity`), privacy.md compare-mode disclosure (query goes out over Tor AND direct, by explicit request only) | `docs/api.md`, `docs/privacy.md` | 8.2–8.7 | 0.5d |
 | 8.10 | Exit re-validation + `phase-exits/p8.md` + v0.3.0 | docs | all | 1d |

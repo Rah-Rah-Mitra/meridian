@@ -1,0 +1,39 @@
+{
+  "version": "0.1.0",
+  "kernel": "6.18.33+rpt-rpi-2712",
+  "page_size": 16384,
+  "nproc": 4,
+  "compiled_suites": [
+    "fusion",
+    "synfarm",
+    "spike",
+    "evidence",
+    "ope"
+  ],
+  "profile_note": "DEBUG BUILD — numbers are meaningless; use the CI release-bench artifact",
+  "suites": [
+    {
+      "name": "ope",
+      "gate": "IPS and DR relative bias < 0.05 vs analytic truth",
+      "gate_passed": true,
+      "skipped": false,
+      "metrics": {
+        "decisions_per_replicate": 10000,
+        "dr_mean": 0.6296,
+        "dr_rel_bias": 0.0074,
+        "dr_replicate_sd": 0.024,
+        "ips_mean": 0.6375,
+        "ips_rel_bias": 0.0199,
+        "ips_replicate_sd": 0.0384,
+        "naive_log_mean": 0.3341,
+        "replicates": 20,
+        "truth_candidate_value": 0.625
+      },
+      "notes": [
+        "logger = shipped ε-greedy (ε=0.1) with exact emitted propensities; incumbent greedy arm wrong in 3/4 contexts, so the naive mean (0.334) sits far from the candidate's true value (0.625) — the estimators must do real correction",
+        "passing this gate is the ADR-25 precondition for trusting DR on the real decision log; the ship gate itself (DR uplift CI excludes zero) runs on ≥10k live decisions"
+      ],
+      "duration_ms": 438.383957
+    }
+  ]
+}

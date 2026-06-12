@@ -1,15 +1,21 @@
-//! MMR diversity rerank (Phase 8, WBS 8.7): `diversity=mmr`, OFF by default.
+//! MMR diversity rerank (Phase 8, WBS 8.7) — **suite-rejected, not wired**.
 //!
 //! Maximal Marginal Relevance over the final ranked list: each next slot picks
 //! the candidate maximizing λ·relevance − (1−λ)·max-similarity-to-selected.
-//! Similarity here is term-set Jaccard over title+snippet — a deliberate
-//! substitution for the embedding similarity the WBS sketched: web results
-//! carry no stored vectors (only ingested docs do), so token similarity is the
-//! one signal available uniformly across lanes, and the suite-gate target
-//! (alpha-nDCG improvement on duplicate-heavy sets, ≤1% nDCG cost) is about
-//! near-duplicate demotion, which token overlap captures directly. Recorded
-//! as a deviation in the WBS; embedding MMR remains open if the suite says
-//! token MMR underperforms.
+//! Similarity is term-set Jaccard over title+snippet (web results carry no
+//! stored vectors, so token overlap was the one signal available uniformly
+//! across lanes).
+//!
+//! **Suite 13b verdict (2026-06-12, seeds 42 + 1337, λ sweep 0.5–0.95):**
+//! alpha-nDCG@10 improves at λ≤0.7 but plain nDCG@10 loses 7–11% — and no λ
+//! satisfies both gates. The mechanism: Jaccard is symmetric, so once one
+//! member of a duplicate cluster is selected, the CANONICAL original is
+//! penalized exactly like its syndicated copies — and since copies are
+//! shorter (higher BM25), the original is what gets pushed out. The
+//! `diversity=mmr` API surface was withdrawn before v0.3.0 shipped it; this
+//! module stays as the measured baseline. Carried forward: cluster-aware
+//! diversity over the Phase-7 evidence clusters (ADR-18), which knows each
+//! cluster's canonical representative instead of guessing from token overlap.
 //!
 //! O(k²) over the RESPONSE list (≤50) — microseconds; no allocation beyond
 //! the term sets.
