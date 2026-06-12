@@ -2,13 +2,13 @@
 # linux/arm64 FROM-scratch image to GHCR (the appliance target), SBOM via
 # syft, binary + SBOMs attached to the GitHub release.
 #
-# amd64 SUSPENDED at v0.2.0 (P7 exit): the numkong SIMD backend is REQUIRED
-# for dense recall (ADR-07 — the portable fallback is a recall defect), and
-# numkong's x86 capabilities.h forward-declares `syscall(...) noexcept`
-# assuming glibc, which hard-conflicts with zig-musl's unistd.h. amd64 returns
-# via a gnu/distroless image or an upstream __GLIBC__ guard — carried forward
-# in phase-exits/p7.md. Shipping amd64 on the portable backend would ship the
-# known recall defect; not an option.
+# amd64: SUSPENDED at v0.2.0 (P7 exit — numkong's x86 capabilities.h assumes
+# glibc and hard-conflicts with zig-musl), RESTORED at Phase 10 exactly the
+# way the suspension note prescribed: a NATIVE gnu binary (full numkong SIMD
+# dispatch — never the portable fallback, which is a recall defect per
+# ADR-07) on a distroless cc base (deploy/Dockerfile.amd64), stitched with
+# the arm64 scratch image into one multi-arch manifest. Parity (risk #27):
+# the x86_64 test job + the amd64 boot smoke run on every PR.
 
 name: release
 
@@ -71,12 +71,34 @@ jobs:
           NK_TARGET_SMEBI32: "0"
           NK_TARGET_SMELUT2: "0"
           NK_TARGET_SMEFA64: "0"
+      - name: build amd64 (native gnu — the P10 restoration)
+        run: cargo build --release -p meridiand
+      - name: amd64 boot smoke (parity before publish)
+        run: |
+          mkdir -p /tmp/amd64-models
+          bash deploy/fetch-models.sh /tmp/amd64-models
+          bash deploy/fetch-gazetteer.sh /tmp/amd64-models
+          MERIDIAN_INDEX__DATA_DIR=/tmp/amd64-smoke-data \
+          MERIDIAN_MODELS__DIR=/tmp/amd64-models \
+          MERIDIAN_SERVER__PORT=18099 \
+          ./target/release/meridiand &
+          PID=$!
+          ok=""
+          for i in $(seq 1 60); do
+            if curl -sf localhost:18099/healthz > /dev/null; then ok=1; break; fi
+            sleep 1
+          done
+          kill "$PID"
+          test -n "$ok"
       - name: stage image contents
         run: |
           mkdir -p deploy/stage/linux/arm64
           cp target/aarch64-unknown-linux-musl/release/meridiand deploy/stage/linux/arm64/
           bash deploy/fetch-models.sh deploy/stage/models
           bash deploy/fetch-gazetteer.sh deploy/stage/models
+          mkdir -p deploy/stage-amd64
+          cp target/release/meridiand deploy/stage-amd64/
+          cp -r deploy/stage/models deploy/stage-amd64/models
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -84,11 +106,21 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: build + push image (arm64)
+      - name: build + push images (arm64 scratch + amd64 distroless) + manifest
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           docker buildx build --platform linux/arm64 -f deploy/Dockerfile \
-            -t "$IMAGE:$VERSION" -t "$IMAGE:latest" --push deploy
+            -t "$IMAGE:$VERSION-arm64" --push deploy
+          docker buildx build --platform linux/amd64 -f deploy/Dockerfile.amd64 \
+            -t "$IMAGE:$VERSION-amd64" --push deploy
+          docker buildx imagetools create -t "$IMAGE:$VERSION" -t "$IMAGE:latest" \
+            "$IMAGE:$VERSION-arm64" "$IMAGE:$VERSION-amd64"
+      - name: amd64 image size tripwire (budget ≤120MB compressed)
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          BYTES=$(docker manifest inspect "$IMAGE:$VERSION-amd64" | jq '[.layers[].size] | add')
+          echo "amd64 compressed layers: $BYTES bytes"
+          test "$BYTES" -le 125829120
       # Direct syft (pinned): sbom-action cannot select a platform, and the
       # image is arm64-only since v0.2.0 — syft on the amd64 runner otherwise
       # asks the manifest for linux/amd64 and fails (release attempt 4).
@@ -99,6 +131,8 @@ jobs:
             | sh -s -- -b /usr/local/bin v1.42.3
           syft scan "registry:$IMAGE:latest" --platform linux/arm64 \
             -o spdx-json=sbom-image.spdx.json
+          syft scan "registry:$IMAGE:latest" --platform linux/amd64 \
+            -o spdx-json=sbom-image-amd64.spdx.json
         env:
           SYFT_REGISTRY_AUTH_USERNAME: ${{ github.actor }}
           SYFT_REGISTRY_AUTH_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
@@ -113,6 +147,7 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           cp "target/aarch64-unknown-linux-musl/release/meridiand" "meridiand-${VERSION}-aarch64-linux-musl"
+          cp "target/release/meridiand" "meridiand-${VERSION}-x86_64-linux-gnu"
           sha256sum meridiand-* sbom-*.json > SHA256SUMS
       - name: create GitHub release
         env:
@@ -121,4 +156,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             --title "Meridian $GITHUB_REF_NAME" \
             --notes-file docs/release-notes/$GITHUB_REF_NAME.md \
-            meridiand-* sbom-image.spdx.json sbom-source.spdx.json SHA256SUMS
+            meridiand-* sbom-image.spdx.json sbom-image-amd64.spdx.json sbom-source.spdx.json SHA256SUMS
