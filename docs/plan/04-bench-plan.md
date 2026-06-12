@@ -86,6 +86,14 @@ subset (for alpha-nDCG@10) and a curated region-sensitive subset (for suite 12b)
 a small BEIR subset is added for ranking sanity (task choice = operator Q9).
 New metrics in `meridian-eval::metrics`: alpha-nDCG@10, ECE.
 
+**Suite 13b result (2026-06-12, seeds 42 + 1337):** the duplicate-heavy MMR
+gate **FAILED** on both seeds at every λ in a 0.5–0.95 sweep (alpha-nDCG gain
+only at 7–11% plain-nDCG cost; symmetric token similarity demotes canonical
+originals with their copies). `diversity=mmr` withdrawn pre-release; see
+bench/2026-06-12-pi5-p8-gates.md. **Suite 14 result (2026-06-12): PASS** —
+IPS rel. bias 2.0%, DR 0.74% (gate <5%), DR tighter (sd 0.024 vs 0.038);
+bench/2026-06-12-pi5-p9-ope.json.
+
 **Standing gates at every post-v0.1.0 phase exit:** suites 1–8 re-run (no
 regression vs the Phase-6 baseline: BM25 0.48ms p50, ANN 0.45ms, fusion 0.144ms,
 heatmap 27ms, RSS ~250MB plateau); forget-correctness 100% (incl. ADR-19

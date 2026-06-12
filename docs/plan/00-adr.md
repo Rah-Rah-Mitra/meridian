@@ -601,7 +601,12 @@ logging policy for free, so candidate policies can be evaluated offline
 #23: OPE may stay inconclusive forever) vs the privacy surface (risk #20). The
 sunset rule lives in ADR-25.
 
-**Status: CONFIRMED (operator), implementation Phase 9.**
+**Status: CONFIRMED (operator). Implemented 2026-06-12 (v0.3.0): substrate
+shipped default-OFF (`searx.decision_log`) — 13-byte rows in egress.redb,
+k-floor/TTL/cap/wipe in `meridian-searx/src/decision_log.rs`, logging at the
+bandit-reward site (anon unreachable by construction), propensities captured
+at choice time. privacy.md + operator-manual amended in the same train. The
+flag-flip decision is the v0.4.0 exit (ADR-25).**
 
 ## ADR-25 — Contextual routing policy & ship gate (Phase 9)
 
@@ -623,7 +628,10 @@ constraints).
 simplicity; the honest possible outcome is "never ships," and the plan budgets
 for that.
 
-**Status: CONFIRMED (gate), implementation Phase 9.**
+**Status: CONFIRMED (gate), implementation Phase 9. Estimator precondition
+met 2026-06-12: suite 14 PASS — IPS rel. bias 2.0%, DR 0.74% (<5% gate)
+against synthetic truth under the shipped ε-greedy logging policy, DR tighter
+than IPS (bench/2026-06-12-pi5-p9-ope.json).**
 
 ## ADR-26 — Value-of-information fetch & stopping (Phase 9)
 

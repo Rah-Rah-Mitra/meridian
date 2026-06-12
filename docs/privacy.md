@@ -61,12 +61,47 @@ What Meridian does about it — and what it cannot do:
 
 - Compare mode is **never a default and never auto-triggered**; it runs only
   when the request says `compare=vantages`.
-- A **randomized delay** (default up to 30s, `search.compare_jitter_ms_max`)
-  separates the two dispatches. This narrows trivial timing correlation; it
-  cannot defeat an adversary observing both vantages (threat model §8).
+- A **randomized delay** (`search.compare_jitter_ms_max`, default 30s window)
+  separates the two dispatches — clamped to what fits the synchronous request
+  ceiling (`server.request_timeout_ms` minus the lane deadlines), which under
+  DEFAULT config leaves well under a second. Said plainly: **meaningful timing
+  decorrelation requires raising the request ceiling** (or waiting for the
+  async compare, a Phase-10 candidate). The jitter narrows trivial timing
+  correlation; it cannot defeat an adversary observing both vantages
+  (threat model §8).
 - Neither half is cached, no per-query cross-lane record is persisted, and the
   anon half touches no shared routing state — the comparison exists only in
   the response you receive.
+
+## Decision log (v0.3.0, **off by default**, ADR-24)
+
+`searx.decision_log = true` enables a per-decision routing log that exists for
+one purpose: evaluating a better engine-routing policy offline before any
+live traffic shifts (ADR-25). It is **disabled in every shipped config**
+through v0.3.x; enabling it is an explicit operator action.
+
+What one row is — 13 fixed bytes, nothing else:
+
+- coarse context buckets: intent class (4 values), query-length bucket (4),
+  language id, time-of-day bucket (3-hour), and whether a geo FILTER was
+  present (the requested geography, never the user's location);
+- the chosen engine arm, the ε-greedy propensity it was chosen with, and a
+  1-bit reward (did web results reach the top-10).
+
+**No query text, no URLs, no IPs, no timestamps finer than day + 3-hour
+bucket.** The row width is pinned by a test so nothing string-shaped can
+quietly grow into it. Safeguards, all enforced in code:
+
+- **k-anonymity floor:** until a context combination has been seen 5 times
+  that day, its rows are written with the context fields blanked — rare,
+  potentially identifying combinations never land readable.
+- **30-day TTL** swept continuously and at startup; **20 MB hard cap** (oldest
+  days dropped first); a `wipe()` erasure path (operator API surface lands
+  with the v0.4.0 OPE tooling — until then, disabling the flag stops new rows
+  and the TTL erases the rest within 30 days).
+- **Anon-lane decisions are never logged.** The log call sits on the same
+  code path that rewards the bandit, which the anon lane cannot reach
+  (SPEC §12.4 firewall) — enforced by the hermetic lane-invariant suite.
 
 ## Retention table
 
@@ -80,6 +115,7 @@ What Meridian does about it — and what it cannot do:
 | Fetch cache | Extracted pages | RAM only | 96 MB, 24 h |
 | robots.txt cache | Robots bodies per domain | RAM only | 24 h (`fetch.robots_ttl_secs`) |
 | Analytics counters | (day, H3 res-5 cell, GDELT root code) → count; domain co-occurrence edges | `/data/analytics.redb` | 90 days (`analytics.retention_days`), compacted daily; edges capped at `analytics.max_edges` |
+| Decision log (`searx.decision_log`, off by default) | 13-byte coarse routing rows: intent/length/language/time-of-day buckets + arm/propensity/reward — no text, no URLs, no IPs | `/data` (egress.redb) | 30 days, ≤20 MB cap, k-anonymity floor, wipe path |
 | Arti state | Tor directory documents, guard state | `/data/arti` | Managed by Arti; contains no user/query data |
 | Container logs | Route/status/latency events only | json-file | 10 MB × 3 files per container |
 

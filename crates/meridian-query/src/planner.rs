@@ -57,9 +57,6 @@ pub struct SearchRequest {
     /// which would drown any real vantage signal; pinning makes the two
     /// halves differ by vantage only.
     pub pin_engines: bool,
-    /// MMR diversity rerank of the final list (Phase 8, `diversity=mmr`).
-    /// Off by default — relevance order is the contract unless asked.
-    pub diversity_mmr: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -173,6 +170,10 @@ pub struct Planner {
     scorer: Arc<dyn Scorer>,
     reranker: Arc<Reranker>,
     bandit: Option<Arc<meridian_searx::bandit::Bandit>>,
+    /// Per-decision routing log (Phase 9, ADR-24). `None` = off (the v0.3.x
+    /// default). Written only where the bandit is rewarded — the anon branch
+    /// reaches neither (SPEC §12.4).
+    decision_log: Option<Arc<meridian_searx::decision_log::DecisionLog>>,
     cache: moka::sync::Cache<[u8; 32], Arc<CachedSearch>>,
     /// Ephemeral anon cache (SPEC §8.4): in-memory only, never persisted, never
     /// shared with the direct cache (lane isolation, §12.4).
@@ -198,6 +199,7 @@ impl Planner {
         searx_anon: Option<Arc<SearxClient>>,
         reranker: Arc<Reranker>,
         bandit: Option<Arc<meridian_searx::bandit::Bandit>>,
+        decision_log: Option<Arc<meridian_searx::decision_log::DecisionLog>>,
         lanes: Arc<LaneRegistry>,
         shed: Arc<ShedState>,
         anon_max_searches: usize,
@@ -228,6 +230,7 @@ impl Planner {
             scorer: Arc::new(LinearLtr::default()),
             reranker,
             bandit,
+            decision_log,
             cache,
             anon_cache,
             anon_permits: Arc::new(tokio::sync::Semaphore::new(anon_max_searches.max(1))),
@@ -554,6 +557,7 @@ impl Planner {
         // defaults) nor writes rewards (`chosen_arm` stays None).
         let is_direct = matches!(req.lane, Lane::Direct);
         let mut chosen_arm: Option<&'static str> = None;
+        let mut chosen_propensity: f32 = 0.0;
         let searx_handle = match (backend, lane_client) {
             (Some(searx), Some(client)) if wants_web && metasearch_ok => {
                 // Per-request exploration salt without a global RNG.
@@ -562,8 +566,11 @@ impl Planner {
                     ^ (req.q.len() as u64).wrapping_mul(0x9E37);
                 let engines: Vec<String> = match (&self.bandit, is_direct && !req.pin_engines) {
                     (Some(b), true) => {
-                        let arm = b.choose(query_intent.key(), salt);
+                        // Propensity is captured at choice time (ADR-24): the
+                        // incumbent ε-greedy is the logging policy for free.
+                        let (arm, propensity) = b.choose_with_propensity(query_intent.key(), salt);
                         chosen_arm = Some(arm.id);
+                        chosen_propensity = propensity;
                         arm.engines.iter().map(|e| e.to_string()).collect()
                     }
                     _ => Vec::new(),
@@ -885,28 +892,12 @@ impl Planner {
             }
         }
 
-        // MMR diversity rerank (Phase 8): opt-in, on the final list, after the
-        // deep rerank so it diversifies whatever order the caller paid for.
-        if req.diversity_mmr && results.len() > 2 {
-            let texts: Vec<String> = results
-                .iter()
-                .map(|r| format!("{} {}", r.title, r.snippet))
-                .collect();
-            let docs: Vec<meridian_rank::mmr::MmrDoc<'_>> = results
-                .iter()
-                .zip(texts.iter())
-                .map(|(r, t)| meridian_rank::mmr::MmrDoc {
-                    score: r.score,
-                    text: t,
-                })
-                .collect();
-            let order = meridian_rank::mmr::mmr_order(&docs, meridian_rank::mmr::MMR_LAMBDA);
-            let mut reordered = Vec::with_capacity(results.len());
-            for idx in order {
-                reordered.push(results[idx].clone());
-            }
-            results = reordered;
-        }
+        // No MMR diversity stage: token-Jaccard MMR FAILED suite 13b on both
+        // generator seeds (alpha-nDCG gain only at >1% nDCG cost — symmetric
+        // similarity demotes canonical originals along with their copies),
+        // so the `diversity=mmr` surface was withdrawn before v0.3.0 shipped
+        // it. Evidence-cluster-aware diversity (ADR-18 sketch clusters) is
+        // the carried-forward replacement; see meridian-rank/src/mmr.rs.
 
         // QPP confidence (Phase 8, ADR-23): raw NQC + clarity-lite predictors
         // over the response head vs the candidate pool. ≤1ms budget; absent
@@ -948,6 +939,40 @@ impl Planner {
                 .take(10)
                 .any(|r| matches!(r.source, "web" | "both"));
             let _ = bandit.reward(query_intent.key(), arm_id, appeared);
+
+            // Decision log (Phase 9, ADR-24): same site, so it inherits the
+            // same anon firewall — `chosen_arm` is only ever set on the
+            // direct branch. The row is 13 bytes of coarse buckets: no query
+            // text, no URLs, no timestamp finer than the 3h bucket. redb
+            // commits fsync, so the write rides spawn_blocking off the
+            // request path.
+            if let Some(dl) = &self.decision_log {
+                let arm = meridian_searx::bandit::ARMS
+                    .iter()
+                    .position(|a| a.id == arm_id)
+                    .unwrap_or(0) as u8;
+                let now_unix = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let ctx = meridian_searx::decision_log::Context {
+                    intent: query_intent.index(),
+                    len_bucket: match req.q.chars().count() {
+                        0..=20 => 0,
+                        21..=40 => 1,
+                        41..=80 => 2,
+                        _ => 3,
+                    },
+                    lang: whichlang::detect_language(&req.q) as u8,
+                    tod_bucket: ((now_unix % 86_400) / 10_800) as u8,
+                    geo_filter: req.geo.is_some(),
+                };
+                let dl = dl.clone();
+                let propensity = chosen_propensity;
+                tokio::task::spawn_blocking(move || {
+                    let _ = dl.log(now_unix, ctx, arm, propensity, appeared);
+                });
+            }
         }
 
         if !self

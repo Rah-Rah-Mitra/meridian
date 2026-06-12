@@ -133,7 +133,7 @@ New analytical stages are budgeted against the **measured Phase-6 baseline**
 | Item | Profile F | Profile R | Tripwire |
 |---|---|---|---|
 | Sketch store (`sketch_v1` in dedup.redb) | ≤128MB @1M gross | ≤12.8MB @100k gross — **measured 12.3MB ✓** (123 B/doc gross; payload is 64 B by construction, redb B-tree overhead ≈ +59 B/row — ceiling re-issued at the P7 exit, not silently absorbed) | alert at 80% of cap |
-| Decision log (Phase 9) | ≤20MB | ≤20MB | TTL sweep keeps it bounded; hard cap refuses writes + alert metric |
+| Decision log (Phase 9) | ≤20MB | ≤20MB | 30d TTL sweep + cap enforcement by oldest-day eviction (never today's rows) — as built in v0.3.0, amended from the planned "refuse writes": evicting stale rows preserves the OPE-freshest data, refusing writes would silently bias the log toward old traffic |
 | Evidence stage (query-time, fast path) | ≤2ms p50 added | ≤2ms p50 added | suite 11 gate; p95 watched in /metrics stage timings |
 | Evidence transient RAM (clustering top-1000 candidates) | ≤32MB | ≤32MB | included in the soak RSS gate — plateau must not move |
 | Heatmap/trends + EB+Gi*+BH | ≤150ms p50 | ≤60ms p50 | re-measured at P7 exit (Phase-6 baseline 27ms) |

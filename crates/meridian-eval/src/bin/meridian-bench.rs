@@ -59,6 +59,10 @@ const SUITES: &[(&str, &str)] = &[
         "evidence",
         "suite 11: sketch-lookup + containment clustering latency — gate ≤2ms p50 @ limit 50",
     ),
+    (
+        "ope",
+        "suite 14: IPS/DR offline-policy-evaluation vs synthetic truth — gate bias <5%",
+    ),
 ];
 
 fn main() -> ExitCode {
@@ -142,6 +146,10 @@ fn main() -> ExitCode {
 
     if wants("evidence") {
         run_and_print(&mut report, meridian_eval::bench::evidence::run(&cfg));
+    }
+
+    if wants("ope") {
+        run_and_print(&mut report, meridian_eval::bench::ope::run(&cfg));
     }
 
     if wants("embed") {

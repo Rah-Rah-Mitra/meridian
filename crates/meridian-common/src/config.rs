@@ -295,6 +295,11 @@ pub struct SearxConfig {
     /// anon searches fail closed with "no metasearch backend" even when the
     /// anon lane itself is up.
     pub anon_url: Option<String>,
+    /// Per-decision routing log (Phase 9, ADR-24): 13-byte coarse-bucket rows
+    /// feeding offline policy evaluation. OFF by default through v0.3.x —
+    /// flipping it on is the v0.4.0 exit decision (ADR-25). Anon-lane
+    /// decisions are never logged regardless of this flag.
+    pub decision_log: bool,
 }
 
 impl Default for SearxConfig {
@@ -303,6 +308,7 @@ impl Default for SearxConfig {
             enabled: true,
             url: "http://searxng:8080".to_owned(),
             anon_url: None,
+            decision_log: false,
         }
     }
 }

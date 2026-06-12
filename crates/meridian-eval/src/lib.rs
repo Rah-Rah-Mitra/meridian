@@ -7,6 +7,7 @@
 
 pub mod bench;
 pub mod metrics;
+pub mod ope;
 pub mod probe;
 pub mod qrels;
 pub mod stats;

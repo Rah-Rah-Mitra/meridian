@@ -40,7 +40,13 @@ configured, gated endpoints answer `503 auth not configured`.
 | `h3` | string | — | Alternative to lat/lon: one H3 cell (hex like `871f1d489ffffff`, or decimal). Mutually exclusive with `lat`/`lon`. |
 | `after`, `before` | int | — | Unix-seconds document-timestamp window (inclusive). |
 | `compare` | `vantages` | — | v0.2.0: run the query over direct AND anon and attach the `divergence` block. Requires `scope=web`; the `lane` param must be omitted (compare governs lanes). See the privacy note below. |
-| `diversity` | `mmr` | — | v0.3.0: rerank the final list by Maximal Marginal Relevance (λ=0.7, term-overlap similarity) — near-duplicates are demoted below diverse results. Off by default; relevance order is the contract unless asked. |
+
+A `diversity=mmr` parameter was built for v0.3.0 and **withdrawn before
+release**: its own gate (suite 13b, two generator seeds) showed token-overlap
+MMR demotes canonical originals along with their near-duplicate copies —
+alpha-nDCG gains came only at >1% plain-nDCG cost at every λ tried. An
+evidence-cluster-aware diversifier (reusing the Phase-7 sketch clusters) is
+the planned replacement.
 
 Geo/time filters apply to **local results only** — the SearXNG fan-out cannot
 be geo-filtered (recorded tradeoff, ADR-10). Under a geo/time filter the local

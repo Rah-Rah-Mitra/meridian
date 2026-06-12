@@ -92,6 +92,7 @@ transits the config layer.
 | `search.max_per_domain` | 3 | Domain diversity cap. |
 | `searx.url` | `http://searxng:8080` | Direct sidecar (back network). |
 | `searx.anon_url` | — | Tor-proxied sidecar; unset = anon search fails closed. |
+| `searx.decision_log` | `false` | Per-decision routing log for offline policy evaluation (ADR-24): 13-byte coarse-bucket rows, 30d TTL, 20 MB cap, k-anonymity floor; anon lane never logged. Leave off unless running the v0.4.0 OPE workflow — see `docs/privacy.md`. |
 | `fetch.max_body_bytes` | 5 MB | Streamed cap. |
 | `fetch.max_redirects` | 3 | |
 | `fetch.per_domain_interval_ms` / `_burst` | 2000 / 2 | Politeness budget, global across lanes. |

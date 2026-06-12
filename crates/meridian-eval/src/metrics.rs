@@ -180,3 +180,103 @@ mod qpp_metric_tests {
         assert!(e > 0.15 && e <= 0.21, "uniform +0.2 offset ≈ 0.2 ECE: {e}");
     }
 }
+
+/// alpha-nDCG@k (Clarke et al., SIGIR 2008) over subtopic judgments:
+/// `judgments[doc] = (grade, subtopic)`. The gain of a doc covering subtopic a
+/// at rank i is grade·(1−α)^(prior hits on a) — redundant coverage decays.
+/// α = 0.5 (conventional). The ideal ranking is computed GREEDILY (the exact
+/// ideal gain vector is NP-complete; greedy is the standard approximation and
+/// is exact for the small per-query sets used here — recorded in
+/// 04-bench-plan §6).
+pub fn alpha_ndcg_at(
+    k: usize,
+    ranked: &[String],
+    judgments: &std::collections::HashMap<String, (u32, u32)>,
+) -> f64 {
+    const ALPHA: f64 = 0.5;
+    fn dcg(gains: &[f64]) -> f64 {
+        gains
+            .iter()
+            .enumerate()
+            .map(|(i, g)| g / ((i + 2) as f64).log2())
+            .sum()
+    }
+    let mut seen: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+    let gains: Vec<f64> = ranked
+        .iter()
+        .take(k)
+        .map(|doc| match judgments.get(doc) {
+            Some(&(grade, sub)) if grade > 0 => {
+                let prior = seen.entry(sub).or_insert(0);
+                let gain = f64::from(grade) * (1.0 - ALPHA).powi(*prior as i32);
+                *prior += 1;
+                gain
+            }
+            _ => 0.0,
+        })
+        .collect();
+
+    // Greedy ideal: repeatedly take the doc with the highest marginal gain.
+    let mut pool: Vec<(u32, u32)> = judgments
+        .values()
+        .copied()
+        .filter(|(g, _)| *g > 0)
+        .collect();
+    let mut ideal_seen: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+    let mut ideal_gains: Vec<f64> = Vec::new();
+    for _ in 0..k.min(pool.len()) {
+        let (best_idx, best_gain) = pool
+            .iter()
+            .enumerate()
+            .map(|(i, &(g, sub))| {
+                let prior = ideal_seen.get(&sub).copied().unwrap_or(0);
+                (i, f64::from(g) * (1.0 - ALPHA).powi(prior as i32))
+            })
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+            .unwrap();
+        let (_, sub) = pool.swap_remove(best_idx);
+        *ideal_seen.entry(sub).or_insert(0) += 1;
+        ideal_gains.push(best_gain);
+    }
+    let ideal = dcg(&ideal_gains);
+    if ideal <= 0.0 {
+        return 0.0;
+    }
+    (dcg(&gains) / ideal).clamp(0.0, 1.0)
+}
+
+#[cfg(test)]
+mod alpha_ndcg_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn sj(items: &[(&str, u32, u32)]) -> HashMap<String, (u32, u32)> {
+        items
+            .iter()
+            .map(|(d, g, s)| (d.to_string(), (*g, *s)))
+            .collect()
+    }
+
+    #[test]
+    fn diverse_beats_redundant() {
+        // Three subtopics, one doc each + a duplicate of subtopic 0.
+        let j = sj(&[("a", 3, 0), ("a2", 3, 0), ("b", 3, 1), ("c", 3, 2)]);
+        let diverse = vec!["a".into(), "b".into(), "c".into(), "a2".into()];
+        let redundant = vec!["a".into(), "a2".into(), "b".into(), "c".into()];
+        let d = alpha_ndcg_at(4, &diverse, &j);
+        let r = alpha_ndcg_at(4, &redundant, &j);
+        assert!(d > r, "diverse {d} must beat redundant {r}");
+        assert!(
+            (d - 1.0).abs() < 1e-9,
+            "diverse-first IS the greedy ideal: {d}"
+        );
+    }
+
+    #[test]
+    fn irrelevant_and_empty() {
+        let j = sj(&[("a", 3, 0)]);
+        assert_eq!(alpha_ndcg_at(10, &["x".into(), "y".into()], &j), 0.0);
+        let empty: HashMap<String, (u32, u32)> = HashMap::new();
+        assert_eq!(alpha_ndcg_at(10, &["x".into()], &empty), 0.0);
+    }
+}
