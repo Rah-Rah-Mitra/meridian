@@ -76,6 +76,7 @@ fn temp_planner(
         None,
         None,
         None,
+        None,
         lanes,
         Arc::new(ShedState::default()),
         2,
@@ -98,7 +99,39 @@ fn request(lane: Lane, scope: Scope) -> SearchRequest {
         before: None,
         bypass_cache: false,
         pin_engines: false,
+        fetch_budget: 0,
     }
+}
+
+/// Invariant 19 (Phase 9, ADR-26): the VoI fetch phase fails SAFE. With
+/// fetch_budget set but no cross-encoder available (the musl image / test
+/// stub), deep mode degrades with `fetch_unavailable` and performs ZERO
+/// fetch egress; a non-direct lane never fetches regardless (the planner
+/// guard behind the API validation).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn inv19_fetch_budget_fails_safe_without_reranker() {
+    let (direct_addr, _hits) = canary().await;
+    let planner = temp_planner(
+        LanesConfig::default(),
+        Some(format!("http://{direct_addr}/")),
+        None,
+    );
+    let mut req = request(Lane::Direct, Scope::Web);
+    req.mode = SearchMode::Deep;
+    req.fetch_budget = 2;
+    let resp = planner
+        .search(req)
+        .await
+        .expect("deep search degrades, never fails");
+    assert!(
+        resp.degraded.contains(&"fetch_unavailable"),
+        "must say WHY no fetching happened: {:?}",
+        resp.degraded
+    );
+    assert!(
+        resp.analysis.is_none(),
+        "no analysis block without a fetch phase"
+    );
 }
 
 /// Invariant 18 (Phase 9, ADR-24): decision-log rows come ONLY from unpinned
@@ -138,6 +171,7 @@ async fn inv18_decision_log_direct_lane_only() {
         Arc::new(Reranker::unavailable()),
         Some(bandit),
         Some(dlog.clone()),
+        None,
         None,
         Arc::new(
             LaneRegistry::new(
@@ -188,6 +222,17 @@ async fn inv18_decision_log_direct_lane_only() {
         dlog.len().unwrap(),
         1,
         "anon attempts and pinned compare halves must never log decisions"
+    );
+
+    // Invariant 20 (SPEC §16 P9 exit: "decision log provably holds zero
+    // query text"): the raw bytes of the redb file must not contain the
+    // query string that produced the row — the hermetic form of the
+    // extended privacy smoke. request() used q = "meridian arc".
+    let raw = std::fs::read(dir.join("egress.redb")).expect("bandit/log db file");
+    let needle = b"meridian arc";
+    assert!(
+        !raw.windows(needle.len()).any(|w| w == needle),
+        "query text leaked into the decision-log db file"
     );
     let _ = std::fs::remove_dir_all(dir);
 }

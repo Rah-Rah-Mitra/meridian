@@ -73,6 +73,26 @@ What Meridian does about it — and what it cannot do:
   anon half touches no shared routing state — the comparison exists only in
   the response you receive.
 
+## Deep-mode fetching (v0.4.0, **off unless asked per request**, ADR-26)
+
+`mode=deep&fetch_budget=N` lets ONE request fetch up to N result pages
+(capped by `search.deep_fetch_max`, default 2) so they can be re-scored on
+their full text instead of their search snippets. Said plainly: **the node
+makes HTTP requests to the result domains it selects, attributable to your
+direct IP, triggered by your query.** What bounds it:
+
+- Never a default, never auto-triggered, never on the anon or region lanes
+  (requests asking for it there are refused with `400`), and never combined
+  with `compare=vantages`.
+- Every fetch goes through the standard ladder: SSRF vet, per-domain budget,
+  robots.txt, size caps. The selection itself optimizes information per
+  fetch (ADR-26), so typically fewer pages are fetched than the budget
+  allows — the `analysis` block on the response says how many and why it
+  stopped.
+- Fetched text is used in RAM for scoring only. **A search never ingests or
+  persists what it fetched**; the only retention is the fetch ladder's own
+  24-hour extract cache (same as `/v1/fetch`, RAM only, see the table).
+
 ## Decision log (v0.3.0, **off by default**, ADR-24)
 
 `searx.decision_log = true` enables a per-decision routing log that exists for

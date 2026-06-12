@@ -162,6 +162,12 @@ struct SearchParams {
     /// the query is intentionally observable from two vantages.
     #[serde(default)]
     compare: Option<String>,
+    /// VoI deep-mode fetching (v0.4.0, ADR-26): fetch up to N result pages
+    /// to re-score on full text. Requires mode=deep on the direct lane;
+    /// capped by `search.deep_fetch_max`. Per-query egress to result
+    /// domains — see privacy.md.
+    #[serde(default)]
+    fetch_budget: Option<usize>,
     #[serde(default)]
     limit: Option<usize>,
     // Geo constraint (SPEC §10): lat+lon+radius_km together, OR h3.
@@ -274,17 +280,46 @@ async fn search(
             ));
         }
     };
+    let lane = parse_lane(params.lane.as_deref())?;
+    let fetch_budget = match params.fetch_budget {
+        None | Some(0) => 0,
+        Some(n) => {
+            if !matches!(mode, SearchMode::Deep) {
+                return Err(Problem::new(
+                    StatusCode::BAD_REQUEST,
+                    "fetch_budget requires deep mode",
+                    "mode=deep",
+                ));
+            }
+            if !matches!(lane, Lane::Direct) {
+                return Err(Problem::new(
+                    StatusCode::BAD_REQUEST,
+                    "fetch_budget is direct-lane only",
+                    "query-time fetching over anon/region lanes does not fit their                      latency/privacy envelope (ADR-26; see privacy.md)",
+                ));
+            }
+            if compare {
+                return Err(Problem::new(
+                    StatusCode::BAD_REQUEST,
+                    "fetch_budget cannot combine with compare",
+                    "a compare must not fetch — its anon half would inherit the budget",
+                ));
+            }
+            n.min(state.config.search.deep_fetch_max)
+        }
+    };
     let request = SearchRequest {
         q: params.q,
         mode,
         scope,
-        lane: parse_lane(params.lane.as_deref())?,
+        lane,
         limit: params.limit.unwrap_or(state.config.search.default_limit),
         geo,
         after: params.after,
         before: params.before,
         bypass_cache: false,
         pin_engines: false,
+        fetch_budget,
     };
     if compare {
         // Compare governs lanes itself and is web-scoped by definition; a

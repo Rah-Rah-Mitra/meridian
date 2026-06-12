@@ -29,8 +29,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# searx ENABLED against a dead URL (port 9, discard): fan-outs fail but the
+# bandit still chooses+rewards, so the ADR-24 decision log writes REAL rows —
+# the /data canary sweep below covers egress.redb non-vacuously.
 MERIDIAN_BEARER_TOKEN="$TOKEN" \
-MERIDIAN_SEARX__ENABLED=false \
+MERIDIAN_SEARX__ENABLED=true \
+MERIDIAN_SEARX__URL="http://127.0.0.1:9/" \
+MERIDIAN_SEARX__DECISION_LOG=true \
 MERIDIAN_INDEX__DATA_DIR="$DATA_DIR/data" \
 MERIDIAN_MODELS__DIR="${MERIDIAN_MODELS__DIR:-models}" \
 MERIDIAN_SERVER__PORT=$PORT \
@@ -63,6 +68,14 @@ curl -s -D - -o /dev/null -X POST -H "X-Forwarded-For: $CANARY_IP" \
 curl -s -D - -o /dev/null -H "Authorization: Bearer $TOKEN" \
   -H "X-Forwarded-For: $CANARY_IP" \
   "$BASE/v1/fetch?url=http://169.254.169.254/$CANARY_Q" >> "$HDRS"
+# ADR-24 extended smoke: drive web-scope canary searches through the bandit
+# so decision rows exist, then capture the log status (asserted below).
+curl -s -o /dev/null -H "X-Forwarded-For: $CANARY_IP" \
+  "$BASE/v1/search?q=$CANARY_Q+log+probe&scope=both"
+curl -s -o /dev/null -H "X-Forwarded-For: $CANARY_IP" \
+  "$BASE/v1/search?q=$CANARY_Q+log+probe+two&scope=both"
+sleep 1
+DLOG_STATUS=$(curl -s -H "Authorization: Bearer $TOKEN" "$BASE/v1/decision-log")
 curl -s "$BASE/metrics" > "$DATA_DIR/metrics.txt"
 curl -s "$BASE/healthz" > /dev/null
 
@@ -98,6 +111,14 @@ if grep -rqF "$CANARY_Q" "$DATA_DIR/data" 2>/dev/null; then
   echo "FAIL: canary query persisted to disk"; fail=1
 else
   echo "ok: canary query absent from /data"
+fi
+# ADR-24: the decision log must EXIST and hold rows (else the sweep above is
+# vacuous about it) — and those rows are covered by the canary greps.
+ROWS=$(printf '%s' "$DLOG_STATUS" | sed -n 's/.*"rows":\([0-9]*\).*/\1/p')
+if [ "${ROWS:-0}" -ge 2 ]; then
+  echo "ok: decision log holds $ROWS rows — canary sweep covered egress.redb"
+else
+  echo "FAIL: decision log empty/unreachable (status: $DLOG_STATUS)"; fail=1
 fi
 # 3: no Set-Cookie anywhere
 if grep -qi 'set-cookie' "$HDRS"; then

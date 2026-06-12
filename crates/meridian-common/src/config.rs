@@ -266,6 +266,13 @@ pub struct SearchConfig {
     /// Same-lane JSD noise floor (p90) from this deployment's suite-12 probe —
     /// the per-request `exceeds_floor` reference. Measured, not invented.
     pub compare_noise_floor_p90: f64,
+    /// VoI deep-mode fetching (Phase 9, ADR-26): hard cap on the per-request
+    /// `fetch_budget` param. Fetching at query time creates per-query egress
+    /// to result domains — opt-in per request, direct lane only.
+    pub deep_fetch_max: usize,
+    /// Wall-clock ceiling for the whole fetch phase inside one deep request —
+    /// sized so the deep p50 ≤2.5s gate holds (SPEC §16 P9).
+    pub deep_fetch_deadline_ms: u64,
 }
 
 impl Default for SearchConfig {
@@ -280,6 +287,8 @@ impl Default for SearchConfig {
             compare_jitter_ms_max: 30_000,
             // 2026-06-11 probe (docs/plan/bench/, anon lane p90).
             compare_noise_floor_p90: 0.30,
+            deep_fetch_max: 2,
+            deep_fetch_deadline_ms: 1_200,
         }
     }
 }

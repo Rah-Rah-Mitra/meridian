@@ -237,6 +237,7 @@ fn build_components(config: MeridianConfig) -> Result<Components, String> {
         bandit,
         decision_log.clone(),
         contextual,
+        Some(fetcher.clone()),
         lanes.clone(),
         shed.clone(),
         config.lanes.anon.max_concurrent_searches,

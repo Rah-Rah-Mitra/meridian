@@ -211,8 +211,8 @@ calendar-bound, ADR-25).
 | 9.3 | OPE harness: IPS + doubly-robust estimators + synthetic-truth recovery tests (suite 14); offline bridge to `train/` | `meridian-eval/src/ope.rs` (new), `train/` | 9.2 | 2.5d |
 | 9.4 | Contextual policy: linear Thompson sampling, ~20-dim one-hot context, same 3 arms, same choose/reward interface; feature-gated default-OFF | `meridian-searx/src/contextual.rs` (new) | 9.3 | 2d |
 | 9.5 | Ship decision per ADR-25 (≥10k decisions or 60 days): DR report committed; enable only if 95% CI excludes zero; else "inconclusive, ε-greedy retained" in exit note | `docs/plan/bench/` DR report | 9.2–9.4 + dwell | 1d |
-| 9.6 | VoI fetch/stopping: Pandora's-box reservation values at deep-mode candidate selection + ingest frontier; novelty = MinHash + embedding coverage; `analysis.search_stopped_because` | `meridian-fetch/src/ladder.rs`, `meridian-query/src/planner.rs` | P7 sketches | 3d |
-| 9.7 | Suite 15 `voi`: deep-mode fetch replay → fetches-vs-nDCG@10 frontier + evidence-diversity guard | `meridian-eval/src/bench/voi.rs` | 9.6 | 1.5d |
+| 9.6 | VoI fetch/stopping — **DONE 2026-06-12** with two measured amendments (ADR-26 status): selector = additive-objective greedy, not Pandora (page nDCG is additive — suite-measured); ingest-frontier hook DEFERRED (no queue exists); embedding-coverage term pending real-embedding calibration. Wired: `fetch_budget` + `analysis` block + privacy/api/operator docs; design at 07-voi-design.md | `meridian-fetch/src/voi.rs`, `planner.rs` | P7 sketches | 3d |
+| 9.7 | Suite 15 `voi` — **DONE 2026-06-12, hold-out GATE PASS** (nDCG within 0.0023 of fetch-all at 30.5% fewer fetches; clusters 3 vs greedy 2); frozen β recorded in the bench report | `meridian-eval/src/bench/voi.rs` | 9.6 | 1.5d |
 | 9.8 | Docs (operator manual: decision log + wipe; api.md if `fetch_budget` surfaces), exit, `phase-exits/p9.md`, v0.4.0 | docs | all | 1d |
 
 **Exit gate:** SPEC §16 Phase 9. ≈ 14.5d (+ calendar dwell for decision accrual).

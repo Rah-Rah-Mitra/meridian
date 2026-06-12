@@ -152,7 +152,15 @@ pub enum StopReason {
     BudgetExhausted,
     /// Every candidate was opened.
     Exhausted,
+    /// The caller's wall-clock deadline fired between opens (the walk itself
+    /// has no clock — the planner's fetch phase sets this).
+    Deadline,
 }
+
+/// Per-fetch cost in DCG-gain units — CALIBRATED BY SUITE 15 together with
+/// the β constants (they are a unit system, not independent knobs; re-run
+/// the suite if any of them moves).
+pub const DEFAULT_FETCH_COST: f64 = 0.6;
 
 #[derive(Debug, Clone)]
 pub struct WalkResult {

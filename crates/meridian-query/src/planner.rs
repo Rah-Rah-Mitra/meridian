@@ -57,6 +57,11 @@ pub struct SearchRequest {
     /// which would drown any real vantage signal; pinning makes the two
     /// halves differ by vantage only.
     pub pin_engines: bool,
+    /// VoI deep-mode fetching (Phase 9, ADR-26): how many result pages this
+    /// request may fetch to re-score on full text. 0 (default) = none —
+    /// exactly the pre-v0.4.0 behavior. Capped by `search.deep_fetch_max`;
+    /// deep mode + direct lane only (the API enforces; the planner guards).
+    pub fetch_budget: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -118,6 +123,21 @@ pub struct SearchResponse {
     /// QPP confidence block (Phase 8, ADR-23) — raw predictors, uncalibrated.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub confidence: Option<meridian_rank::qpp::ConfidenceBlock>,
+    /// VoI fetch-phase honesty block (Phase 9, ADR-26): why the engine
+    /// stopped reading. Only on deep responses with `fetch_budget` > 0.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub analysis: Option<AnalysisBlock>,
+}
+
+/// ADR-26 `analysis` block (additive, ADR-20 — carries its own schema).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AnalysisBlock {
+    pub schema: u32,
+    pub fetches_made: usize,
+    pub search_stopped_because: meridian_fetch::voi::StopReason,
+    /// Best expected net value left unopened (gain units; 0 on an optimal
+    /// or exhaustive stop) — what stopping left on the table, said plainly.
+    pub estimated_marginal_gain_remaining: f64,
 }
 
 /// Cached fusion output (SPEC §8.4 query cache: 128MB weighted, TTI 15m, TTL 2h
@@ -129,6 +149,7 @@ struct CachedSearch {
     degraded: Vec<&'static str>,
     evidence: Option<crate::evidence::EvidenceBlock>,
     confidence: Option<meridian_rank::qpp::ConfidenceBlock>,
+    analysis: Option<AnalysisBlock>,
 }
 
 /// Weighted cost of a cached entry. Counts every owned allocation (strings,
@@ -209,6 +230,9 @@ pub struct Planner {
     /// composition root only builds it when the decision log is also on —
     /// the log is its training data and its persistence.
     contextual: Option<Arc<std::sync::RwLock<meridian_searx::contextual::ContextualPolicy>>>,
+    /// VoI deep-mode fetch phase (Phase 9, ADR-26). `None` = no fetching
+    /// regardless of `fetch_budget` (degrades with `fetch_unavailable`).
+    fetcher: Option<Arc<meridian_fetch::Fetcher>>,
     cache: moka::sync::Cache<[u8; 32], Arc<CachedSearch>>,
     /// Ephemeral anon cache (SPEC §8.4): in-memory only, never persisted, never
     /// shared with the direct cache (lane isolation, §12.4).
@@ -236,6 +260,7 @@ impl Planner {
         bandit: Option<Arc<meridian_searx::bandit::Bandit>>,
         decision_log: Option<Arc<meridian_searx::decision_log::DecisionLog>>,
         contextual: Option<Arc<std::sync::RwLock<meridian_searx::contextual::ContextualPolicy>>>,
+        fetcher: Option<Arc<meridian_fetch::Fetcher>>,
         lanes: Arc<LaneRegistry>,
         shed: Arc<ShedState>,
         anon_max_searches: usize,
@@ -268,6 +293,7 @@ impl Planner {
             bandit,
             decision_log,
             contextual,
+            fetcher,
             cache,
             anon_cache,
             anon_permits: Arc::new(tokio::sync::Semaphore::new(anon_max_searches.max(1))),
@@ -283,6 +309,8 @@ impl Planner {
         hasher.update(req.q.as_bytes());
         hasher.update(&[req.scope as u8, req.mode as u8]);
         hasher.update(&limit.to_le_bytes());
+        // A budget-2 response is a different artifact than a budget-0 one.
+        hasher.update(&req.fetch_budget.to_le_bytes());
         // Geo + time constraints MUST key the cache — a filtered result set
         // cached under the unfiltered key would poison every later query.
         match &req.geo {
@@ -449,6 +477,7 @@ impl Planner {
                     evidence: hit.evidence.clone(),
                     divergence: None,
                     confidence: hit.confidence.clone(),
+                    analysis: hit.analysis.clone(),
                 });
             }
         }
@@ -953,6 +982,169 @@ impl Planner {
             }
         }
 
+        // VoI fetch phase (Phase 9, ADR-26 / 07-voi-design.md): opt-in via
+        // fetch_budget, deep mode + direct lane only (the API enforces it;
+        // this guard is defense in depth). Selected result pages go through
+        // the standard fetch ladder (SSRF/robots/budget/extract) and are
+        // re-scored by the cross-encoder on their FULL text — used in RAM
+        // only, never ingested; the ladder's 24h extract cache is the only
+        // persistence (identical to /v1/fetch).
+        let mut analysis: Option<AnalysisBlock> = None;
+        if req.fetch_budget > 0 && is_direct && matches!(req.mode, SearchMode::Deep) {
+            let rss_shed = self
+                .shed
+                .rerank_disabled
+                .load(std::sync::atomic::Ordering::Relaxed);
+            match (&self.fetcher, self.reranker.available() && !rss_shed) {
+                (Some(fetcher), true) => {
+                    let phase_start = Instant::now();
+                    let deadline =
+                        std::time::Duration::from_millis(self.cfg.deep_fetch_deadline_ms);
+                    let budget = req.fetch_budget.min(self.cfg.deep_fetch_max.max(1));
+                    let head = results.len().min(20);
+                    // Standardize head scores once — the value model's score_z.
+                    let n = head.max(1) as f64;
+                    let mean = results[..head].iter().map(|r| r.score as f64).sum::<f64>() / n;
+                    let sd = (results[..head]
+                        .iter()
+                        .map(|r| (r.score as f64 - mean).powi(2))
+                        .sum::<f64>()
+                        / n)
+                        .sqrt()
+                        .max(1e-9);
+                    let dcg_headroom =
+                        |rank: usize| 7.0 * (1.0 - 1.0 / ((rank as f64 + 2.0).log2()));
+                    let max_net = |cands: &[meridian_fetch::voi::Candidate]| {
+                        cands
+                            .iter()
+                            .map(|c| c.p * c.gain - c.cost)
+                            .fold(0.0f64, f64::max)
+                            .max(0.0)
+                    };
+
+                    let mut fetched_sketches: Vec<meridian_index::sketch::Sketch> = Vec::new();
+                    let mut fetched_docs: Vec<(usize, String, String)> = Vec::new();
+                    let mut fetched_idx: std::collections::HashSet<usize> =
+                        std::collections::HashSet::new();
+                    let mut fetches_made = 0usize;
+                    // Every loop exit assigns `stopped` — deferred init lets
+                    // the compiler prove it.
+                    let stopped;
+                    let mut est_remaining = 0.0f64;
+                    loop {
+                        // Re-pose the box each round: a fetched page's sketch
+                        // crushes the marginal value of its near-copies.
+                        let cands: Vec<meridian_fetch::voi::Candidate> = results[..head]
+                            .iter()
+                            .enumerate()
+                            .filter(|(i, r)| r.source == "web" && !fetched_idx.contains(i))
+                            .map(|(i, r)| {
+                                let snip = meridian_index::sketch::Sketch::compute(&format!(
+                                    "{} {}",
+                                    r.title, r.snippet
+                                ));
+                                let novelty = 1.0
+                                    - fetched_sketches
+                                        .iter()
+                                        .map(|f| snip.containment(f))
+                                        .fold(0.0f64, f64::max);
+                                let score_z = (r.score as f64 - mean) / sd;
+                                meridian_fetch::voi::candidate_from_signals(
+                                    i as u64,
+                                    dcg_headroom(i),
+                                    novelty,
+                                    score_z,
+                                    meridian_fetch::voi::DEFAULT_FETCH_COST,
+                                )
+                            })
+                            .collect();
+                        if cands.is_empty() {
+                            stopped = meridian_fetch::voi::StopReason::Exhausted;
+                            break;
+                        }
+                        if fetches_made >= budget {
+                            stopped = meridian_fetch::voi::StopReason::BudgetExhausted;
+                            est_remaining = max_net(&cands);
+                            break;
+                        }
+                        if phase_start.elapsed() >= deadline {
+                            stopped = meridian_fetch::voi::StopReason::Deadline;
+                            est_remaining = max_net(&cands);
+                            break;
+                        }
+                        let walk = meridian_fetch::voi::additive_walk(&cands, 1, |_| {});
+                        let Some(&open_id) = walk.opened.first() else {
+                            stopped = walk.stopped_because;
+                            break;
+                        };
+                        let idx = open_id as usize;
+                        fetches_made += 1;
+                        fetched_idx.insert(idx);
+                        let remaining = deadline.saturating_sub(phase_start.elapsed());
+                        // Failed/timed-out fetches consume budget — honest
+                        // no-op; the page stays on its snippet score.
+                        if let Ok(Ok(doc)) = tokio::time::timeout(
+                            remaining,
+                            fetcher.fetch_extract(&results[idx].url, &Lane::Direct),
+                        )
+                        .await
+                        {
+                            fetched_sketches
+                                .push(meridian_index::sketch::Sketch::compute(&doc.text));
+                            let title = doc.title.unwrap_or_else(|| results[idx].title.clone());
+                            fetched_docs.push((idx, title, doc.text));
+                        }
+                    }
+                    // One CE batch over the fetched FULL texts; those results'
+                    // ce values are replaced and the head re-orders by ce
+                    // (same scale as the snippet-pair rerank above).
+                    if !fetched_docs.is_empty() {
+                        let pairs: Vec<Pair> = fetched_docs
+                            .iter()
+                            .map(|(i, title, text)| Pair {
+                                doc_key: url_key(&results[*i].url),
+                                title: title.clone(),
+                                snippet: text.chars().take(1200).collect(),
+                            })
+                            .collect();
+                        let query = req.q.clone();
+                        let reranker = self.reranker.clone();
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        rayon::spawn(move || {
+                            let r = reranker.rerank(
+                                &query,
+                                &pairs,
+                                std::time::Duration::from_millis(800),
+                            );
+                            let _ = tx.send(r);
+                        });
+                        if let Ok(Ok(scored)) = rx.await {
+                            let ce_by_key: HashMap<u64, f32> =
+                                scored.iter().map(|p| (p.doc_key, p.ce_score)).collect();
+                            for r in results[..head].iter_mut() {
+                                if let Some(ce) = ce_by_key.get(&url_key(&r.url)) {
+                                    r.rank_signals.ce = Some(*ce);
+                                }
+                            }
+                            results[..head].sort_by(|a, b| {
+                                let ka = a.rank_signals.ce.unwrap_or(f32::MIN);
+                                let kb = b.rank_signals.ce.unwrap_or(f32::MIN);
+                                kb.partial_cmp(&ka).unwrap_or(std::cmp::Ordering::Equal)
+                            });
+                        }
+                    }
+                    timings.insert("fetch_phase_ms", phase_start.elapsed().as_millis() as u64);
+                    analysis = Some(AnalysisBlock {
+                        schema: 1,
+                        fetches_made,
+                        search_stopped_because: stopped,
+                        estimated_marginal_gain_remaining: (est_remaining * 1e4).round() / 1e4,
+                    });
+                }
+                _ => degraded.push("fetch_unavailable"),
+            }
+        }
+
         // No MMR diversity stage: token-Jaccard MMR FAILED suite 13b on both
         // generator seeds (alpha-nDCG gain only at >1% nDCG cost — symmetric
         // similarity demotes canonical originals along with their copies),
@@ -1041,6 +1233,7 @@ impl Planner {
                     degraded: degraded.clone(),
                     evidence: evidence.clone(),
                     confidence: confidence.clone(),
+                    analysis: analysis.clone(),
                 })
             };
             if cacheable {
@@ -1066,6 +1259,7 @@ impl Planner {
             evidence,
             divergence: None,
             confidence,
+            analysis,
         })
     }
 }
