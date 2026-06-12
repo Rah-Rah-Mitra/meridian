@@ -1186,8 +1186,11 @@ impl Planner {
                                 // over this doc's passages (the stop decision
                                 // between opens needs it — suite-18 replay
                                 // semantics, mirrored exactly).
-                                let passages =
-                                    meridian_fetch::passage::split_passages(&doc.text, 500, 16);
+                                let passages = meridian_fetch::passage::split_passages(
+                                    &doc.text,
+                                    500,
+                                    self.cfg.answer_passage_cap.max(1),
+                                );
                                 if !passages.is_empty() {
                                     let pairs: Vec<Pair> = passages
                                         .iter()
@@ -1215,6 +1218,16 @@ impl Planner {
                                                 .partial_cmp(&b.ce_score)
                                                 .unwrap_or(std::cmp::Ordering::Equal)
                                         }) {
+                                            // Latency-study telemetry: WHERE
+                                            // in the doc winners live decides
+                                            // how low the cap can go. No
+                                            // query text, no URL — position
+                                            // only.
+                                            tracing::debug!(
+                                                passage_index = top.doc_key,
+                                                passages_scored = scored.len(),
+                                                "answer passage realized"
+                                            );
                                             doc_ce.push((idx, top.ce_score));
                                             best_value = best_value.max(f64::from(top.ce_score));
                                             let better = best_passage
