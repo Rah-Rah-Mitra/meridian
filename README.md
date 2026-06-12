@@ -4,16 +4,17 @@
 hybrid index (BM25 + dense vectors) + geo analytics, sized for a Raspberry Pi 5 and scaling to
 edge servers without redesign.
 
-> Status: **v0.2.0 released — the evidence release.** Meridian now tells you
-> how independent your sources are: every search response carries derivation
-> clusters (`independent_source_count` vs `apparent_source_count`, built from
-> deletable 64-byte MinHash sketches at +0.2ms p50), trends/heatmap carry
-> defensible statistics (empirical-Bayes + overdispersion-aware z-scores +
-> FDR `significant` flags instead of raw ratios), and `compare=vantages`
-> previews Phase 8: the same query over direct AND Tor with a Jensen-Shannon
-> divergence report. Also in v0.2.0: a latent dense-recall defect (since
-> Phase 2) found and fixed — recall@10 restored 0.0 → 0.999 at scale.
-> v0.2.0 images are linux/arm64 only (see release notes). Docs:
+> Status: **v0.3.0 released — the divergence release.** The flagship claim is
+> now measured, per request: the same query over direct AND Tor returns
+> measurably different source distributions (cross-lane JSD ~7× the same-lane
+> noise floor, bootstrap p≈0 on this deployment), behind a fail-closed
+> compare orchestrator pinned by 17 hermetic egress invariants. Every
+> response carries a `confidence` block (QPP: ρ=0.256 vs measured nDCG@10 at
+> sub-ms cost). An MMR diversity rerank was built and **withdrawn by its own
+> gate** (it demoted canonical originals with their syndicated copies —
+> see the p8 exit note); the Phase-9 substrate (privacy-vetted decision log,
+> default off + validated IPS/DR offline-policy evaluation) shipped dark.
+> Images are linux/arm64 only (see release notes). Docs:
 > [operator manual](docs/operator-manual.md) · [API](docs/api.md) ·
 > [privacy](docs/privacy.md) · exit notes in
 > [`docs/plan/phase-exits/`](docs/plan/phase-exits/).
@@ -63,8 +64,8 @@ The full, binding specification is [`docs/SPEC.md`](docs/SPEC.md) (v2.2).
 | 5 | Geo + analytics + retention/forget | **Done** (2026-06-11) |
 | 6 | Hardening + v0.1.0 release | **Done** (2026-06-11) |
 | 7 | Evidence foundations + statistical rigor → v0.2.0 | **Done** (2026-06-12) — [exit note](docs/plan/phase-exits/p7.md) |
-| 8 | Vantage divergence + confidence → v0.3.0 | **In progress** — compare-vantages, QPP confidence, MMR landed; pending: cross-lane gate run, confidence calibration (suite 13), alpha-nDCG eval, full soak, exit note |
-| 9 | Adaptive frontier (decision log, OPE, contextual routing, VoI) → v0.4.0 | Planned (ADR-24..26) |
+| 8 | Vantage divergence + confidence → v0.3.0 | **Done** (2026-06-12) — [exit note](docs/plan/phase-exits/p8.md); divergence + QPP gates PASS; MMR suite-rejected and withdrawn |
+| 9 | Adaptive frontier (decision log, OPE, contextual routing, VoI) → v0.4.0 | **In progress** — decision log (default off) + IPS/DR estimators landed, suite 14 PASS; pending: operator surface, OPE on real logs, ADR-25 ship gate, VoI |
 | 10 | Candidates: region metasearch sidecars, conformal calibration, change-point trends, amd64 image restoration | Recorded, not scheduled |
 
 Known pending beyond the phase table: 1M ANN re-baseline + hybrid-nDCG
