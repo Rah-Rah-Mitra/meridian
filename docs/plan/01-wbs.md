@@ -217,7 +217,33 @@ calendar-bound, ADR-25).
 
 **Exit gate:** SPEC §16 Phase 9. ≈ 14.5d (+ calendar dwell for decision accrual).
 
-## 12. Cross-phase engineering rules
+## 12. Phase 10 — Calibrated confidence, change-aware trends, answer mode (v0.5.0)
+
+Experiment-first, as always: suites 16–18 run and fix their constants BEFORE
+the features they gate are wired. The three feature tracks (conformal, burst,
+answer) are independent of each other; amd64 and the 1M ANN re-baseline are
+infra items with no feature coupling. NOT in this phase (recorded as Phase-11
+candidates with reasons in SPEC §16): region sidecars (operator sign-off + WG
+endpoints), DP aggregates (no publish boundary exists), BQ (>1.5M trigger
+unmet), crates.io (operator's visibility call). The ADR-25 contextual-policy
+verdict stays calendar-bound and is NOT a P10 gate.
+
+| # | Task | Paths | Deps | Effort |
+|---|---|---|---|---|
+| 10.1 | Suite 16 `conformal` — **DONE 2026-06-12, GATE FAIL** (as the `conformal` subcommand of the eval binary, not a bench module — it needs the real index/models stack): frontier + usefulness rules, finite-sample fit, held-out query-style variant; the variant measured a 19pp absolute-coverage collapse | `meridian-eval/src/bin/meridian-eval.rs` (`conformal`), bench doc | suite-13 harness, `eval/` gen | 2d |
+| 10.2 | Conformal bands in production — **WITHDRAWN, never landed** (10.1 refuted ADR-27; risk #24 fired pre-ship; raw signals stand per ADR-23). Carried: bands return only with a materially stronger predictor through the same suite | — | 10.1 | 0d (1d planned) |
+| 10.3 | Suite 17 `changepoint` — **DONE 2026-06-12, PASS** (s=2, γ=1 frozen; two estimator candidates falsified first; gate constructs aligned to the suite-10 margin/no-collapse pattern — bench doc records all of it) | `meridian-eval/src/bench/changepoint.rs` | suite-10 generators | 2d |
+| 10.4 | Burst model in production — **DONE 2026-06-12** (PR #19 with 10.3): two-state NB Viterbi with head-window moments, `burst {active, onset_day, days_active}` on movers, api.md two-detector wording; trends budget re-measure at exit | `meridian-analytics/src/burst.rs`, `trends.rs` | 10.3 | 2d |
+| 10.5 | Suite 18 `answer`: suite-15 generator extended with answer-bearing passages in decisive originals; hit-rate vs snippet-head baseline + pandora-vs-additive fetch-efficiency gates | `meridian-eval/src/bench/answer.rs` (new) | suite-15 generator | 1.5d |
+| 10.6 | Answer mode in production: `answer=true` param + validations (deep + fetch_budget≥1 only, inherits all restrictions), selector swap to `pandora_walk`, passage split + CE batch (≤32 passages), `best_passage` block; invariants extended (answer obeys every fetch_budget invariant); api/privacy/operator docs | `meridian-query/src/planner.rs`, `meridian-fetch/src/voi.rs`, `meridian-api`, docs | 10.5 | 2.5d |
+| 10.7 | Suite 15b embedding-coverage study: real potion embeddings of the replay corpus, coverage term added to the candidate value model, amend-or-record vs the FROZEN v0.4.0 selector on the hold-out (ships only on a win; a measured no closes the P9 carry) | `meridian-eval/src/bench/voi.rs` ext | `models/`, suite 15 | 1.5d |
+| 10.8 | amd64 restoration: gnu/distroless image variant (or upstream `__GLIBC__` guard if accepted); same CI suite subset green on amd64 as arm64; multi-arch manifest | `.github/workflows/`, `Dockerfile` | — | 1.5d |
+| 10.9 | 1M ANN re-baseline (P7 carry): disk pre-flight (≤3GB transient, abort below), recall@10 + p50 vs Profile-F budget; honest record either way (insufficient disk ⇒ still-carried, with the measurement) | `bench/ann` run, `docs/plan/bench/` | disk | 1d |
+| 10.10 | Exit: budgets re-validated, `phase-exits/p10.md`, v0.5.0 | docs | all | 1d |
+
+**Exit gate:** SPEC §16 Phase 10. ≈ 16d.
+
+## 13. Cross-phase engineering rules
 
 - Re-validate `02-budgets.md` at every phase exit (SPEC §1).
 - Heavy deps enter the workspace only in the phase that uses them (keeps local
@@ -226,5 +252,6 @@ calendar-bound, ADR-25).
   "tests later" for the two security-critical crates.
 - **Post-v0.1.0 additions:** experiments precede features (a gated feature's eval
   suite must exist and pass BEFORE the feature merges); the hermetic
-  egress-invariant count is monotonically non-decreasing (13 → ≥16 → ≥17); every
+  egress-invariant count is monotonically non-decreasing (13 → ≥16 → ≥17; as
+  built at the P9 exit: 20, so the floor is now ≥20); every
   new derived structure passes the ADR-19 deletability test in the same PR.

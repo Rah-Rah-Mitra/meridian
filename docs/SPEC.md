@@ -1,4 +1,4 @@
-# MERIDIAN SEARCH PLATFORM — FULL IMPLEMENTATION PROMPT (PLAN-FIRST) — v2.2
+# MERIDIAN SEARCH PLATFORM — FULL IMPLEMENTATION PROMPT (PLAN-FIRST) — v2.3
 
 > Paste this entire document as the opening prompt to your implementation agent (e.g., Claude Code).
 > It encodes all architecture decisions, resource budgets, optimization requirements, the egress &
@@ -804,10 +804,40 @@ per the ADR-25 gate; VoI ≥25% fewer fetches at equal nDCG@10 (±1%) with non-d
 `independent_source_count` (suite 15); deep p50 ≤2.5s holds; suites 1–13 + forget-correctness +
 RSS/latency re-validated.
 
-**Phase 10 — candidates (recorded, not planned).** Region-lane metasearch sidecars per ADR-22
-(operator sign-off + budget row first) · conformal risk control wrapping the Phase-8 confidence
-block · Kleinberg-burst/BOCPD change-point trends · DP release for published aggregates · binary
-quantization (trigger: >1.5M docs, Phase-2 deferral stands) · crates.io publication.
+**Phase 10 — Calibrated confidence, change-aware trends, answer mode (v0.5.0)**
+Conformal confidence bands wrapping the Phase-8 block (ADR-27) — **WITHDRAWN by suite 16
+(2026-06-12) before shipping**: the absolute coverage claim collapses 19pp under a held-out
+query-style shift while only the relative lift survives, so the block keeps shipping raw
+NQC/Clarity/score exactly as ADR-23 worded them (`schema: 1` unchanged); the suite-16 harness
+ships as the standing judge for any stronger future predictor · change-point trends (ADR-28): two-state burst model per root-code day series surfacing
+multi-day ramps the latest-day EB z structurally misses; z stays the single-day detector — burst
+COMPLEMENTS, never replaces · answer mode (ADR-29): opt-in best-passage extraction over
+deep+`fetch_budget`, selector = the dormant `pandora_walk` (single-best objective — its designed
+regime per ADR-26), additive `best_passage` block, extractive only, inherits every fetch_budget
+restriction · VoI embedding-coverage study (suite 15b: real embeddings in the replay;
+amend-or-record against the frozen v0.4.0 selector on the hold-out) · amd64 image restoration
+(gnu/distroless variant or upstream `__GLIBC__` guard — the portable-recall defect is still not an
+option) · 1M ANN re-baseline behind a disk pre-flight (P7 carry).
+EXIT: suite 16 hold-out band coverage within 5pp of target with strictly monotone band quality and
+zero added latency budget (≤1ms QPP stage holds) — **FAILED 2026-06-12 on every condition ⇒ bands
+withdrawn pre-ship (the gate worked; raw signals unchanged)**; suite 17 null FPR ≤ the EB-z baseline's on BOTH
+variants with ramp TPR ≥ z+0.2 on tuning and ≥1.25×z on the hold-out (margin-on-tuning /
+no-collapse-on-hold-out, the suite-10 pattern), delay past the 2× crossing ≤1d tuning / ≤2d
+hold-out, z spike parity, held-out generator variant honored (risk #21) — **MET 2026-06-12,
+s=2/γ=1 frozen**; suite 18 best-passage hit-rate ≥ the
+snippet-head baseline with pandora-vs-additive fetch efficiency measured, answer-mode p50 ≤3.0s
+device-validated (its own budget row — the deep 2.5s budget is not silently busted); suite 15b
+ships only on a hold-out win, else the carry closes with a measured no; amd64 green on the same CI
+suite subset as arm64 or it stays suspended; 1M ANN re-baseline recorded (informational —
+insufficient disk ⇒ honestly still-carried with the pre-flight measurement); hermetic invariant
+count ≥20 holds; suites 1–8 + forget-correctness + RSS/latency re-validated.
+
+**Phase 11 — candidates (recorded, not planned).** Region-lane metasearch sidecars per ADR-22
+(operator sign-off + budget row first) · DP release for published aggregates (deferred until an
+operator-facing publish/export feature exists — today's aggregates are unreleased derivatives of
+public GDELT data, so there is no release boundary to protect yet) · binary quantization (trigger:
+>1.5M docs, Phase-2 deferral stands) · crates.io publication (follows the operator's
+repo-visibility decision).
 
 ---
 

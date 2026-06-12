@@ -680,6 +680,119 @@ fetch path with in-RAM-only usage, inv19 (fails safe without a CE) and the
 privacy.md/api.md/operator-manual disclosures. Device re-validation of the
 deep ≤2.5s gate is the v0.4.0 exit row.**
 
+## ADR-27 — Conformal confidence bands (Phase 10)
+
+**Decision.** The Phase-8 `confidence` block gains a `band` field
+(`high`/`medium`/`low`, `schema: 2`, additive per ADR-20) calibrated by
+**split-conformal-style selective risk control**: on a generator-built
+calibration set (suite 16; per-query (confidence score, judged nDCG@10) pairs
+from the suite-13 harness), choose the smallest thresholds λ_high > λ_med such
+that the empirical violation rate of "score ≥ λ_band ⇒ nDCG@10 ≥ τ_band"
+satisfies the band's risk target **with the (n+1) finite-sample correction**.
+Thresholds are FROZEN in the repo with the calibration run recorded; a
+disjoint-seed hold-out plus a held-out generator variant (risk #21 discipline)
+verify coverage before anything ships. Defaults (operator Q12): τ_high = 0.5
+at 90% coverage, τ_med = 0.3 at 80%.
+
+**Honesty scope — written into api.md, not just here:** the coverage claim
+holds **on the eval distribution**. Live queries drift (risk #24), which is
+why the band ships ALONGSIDE the raw nqc/clarity/score signals, never instead
+of them, and why the api.md wording is "calibrated on the repo eval set", not
+"guaranteed". Full conformal prediction intervals on nDCG were considered and
+rejected: an interval on a metric the user never sees is decoration; a band
+with a stated, verifiable selective-coverage property is consumable.
+
+**Tradeoff.** A 2-comparison lookup at query time (the ≤1ms QPP budget is
+untouched) vs the calibration-set maintenance obligation: the thresholds are
+only as good as the frozen set, so the suite re-runs at every exit that
+touches ranking.
+
+**Status: REFUTED (suite-16 run 2026-06-12,
+`bench/2026-06-12-pi5-p10-conformal.md`) — bands WITHDRAWN before shipping,
+the suite-13b/MMR pattern repeating one phase later.** The Q12 default
+(τ=0.5 @ 90%) is unachievable outright (top-5%-confidence coverage 65% vs a
+51% base rate); the achievable frontier target fails the a-priori usefulness
+margin; and the absolute coverage claim collapses 19pp under a held-out
+query-STYLE shift in the same corpus and pipeline (the risk-#24 tripwire
+fired exactly as registered: "method re-design, not threshold nudging").
+The predictor's RELATIVE lift (+12–14pp) survives every set — i.e., the
+score is a ranking-comparable signal, which is precisely what ADR-23 already
+ships it as, with the honest wording intact. No production change. Carried
+forward: bands return only with a materially stronger predictor; the suite
+16 harness (frontier rule, finite-sample fit, variant generator) ships as
+the standing judge.
+
+## ADR-28 — Change-point trends: two-state burst model (Phase 10)
+
+**Decision.** Each root-code day series additionally gets a **two-state burst
+decode** (baseline rate vs elevated rate s·baseline, transition cost γ —
+Kleinberg's automaton restricted to two states, exact Viterbi over the
+window): movers gain `burst: {active, onset_day, days_active}`. This
+**complements** the ADR-21 EB z, which tests ONLY the latest day against the
+shrunk baseline and is structurally blind to a multi-day ramp that never
+makes any single day extreme (each elevated day inflates the baseline the
+next day is judged against). z answers "did today move"; burst answers "are
+we inside a sustained elevation, and since when". Both ship raw; `significant`
+(BH on z) and `burst.active` are independent flags.
+
+**Rejected: BOCPD** (Bayesian online change-point detection) — run-length
+posteriors and a hazard/prior zoo for ≤90-day windows of small counts is
+machinery without a consumer; the 2-state Viterbi is exact, deterministic,
+O(2n), and its two parameters are sweepable by suite 17 on synthetic truth.
+(s, γ) are fixed by the tuning sweep and judged on an overdispersed hold-out
+plus a held-out generator variant, same protocol as suite 10.
+
+**Tradeoff.** One more knob pair frozen by a synthetic suite (risk #25:
+generator overfit, redundancy with z) vs detecting the canonical real-world
+pattern — a story building over 3–5 days — that the current detector
+provably misses. Ship rule: if the suite shows burst adds NO detections
+beyond z on ramp series, it does not ship.
+
+**Status: CONFIRMED (suite-17 run 2026-06-12: s = 2.0, γ = 1.0;
+`bench/2026-06-12-pi5-p10-changepoint.md`) — with two measured estimator
+amendments and one gate-construct correction, all recorded in the bench doc:**
+the v0 lower-trimmed baseline moments truncated the dispersion evidence (NB
+hold-out null FPR 0.104 vs z's 0.037) and the v1 two-pass re-estimate was
+circular on null series (0.055); the shipped estimator takes baseline moments
+from the HEAD 60% of the window — the uncontaminated region the feature's
+own question implies. Gates follow the suite-10 margin-on-tuning /
+no-collapse-on-hold-out pattern (the v0 "full margin on both variants" gated
+the hold-out generator's hardness, not the candidate); the FPR condition
+(burst ≤ z, both variants, no slack) never bent and PASSES. Final: ramp TPR
+0.692 vs z 0.408 (tuning), +62% relative on the hold-out, at LOWER null FPR
+than z on both variants. Wired into `top_movers[].burst` the same day.
+
+## ADR-29 — Answer mode: best-passage extraction (Phase 10)
+
+**Decision.** `answer=true` request parameter, valid ONLY with `mode=deep` and
+`fetch_budget ≥ 1`; it inherits every fetch_budget restriction unchanged
+(direct lane only, never with compare, `deep_fetch_max` cap, fetch-phase
+deadline, RAM-only fetched text). Two changes when set: (1) the fetch
+selector switches from `additive_walk` to **`pandora_walk`** — the
+single-best objective is exactly the regime ADR-26 retained it for (the page
+objective is additive; the answer objective is max); (2) fetched full texts
+are split into sentence-aligned passages (≤500 chars), one CE batch scores
+(query, passage) over ≤32 passages, and the response gains an additive
+`best_passage` block: `{schema: 1, text, url, ce_score}`.
+
+**Honesty.** Extractive only — no generation, no synthesis, no cross-document
+stitching. `ce_score` is a relevance score, NOT a correctness probability,
+and api.md says so (risk #26: a confident wrong passage presented as "the
+answer" is the failure mode; the mitigation is wording + the raw score + the
+suite-18 hit-rate gate, and the block existing only when explicitly
+requested).
+
+**Privacy.** No new egress class: answer mode rides the fetch_budget ladder
+byte-for-byte; privacy.md gains one sentence saying exactly that.
+
+**Tradeoff.** A second CE batch (~passage count × ms/pair) on an opt-in path
+vs answering the question the user actually asked deep mode. Answer-mode
+latency gets its OWN budget row (p50 ≤3.0s) — the deep 2.5s budget is not
+silently busted by a mode that does strictly more work.
+
+**Status: PROPOSED — suite-18 gate decides; pandora efficiency measured, not
+assumed.**
+
 ---
 
 ## Environment-driven ADRs (not in the spec)
@@ -735,6 +848,9 @@ capacity knobs and tripwire thresholds differ.
 | 24 | per-decision routing log (coarse buckets, TTL, k-anon, anon never logged) | CONFIRMED (operator 2026-06-11) |
 | 25 | linear-TS routing behind DR ship gate + sunset rule | CONFIRMED (gate) |
 | 26 | Pandora's-box VoI fetch/stopping + diversity guard | CONFIRMED (design) |
+| 27 | conformal confidence bands (selective coverage, eval-distribution-scoped) | REFUTED (suite-16 run 2026-06-12: absolute coverage collapses under query-style shift; bands withdrawn pre-ship, raw signals stand) |
+| 28 | two-state burst trends alongside EB z (complement, never replace) | CONFIRMED (suite-17 run 2026-06-12: s=2, γ=1; head-window estimator after two falsified candidates) |
+| 29 | answer mode = `pandora_walk` + extractive `best_passage` block | PROPOSED (suite-18 gate) |
 | D1 | dev-on-target | operator-approved deviation |
 | D2 | dual-profile budgets | operator-approved deviation |
 
