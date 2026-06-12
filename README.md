@@ -87,11 +87,12 @@ The full, binding specification is [`docs/SPEC.md`](docs/SPEC.md) (v2.2).
 
 Known pending beyond the phase table: the ADR-25 contextual-policy verdict
 (calendar-bound dwell — `GET /v1/decision-log/ope` at ≥10k decisions or the
-~2026-08-11 sunset); the answer-mode latency optimization study (win the
-3.0s p50 row back from the measured 3.5s). The hybrid-nDCG re-eval on the
-healed dense lane closed 2026-06-13 with a finding opposite to its premise
-(hybrid +0.85pp over BM25 on known-item queries — BM25's home turf by
-construction; see `docs/plan/bench/2026-06-13-pi5-hybrid-healed-lane.md`).
+~2026-08-11 sunset, and it needs ORGANIC direct-lane searches to accrue).
+All three post-v0.5.0 carries closed on 2026-06-13: `diversity=evidence`
+shipped (dominates withdrawn MMR on BOTH metrics), the answer-mode 3.0s p50
+row was won back (`answer_passage_cap` 16→8, measured), and the hybrid-nDCG
+healed-lane re-eval closed opposite to its premise (known-item queries are
+BM25's home turf by construction). Bench records in `docs/plan/bench/`.
 
 ## Installing
 
