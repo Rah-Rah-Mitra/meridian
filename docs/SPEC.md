@@ -805,10 +805,11 @@ per the ADR-25 gate; VoI ≥25% fewer fetches at equal nDCG@10 (±1%) with non-d
 RSS/latency re-validated.
 
 **Phase 10 — Calibrated confidence, change-aware trends, answer mode (v0.5.0)**
-Conformal confidence bands wrapping the Phase-8 block (ADR-27): split-calibrated band thresholds
-with finite-sample slack on a generator-built calibration set, hold-out verified, coverage claim
-explicitly scoped to the eval distribution; raw NQC/Clarity/score retained (`confidence.schema: 2`,
-additive) · change-point trends (ADR-28): two-state burst model per root-code day series surfacing
+Conformal confidence bands wrapping the Phase-8 block (ADR-27) — **WITHDRAWN by suite 16
+(2026-06-12) before shipping**: the absolute coverage claim collapses 19pp under a held-out
+query-style shift while only the relative lift survives, so the block keeps shipping raw
+NQC/Clarity/score exactly as ADR-23 worded them (`schema: 1` unchanged); the suite-16 harness
+ships as the standing judge for any stronger future predictor · change-point trends (ADR-28): two-state burst model per root-code day series surfacing
 multi-day ramps the latest-day EB z structurally misses; z stays the single-day detector — burst
 COMPLEMENTS, never replaces · answer mode (ADR-29): opt-in best-passage extraction over
 deep+`fetch_budget`, selector = the dormant `pandora_walk` (single-best objective — its designed
@@ -818,7 +819,8 @@ amend-or-record against the frozen v0.4.0 selector on the hold-out) · amd64 ima
 (gnu/distroless variant or upstream `__GLIBC__` guard — the portable-recall defect is still not an
 option) · 1M ANN re-baseline behind a disk pre-flight (P7 carry).
 EXIT: suite 16 hold-out band coverage within 5pp of target with strictly monotone band quality and
-zero added latency budget (≤1ms QPP stage holds); suite 17 null FPR ≤ the EB-z baseline's on BOTH
+zero added latency budget (≤1ms QPP stage holds) — **FAILED 2026-06-12 on every condition ⇒ bands
+withdrawn pre-ship (the gate worked; raw signals unchanged)**; suite 17 null FPR ≤ the EB-z baseline's on BOTH
 variants with ramp TPR ≥ z+0.2 on tuning and ≥1.25×z on the hold-out (margin-on-tuning /
 no-collapse-on-hold-out, the suite-10 pattern), delay past the 2× crossing ≤1d tuning / ≤2d
 hold-out, z spike parity, held-out generator variant honored (risk #21) — **MET 2026-06-12,

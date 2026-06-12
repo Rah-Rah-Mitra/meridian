@@ -707,7 +707,20 @@ untouched) vs the calibration-set maintenance obligation: the thresholds are
 only as good as the frozen set, so the suite re-runs at every exit that
 touches ranking.
 
-**Status: PROPOSED — suite-16 run fixes λ/τ and confirms.**
+**Status: REFUTED (suite-16 run 2026-06-12,
+`bench/2026-06-12-pi5-p10-conformal.md`) — bands WITHDRAWN before shipping,
+the suite-13b/MMR pattern repeating one phase later.** The Q12 default
+(τ=0.5 @ 90%) is unachievable outright (top-5%-confidence coverage 65% vs a
+51% base rate); the achievable frontier target fails the a-priori usefulness
+margin; and the absolute coverage claim collapses 19pp under a held-out
+query-STYLE shift in the same corpus and pipeline (the risk-#24 tripwire
+fired exactly as registered: "method re-design, not threshold nudging").
+The predictor's RELATIVE lift (+12–14pp) survives every set — i.e., the
+score is a ranking-comparable signal, which is precisely what ADR-23 already
+ships it as, with the honest wording intact. No production change. Carried
+forward: bands return only with a materially stronger predictor; the suite
+16 harness (frontier rule, finite-sample fit, variant generator) ships as
+the standing judge.
 
 ## ADR-28 — Change-point trends: two-state burst model (Phase 10)
 
@@ -835,7 +848,7 @@ capacity knobs and tripwire thresholds differ.
 | 24 | per-decision routing log (coarse buckets, TTL, k-anon, anon never logged) | CONFIRMED (operator 2026-06-11) |
 | 25 | linear-TS routing behind DR ship gate + sunset rule | CONFIRMED (gate) |
 | 26 | Pandora's-box VoI fetch/stopping + diversity guard | CONFIRMED (design) |
-| 27 | conformal confidence bands (selective coverage, eval-distribution-scoped) | PROPOSED (suite-16 run fixes λ/τ) |
+| 27 | conformal confidence bands (selective coverage, eval-distribution-scoped) | REFUTED (suite-16 run 2026-06-12: absolute coverage collapses under query-style shift; bands withdrawn pre-ship, raw signals stand) |
 | 28 | two-state burst trends alongside EB z (complement, never replace) | CONFIRMED (suite-17 run 2026-06-12: s=2, γ=1; head-window estimator after two falsified candidates) |
 | 29 | answer mode = `pandora_walk` + extractive `best_passage` block | PROPOSED (suite-18 gate) |
 | D1 | dev-on-target | operator-approved deviation |
