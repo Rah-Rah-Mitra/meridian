@@ -4,15 +4,22 @@
 hybrid index (BM25 + dense vectors) + geo analytics, sized for a Raspberry Pi 5 and scaling to
 edge servers without redesign.
 
-> Status: **v0.4.0 released — the adaptive frontier release.** Deep mode can
-> now read pages: `fetch_budget=N` fetches up to N results through a
-> value-of-information selector (suite-15-gated: equal nDCG to
-> fetch-everything at 30.5% fewer fetches, more distinct evidence clusters
-> than naive top-k) and the `analysis` block says why it stopped reading.
-> The ADR-25 machinery is complete and dark: decision log + IPS/DR offline
-> policy evaluation (`GET /v1/decision-log/ope` reports the uplift CI and
-> verdict) + a linear-TS contextual policy that stays off until the gate
-> passes on ≥10k real decisions. 20 hermetic invariants. Previous release:
+> Status: **v0.5.0 released — the honest-verdicts release.** Deep search can
+> now answer: `answer=true` reads the most promising pages with the
+> single-best (Pandora) selector and returns the best passage verbatim with
+> its source and a raw relevance score (suite-18-gated: +10.7pp hit-rate
+> over not fetching, 3.8× the page-selector's at fewer fetches; extractive
+> only — never generated). Trends see a story building: `burst` flags
+> sustained multi-day elevations the latest-day z statistically cannot
+> (suite-17-gated at LOWER false-positive rate than the incumbent). Two
+> features were killed by their own gates before any user saw them
+> (conformal confidence bands; the VoI embedding-coverage term) — recorded,
+> not hidden. amd64 is back (multi-arch manifest) and the 1M ANN baseline
+> is now measured, not extrapolated (recall@10 0.98, p99 1.7ms, 506MB).
+> 21 hermetic invariants. Previous: **v0.4.0 — the adaptive frontier
+> release** (`fetch_budget` VoI page-reading + the `analysis` block; the
+> ADR-25 decision-log/OPE machinery, dwelling toward its ship gate).
+> Earlier:
 > **v0.3.0 — the divergence release.** The flagship claim is
 > now measured, per request: the same query over direct AND Tor returns
 > measurably different source distributions (cross-lane JSD ~7× the same-lane
@@ -75,17 +82,19 @@ The full, binding specification is [`docs/SPEC.md`](docs/SPEC.md) (v2.2).
 | 7 | Evidence foundations + statistical rigor → v0.2.0 | **Done** (2026-06-12) — [exit note](docs/plan/phase-exits/p7.md) |
 | 8 | Vantage divergence + confidence → v0.3.0 | **Done** (2026-06-12) — [exit note](docs/plan/phase-exits/p8.md); divergence + QPP gates PASS; MMR suite-rejected and withdrawn |
 | 9 | Adaptive frontier (decision log, OPE, contextual routing, VoI) → v0.4.0 | **Done** (2026-06-12) — [exit note](docs/plan/phase-exits/p9.md); suites 14+15 PASS; ADR-25 flip trails on decision accrual (by design) |
-| 10 | Candidates: region metasearch sidecars, conformal calibration, change-point trends, amd64 image restoration | Recorded, not scheduled |
+| 10 | Calibrated confidence, change-aware trends, answer mode → v0.5.0 | **Done** (2026-06-13) — [exit note](docs/plan/phase-exits/p10.md); suites 17+18 PASS; suites 16+15b honestly negative (features withdrawn pre-ship); amd64 + 1M ANN carries closed |
+| 11 | Candidates: region metasearch sidecars (operator sign-off), DP aggregates, BQ (>1.5M docs), crates.io | Recorded, not scheduled |
 
-Known pending beyond the phase table: 1M ANN re-baseline + hybrid-nDCG
-re-evaluation on the healed dense lane (the Phase-2 baseline understates it),
-and the amd64 image (suspended at v0.2.0 — upstream numkong x86 headers
-assume glibc and conflict with zig-musl).
+Known pending beyond the phase table: hybrid-nDCG re-evaluation on the
+healed dense lane (the Phase-2 baseline understates it); the ADR-25
+contextual-policy verdict (calendar-bound dwell — `GET /v1/decision-log/ope`
+at ≥10k decisions or the ~2026-08-11 sunset); the answer-mode latency
+optimization study (win the 3.0s p50 row back from the measured 3.5s).
 
 ## Installing
 
 ```sh
-docker pull ghcr.io/rah-rah-mitra/meridian/meridiand:0.2.0   # linux/arm64
+docker pull ghcr.io/rah-rah-mitra/meridian/meridiand:0.5.0   # linux/arm64 + linux/amd64
 ```
 
 See the [operator manual](docs/operator-manual.md) for the full compose-based

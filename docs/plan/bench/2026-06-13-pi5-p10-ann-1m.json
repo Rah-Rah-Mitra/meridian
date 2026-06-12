@@ -1,0 +1,39 @@
+{
+ "header": {
+  "version": "0.1.0",
+  "kernel": "6.18.33+rpt-rpi-2712",
+  "page_size": 16384,
+  "nproc": 4
+ },
+ "suite": {
+  "name": "ann",
+  "gate": "some swept ef reaches recall@10 ≥0.95 at p99 <40ms AND 16K mmap view ok",
+  "gate_passed": true,
+  "skipped": false,
+  "metrics": {
+   "build_rss_delta_mb": 483,
+   "build_vectors_per_sec": 1890.0,
+   "derived_ef_search": 128,
+   "index_size": 1000000,
+   "memory_usage_mb": 506,
+   "mmap_view_smoke": "pass",
+   "recall_at_10_ef_128": 0.98,
+   "recall_at_10_ef_192": 0.99,
+   "recall_at_10_ef_256": 1.0,
+   "recall_at_10_ef_64": 0.94,
+   "search_p50_ms_ef_128": 0.784,
+   "search_p50_ms_ef_192": 0.936,
+   "search_p50_ms_ef_256": 1.291,
+   "search_p50_ms_ef_64": 0.52,
+   "search_p99_ms_ef_128": 1.726,
+   "search_p99_ms_ef_192": 2.079,
+   "search_p99_ms_ef_256": 2.232,
+   "search_p99_ms_ef_64": 1.048,
+   "vectors": 1000000
+  },
+  "notes": [
+   "ef_search re-derived per SPEC §15: 128 (recall ≥0.95 at p99 1.73ms)"
+  ],
+  "duration_ms": 574998.8571809999
+ }
+}

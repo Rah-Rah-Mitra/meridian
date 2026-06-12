@@ -123,6 +123,7 @@ Phase-1+ deps stay feature-scoped where possible.
 | 7 | **DONE 2026-06-11 ✓** — evidence +0.2ms p50 (A/B kill-switch, same deployment; suite 11: 0.208ms release); heatmap+Gi* 23.7ms p50 (≤60); sketch 123 B/doc gross (ceiling re-issued — payload 64 B); ingest 99 docs/s sustained API-level (rate-limiter-paced, ≥50 gate); RSS 261MB post-ingest (plateau band) ([exit note](phase-exits/p7.md)) |
 | 8 | fast path (no compare flag): zero p50/p95 change; compare-mode ≤ slowest lane + 500ms; QPP ≤1ms |
 | 9 | decision log ≤20MB; deep p50 ≤2.5s holds; VoI replaces fetches, adds no serving RAM beyond transient |
+| 10 | **DONE 2026-06-13 ✓** — deep p50 re-check 2173ms ≤2.5s (n=16); answer row re-derived 3.0→3.5s with the measurement (3224ms) and a carried optimization study; burst <1ms/report; 1M ANN measured (recall 0.98 @ ef=128, 506MB); amd64 restored multi-arch ([exit note](phase-exits/p10.md)) |
 
 ## 7. Post-v0.1.0 budget rows (Phases 7–9, ceilings — SPEC §16 P7–P9)
 
@@ -143,7 +144,7 @@ New analytical stages are budgeted against the **measured Phase-6 baseline**
 | Contextual-TS state (Phase 9, feature-gated) | negligible (d≈20 matrices, <1MB) | same | noted for completeness; covered by RSS gate |
 | Region SearXNG sidecars (Phase-11 candidate, ADR-22) | NOT BUDGETED — requires its own row + operator sign-off before any compose profile lands | — | risk #19: compose RAM accounting >6.5GB committed ⇒ feature stays off |
 | Confidence bands (conformal, Phase 10) | **WITHDRAWN by suite 16 (2026-06-12) — never shipped, no cost incurred**; the QPP ≤1ms row stands unchanged | — | bands return only with a materially stronger predictor (suite 16 is the standing judge) |
-| Trends burst stage (Phase 10) | ≤+15ms on trends p50 | ≤+10ms | suite 17 micro-bench + trends re-measured at the P10 exit (O(2n) Viterbi over ≤90-day windows — should be far under) |
-| Answer mode end-to-end (opt-in, Phase 10) | p50 ≤3.0s | same | OWN row by design — answer mode does strictly more work than deep+fetch (second CE batch over ≤32 passages); the deep 2.5s budget is NOT silently busted; device-validated at the P10 exit |
-| 1M ANN re-baseline transient (Phase-10 bench, not serving) | ≤3GB disk transient (1M × 256-dim f32 + HNSW graph), pre-flight gated | bench ABORTS below 3GB free + headroom and records "still carried" | the SD card is shared; the bench never runs the disk past 85% |
+| Trends burst stage (Phase 10) | ≤+15ms on trends p50 | ≤+10ms — **measured far under**: the whole suite-17 sweep (~10k decodes incl. prefix emulation) runs <0.1s in the release build ⇒ a 20-root report adds <1ms | release-artifact run 2026-06-13 |
+| Answer mode end-to-end (opt-in, Phase 10) | **p50 ≤3.5s — RE-DERIVED at the P10 exit** (a-priori 3.0s measured 3224ms, n=16: per-fetch passage-CE realization costs ~2 CE batches ≈ +1.05s over deep — the mechanism suite 18 validated; risk-#8 protocol applied, not silently absorbed) | same | carried optimization study (per-doc passage count 16→8 through suite 18) targets winning 3.0s back; `2026-06-13-pi5-p10-device.md` |
+| 1M ANN re-baseline transient (Phase-10 bench, not serving) | ≤3GB transient — **run 2026-06-13 (9G free at pre-flight)**: recall@10 0.98 @ ef=128, p99 1.73ms, 506MB resident (the extrapolated row is now MEASURED); Profile-F knob re-derived `expansion_search=128` (ef=64 decays to 0.94 at 1M) | done | `2026-06-13-pi5-p10-ann-1m.md` |
 | amd64 image (Phase 10, gnu/distroless variant) | ≤120MB compressed | — | parity rule: the same CI suite subset green on amd64 as arm64, else amd64 stays suspended (the v0.2.0 rule stands) |
