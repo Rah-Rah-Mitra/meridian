@@ -680,6 +680,18 @@ fetch path with in-RAM-only usage, inv19 (fails safe without a CE) and the
 privacy.md/api.md/operator-manual disclosures. Device re-validation of the
 deep ≤2.5s gate is the v0.4.0 exit row.**
 
+**Suite-15b addendum (2026-06-13, the embedding-coverage carry —
+`bench/2026-06-13-pi5-p10-voi-embed.md`): RECORDED NO, carry closed.** The
+calibration study the deviation demanded now exists: potion's geometry
+cleanly separates paraphrase redundancy (same-field cross-register cosine
+0.716 vs 0.052 across fields) — the signal MinHash novelty cannot see is
+real. But no swept gain-discount spends it profitably: every combiner saves
+fetches (up to 41%) at a page-nDCG cost beyond the ±0.01 bar, because in
+the page-reveal value model fetching a paraphrase copy still buys rank mass
+for a relevant doc. The term does NOT join the page model; candidates for a
+future profitable use (answer-mode pruning, where redundant copies have no
+reveal reward) inherit `voi-embed` as their standing judge.
+
 ## ADR-27 — Conformal confidence bands (Phase 10)
 
 **Decision.** The Phase-8 `confidence` block gains a `band` field

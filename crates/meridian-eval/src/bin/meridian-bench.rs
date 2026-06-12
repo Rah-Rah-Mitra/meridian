@@ -75,6 +75,10 @@ const SUITES: &[(&str, &str)] = &[
         "answer",
         "suite 18: best-passage replay, pandora vs additive vs snippet baseline — gate +10pp hit-rate",
     ),
+    (
+        "voi-embed",
+        "suite 15b: embedding-coverage study vs the frozen v0.4.0 selector — amend-or-record (needs models/)",
+    ),
 ];
 
 fn main() -> ExitCode {
@@ -174,6 +178,10 @@ fn main() -> ExitCode {
 
     if wants("answer") {
         run_and_print(&mut report, meridian_eval::bench::answer::run(&cfg));
+    }
+
+    if wants("voi-embed") {
+        run_and_print(&mut report, meridian_eval::bench::voi_embed::run(&cfg));
     }
 
     if wants("embed") {

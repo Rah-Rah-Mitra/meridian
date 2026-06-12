@@ -127,6 +127,15 @@ harness-construct correction recorded (v0 starved the selector of the
 post-rerank snippet-CE signal production gives it); an n=300 near-miss
 (+9.7pp) was resolved by more replay, not a gate change.
 
+**Suite 15b result (2026-06-13): RECORDED NO — the P9 embedding-coverage
+carry is CLOSED** (`bench/2026-06-13-pi5-p10-voi-embed.md`). The signal is
+real (potion separates same-field paraphrase registers at 0.716 cosine vs
+0.052 cross-field — exactly what MinHash novelty cannot see) but no swept
+gain-discount is profitable: up to 41% fetch savings always at a page-nDCG
+cost beyond the bar, because a paraphrase reveal still buys rank mass for a
+relevant doc. `voi-embed` (skips without models/) is the standing judge for
+any future use of the signal.
+
 **Suite 16 result (2026-06-12): FAIL on every condition — bands WITHDRAWN
 pre-ship** (`bench/2026-06-12-pi5-p10-conformal.md`; the suite-13b/MMR
 pattern repeating). The Q12 default is unachievable outright (top-5%

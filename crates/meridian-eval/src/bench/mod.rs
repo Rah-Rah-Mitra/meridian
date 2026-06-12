@@ -16,6 +16,7 @@ pub mod ope;
 pub mod spike;
 pub mod synfarm;
 pub mod voi;
+pub mod voi_embed;
 
 #[cfg(feature = "bench-divergence")]
 pub mod divergence;
