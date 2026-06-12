@@ -12,6 +12,7 @@ pub mod extract;
 pub mod ladder;
 pub mod robots;
 pub mod ssrf;
+pub mod voi;
 
 pub use ladder::{FetchedDoc, Fetcher};
 

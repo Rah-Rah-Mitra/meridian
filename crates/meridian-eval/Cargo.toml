@@ -29,6 +29,7 @@ meridian-common.workspace = true
 meridian-embed.workspace = true
 meridian-index.workspace = true
 meridian-query.workspace = true
+meridian-fetch.workspace = true
 meridian-geo.workspace = true
 meridian-rank.workspace = true
 meridian-searx.workspace = true

@@ -658,7 +658,24 @@ is a regression — risk #22).
 fewer fetches at equal nDCG@10 (the gate); rejected MCTS as unjustified when the
 inspection-cost structure has a provably optimal index policy.
 
-**Status: CONFIRMED (design), implementation Phase 9 behind suite-15 evidence.**
+**Status: CONFIRMED (design) — with one measured amendment. Suite-15
+(2026-06-12, hermetic replay, tuning/hold-out seeds): the PANDORA stopping
+rule is the wrong objective for page-level ranking — Weitzman optimizes the
+single best find, while nDCG over the page is additive, and the replay
+measured the walk starving 2 of 3 subtopic clusters after its first find.
+The shipped selector is therefore the additive-objective greedy
+(`meridian-fetch::voi::additive_walk`: open while expected net marginal
+value `p·(novelty-discounted gain) − cost` > 0), which is near-optimal for
+the submodular page objective; `pandora_walk` is retained for the
+single-best regime (answer mode, Phase-10 candidate). Suite-15 GATE PASS on
+the hold-out with frozen constants (β0=0.2, β2=0.3 from the tuning sweep):
+nDCG@10 0.7411 vs fetch-all 0.7434 at 30.5% fewer fetches, median fetched
+clusters 3 vs rank-greedy 2 (bench/2026-06-12-pi5-p9-voi.json). Deviations
+recorded: the ingest-frontier hook is DEFERRED (no in-process frontier queue
+exists to reorder); embedding-coverage joins the value model at planner
+wiring time (the hermetic replay has no embedding space). Planner wiring +
+`fetch_budget` + the `analysis` block + privacy disclosure land together in
+the v0.4.0 train per 07-voi-design.md §2.**
 
 ---
 

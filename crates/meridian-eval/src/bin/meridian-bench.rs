@@ -63,6 +63,10 @@ const SUITES: &[(&str, &str)] = &[
         "ope",
         "suite 14: IPS/DR offline-policy-evaluation vs synthetic truth — gate bias <5%",
     ),
+    (
+        "voi",
+        "suite 15: VoI fetch replay — gate ≥25% fewer fetches at equal nDCG@10 + diversity guard",
+    ),
 ];
 
 fn main() -> ExitCode {
@@ -150,6 +154,10 @@ fn main() -> ExitCode {
 
     if wants("ope") {
         run_and_print(&mut report, meridian_eval::bench::ope::run(&cfg));
+    }
+
+    if wants("voi") {
+        run_and_print(&mut report, meridian_eval::bench::voi::run(&cfg));
     }
 
     if wants("embed") {
