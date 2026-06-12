@@ -4,7 +4,14 @@
 hybrid index (BM25 + dense vectors) + geo analytics, sized for a Raspberry Pi 5 and scaling to
 edge servers without redesign.
 
-> Status: **v0.5.0 released — the honest-verdicts release.** Deep search can
+> Status: **v0.6.0 released — the carry-closure release.** Every actionable
+> carry from the v0.5.0 exit closed through its own gate: `diversity=evidence`
+> ships and DOMINATES the withdrawn MMR on both metrics (alpha-nDCG +0.19/+0.23
+> AND plain nDCG +0.14/+0.20 — promoting each evidence cluster's canonical
+> document over its higher-BM25 truncated copies helps relevance and diversity
+> at once); answer mode is ~700ms faster (`answer_passage_cap` 16→8, measured)
+> and its 3.0s p50 row is won back; the hybrid-nDCG re-eval closed honestly
+> opposite to its premise. Previous: **v0.5.0 — the honest-verdicts release.** Deep search can
 > now answer: `answer=true` reads the most promising pages with the
 > single-best (Pandora) selector and returns the best passage verbatim with
 > its source and a raw relevance score (suite-18-gated: +10.7pp hit-rate
@@ -97,7 +104,7 @@ BM25's home turf by construction). Bench records in `docs/plan/bench/`.
 ## Installing
 
 ```sh
-docker pull ghcr.io/rah-rah-mitra/meridian/meridiand:0.5.0   # linux/arm64 + linux/amd64
+docker pull ghcr.io/rah-rah-mitra/meridian/meridiand:0.6.0   # linux/arm64 + linux/amd64
 ```
 
 See the [operator manual](docs/operator-manual.md) for the full compose-based
