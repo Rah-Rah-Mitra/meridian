@@ -282,6 +282,11 @@ reports `{ enabled, rows, approx_bytes, oldest_day, newest_day,
 retention_days, max_bytes }`; `wipe` drops every retained row and returns
 `{ "removed": n }`.
 
+A search request accrues exactly one row IFF `lane=direct` AND `scope` includes
+web AND engines are unpinned (no `compare`) AND the bandit selected an arm —
+`anon`/`region` lanes and `compare=vantages` are never logged; do not pad the
+log with synthetic traffic. See [`skills/meridian-operate`](../skills/meridian-operate/SKILL.md).
+
 ## GET /v1/decision-log/ope  (bearer)
 
 The ADR-25 ship-gate report: trains the linear-TS candidate on the older 80%
