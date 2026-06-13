@@ -337,6 +337,11 @@ step-0 probe is deliberately zero-risk.
   beyond suite-4 gate); or measured end-to-end win <1.5× (multi-context
   streaming, PCIe). A kill still leaves K2's query-side embedder HEF as the
   salvage path.
+- **Model choice.** Keep the incumbent `ms-marco-MiniLM-L6-v2` (Apache-2.0,
+  MRR@10 39.0) — it is the *same backbone* Hailo already ships, so it is the
+  lowest-risk port; `ms-marco-MiniLM-L4-v2` is the CPU latency downshift.
+  Full open-source rerank/embed ledger (licenses, NPU shape-fit, the
+  decoder-LLM rejection) in `04-open-models.md`.
 
 ### Bet 2 — Answer-mode embedding-redundancy pruning (B1)
 
@@ -1274,4 +1279,6 @@ decide.** Promotion to plan-of-record stays with operator sign-off and a new ADR
 
 *End of review. As-of: v0.6.0 / `812d3d4` / 2026-06-13. Companion files:
 `01-rebaseline.md` (claim ledger), `02-competitive.md` (competitor ledger),
-`03-track-workpapers.md` (Tracks A–K, full math and Pi-5 costs).*
+`03-track-workpapers.md` (Tracks A–K, full math and Pi-5 costs),
+`04-open-models.md` (open-source rerank/embedding model ledger, licenses, NPU
+shape-fit).*
