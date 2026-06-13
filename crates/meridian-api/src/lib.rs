@@ -7,6 +7,7 @@
 
 pub mod problem;
 pub mod state;
+pub mod ui;
 
 use axum::extract::{ConnectInfo, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
@@ -25,7 +26,7 @@ use std::time::Instant;
 
 pub fn router(state: Arc<AppState>) -> Router {
     let body_limit = state.config.server.body_limit_bytes;
-    Router::new()
+    let api = Router::new()
         .route("/v1/search", get(search))
         .route("/v1/ingest", post(ingest))
         .route("/v1/fetch", get(fetch))
@@ -44,7 +45,22 @@ pub fn router(state: Arc<AppState>) -> Router {
         ))
         .layer(tower_http::limit::RequestBodyLimitLayer::new(body_limit))
         .layer(tower_http::compression::CompressionLayer::new())
-        .with_state(state)
+        .with_state(state);
+
+    // The embedded operator console (candidate-ADR `05-ui-track`): a GET-only
+    // static shell served straight from `include_bytes!` bytes. It is merged
+    // OUTSIDE the guardrail + body-limit layer on purpose — immutable in-binary
+    // assets are not a rate-limit/concurrency-shed surface, and the JS only
+    // issues GETs to the existing `/v1/*` handlers above (which keep their own
+    // guardrails). The shell is unauthenticated and inherits the existing
+    // "enable auth + TLS before exposing" operator gate; per-request bearer is
+    // attached by the JS to guarded endpoints only.
+    let ui = Router::new()
+        .route("/ui", get(ui::index))
+        .route("/ui/", get(ui::index))
+        .route("/ui/{*path}", get(ui::asset));
+
+    Router::new().merge(api).merge(ui)
 }
 
 /// One middleware, every cross-cutting rule, in order: request-id → rate limit
