@@ -84,6 +84,11 @@ pub struct Decision {
     pub arm: u8,
     pub propensity: f32,
     pub reward: bool,
+    /// A2 graded (rank-weighted) reward in [0,1], dequantized from the reserved
+    /// `row[11]` byte. Logged ALONGSIDE the binary `reward` (log-both, ADR-25
+    /// §7.4 A2) so the gate can adopt the lower-variance estimand if it earns it;
+    /// 0.0 on rows written before A2 (the byte was reserved-zero).
+    pub reward_graded: f32,
 }
 
 /// Operator status snapshot (`GET /v1/decision-log`).
@@ -120,6 +125,13 @@ impl DecisionLog {
 
     /// Log one DIRECT-lane decision. The caller is the single place that also
     /// rewards the bandit — the anon branch never reaches either (§12.4).
+    ///
+    /// `reward_graded` (A2, ADR-25 §7.4) is the rank-weighted reward u8-quantized
+    /// into the reserved `row[11]`, logged ALONGSIDE the binary `reward`. It is
+    /// derived purely from result RANKS (no query content), so the ADR-24 privacy
+    /// envelope is unchanged — but populating a reserved byte changes the
+    /// operator-signed row field list, so flipping the gate estimand to it needs
+    /// an ADR-24 re-sign-off. Pass 0 to log binary-only (the pre-A2 behaviour).
     pub fn log(
         &self,
         now_unix: u64,
@@ -127,6 +139,7 @@ impl DecisionLog {
         arm: u8,
         propensity: f32,
         reward: bool,
+        reward_graded: u8,
     ) -> Result<(), LogError> {
         let day = (now_unix / 86_400) as u32;
 
@@ -154,7 +167,8 @@ impl DecisionLog {
         row[5] = arm;
         row[6..10].copy_from_slice(&propensity.to_le_bytes());
         row[10] = reward as u8;
-        // row[11..13] reserved (schema headroom without a migration).
+        row[11] = reward_graded; // A2 graded reward (log-both); 0 = binary-only
+        // row[12] reserved (schema headroom without a migration).
 
         let key = (u64::from(day) << 32) | u64::from(self.seq.fetch_add(1, Ordering::Relaxed));
         let wtx = self.db.begin_write().map_err(|e| LogError(e.to_string()))?;
@@ -270,6 +284,7 @@ impl DecisionLog {
                 arm: row[5],
                 propensity: f32::from_le_bytes(row[6..10].try_into().unwrap()),
                 reward: row[10] != 0,
+                reward_graded: f32::from(row[11]) / 255.0,
             });
         }
         Ok(out)
@@ -341,16 +356,20 @@ mod tests {
         let (log, dir) = temp_log();
         let now = 86_400 * 20_000;
         for _ in 0..K_FLOOR + 2 {
-            log.log(now, ctx(1), 0, 0.93, true).unwrap();
+            log.log(now, ctx(1), 0, 0.93, true, 191).unwrap();
         }
         let rows = log.read_all().unwrap();
         let generalized = rows.iter().filter(|d| d.context.is_none()).count();
         let full = rows.iter().filter(|d| d.context.is_some()).count();
         assert_eq!(generalized, (K_FLOOR - 1) as usize, "first k−1 generalized");
         assert_eq!(full, 3, "rows at/after the floor carry context");
-        // Arm/propensity/reward survive generalization (OPE validity).
+        // Arm/propensity/reward (binary + A2 graded) survive generalization.
         assert!(rows.iter().all(|d| d.arm == 0 && d.reward));
         assert!(rows.iter().all(|d| (d.propensity - 0.93).abs() < 1e-6));
+        assert!(
+            rows.iter().all(|d| (d.reward_graded - 191.0 / 255.0).abs() < 0.005),
+            "A2 graded reward round-trips through row[11]"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -359,8 +378,8 @@ mod tests {
         let (log, dir) = temp_log();
         let old_day = 20_000u64;
         let new_day = old_day + 31;
-        log.log(old_day * 86_400, ctx(0), 1, 0.5, false).unwrap();
-        log.log(new_day * 86_400, ctx(0), 2, 0.5, true).unwrap();
+        log.log(old_day * 86_400, ctx(0), 1, 0.5, false, 0).unwrap();
+        log.log(new_day * 86_400, ctx(0), 2, 0.5, true, 0).unwrap();
         assert_eq!(log.len().unwrap(), 2);
         log.sweep(new_day as u32).unwrap();
         let rows = log.read_all().unwrap();
@@ -377,7 +396,7 @@ mod tests {
         // future field can't quietly grow into something string-shaped.
         assert_eq!(std::mem::size_of::<[u8; 13]>(), 13);
         let (log, dir) = temp_log();
-        log.log(86_400 * 20_000, ctx(3), 1, 0.04, false).unwrap();
+        log.log(86_400 * 20_000, ctx(3), 1, 0.04, false, 0).unwrap();
         let rows = log.read_all().unwrap();
         assert_eq!(rows.len(), 1);
         assert!((rows[0].propensity - 0.04).abs() < 1e-6);
