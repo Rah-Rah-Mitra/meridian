@@ -1423,10 +1423,29 @@ impl Planner {
                     }
                 }
                 if let Some(dl) = &self.decision_log {
+                    // A2 (ADR-25 §7.4): the rank-weighted graded reward over the
+                    // top-10 — every web result came from the chosen arm, so
+                    // DCG-weight the positions it occupied against the ideal.
+                    // Logged ALONGSIDE the binary `appeared` (row[11]); purely
+                    // rank-derived (no query content), so the privacy envelope is
+                    // unchanged. The gate keeps the binary estimand until A2 earns
+                    // the switch on organic rows (and an ADR-24 re-sign-off).
+                    let reward_graded = {
+                        let w = |rank1: usize| 1.0 / ((rank1 + 1) as f64).log2();
+                        let ideal: f64 = (1..=10).map(w).sum();
+                        let earned: f64 = results
+                            .iter()
+                            .take(10)
+                            .enumerate()
+                            .filter(|(_, r)| matches!(r.source, "web" | "both"))
+                            .map(|(i, _)| w(i + 1))
+                            .sum();
+                        ((earned / ideal).clamp(0.0, 1.0) * 255.0).round() as u8
+                    };
                     let dl = dl.clone();
                     let propensity = chosen_propensity;
                     tokio::task::spawn_blocking(move || {
-                        let _ = dl.log(now_unix, ctx, arm, propensity, appeared);
+                        let _ = dl.log(now_unix, ctx, arm, propensity, appeared, reward_graded);
                     });
                 }
             }

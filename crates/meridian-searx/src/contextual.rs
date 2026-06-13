@@ -403,6 +403,7 @@ mod tests {
                 arm: 0,
                 propensity: 0.93,
                 reward: true,
+                reward_graded: 0.7,
             },
             Decision {
                 day: 20_000,
@@ -410,6 +411,7 @@ mod tests {
                 arm: 1,
                 propensity: 0.03,
                 reward: false,
+                reward_graded: 0.0,
             },
         ];
         let p = ContextualPolicy::from_decisions(&decisions);
