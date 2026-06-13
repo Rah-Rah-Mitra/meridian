@@ -521,7 +521,8 @@ the *rate* rises. The modal 2026-08-11 outcome is `insufficient_data → sunset`
 3. **Graded reward, before accrual starts (A2 — the one time-critical change).**
    Replace the binary reward's *logged value* with a rank-weighted graded reward
    `r = Σ_{i∈arm hits} w_i / Σ_{i=1..10} w_i`, `w_i = 1/log₂(i+1)`, u8-quantized
-   into the **reserved** `row[11]` (`decision_log.rs:158`) — zero row growth, zero
+   into the **reserved** `row[11]` (`decision_log.rs:156-159`: reward at `row[10]`,
+   "row[11..13] reserved" comment, per-day seq key) — zero row growth, zero
    migration, DR unchanged on r∈[0,1] (`ope.rs:25`). Expected ~2× sd reduction ⇒
    MDE₈₀ @3k from 6.6–12.3pp to ~3.3–6.2pp. It does **not** rescue the 10k bar
    alone, but it is the single highest-leverage move against risk #23 and it pays
