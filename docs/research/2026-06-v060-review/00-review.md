@@ -1074,3 +1074,203 @@ settings (e.g. ef=64 @1M is dominated: −4pp recall to save 0.95ms p99 against 
 {10,20,40}×batch{4,8}; answer cap 12; the never-swept `deep_fetch_deadline_ms`.
 Cheap, high-value, and it gives J2 and every future shed-ladder tuning their cost
 curves.
+
+---
+
+## 12. Phased roadmap
+
+**This section amends nothing.** It proposes an *ordering* of candidate work;
+promotion to plan-of-record happens only via operator sign-off and a new ADR in
+`docs/plan/00-adr.md`. No ADR numbers are minted here; the latest shipped is
+ADR-29. The horizons map to the repo's own structure: SPEC §16 records Phase-11
+candidates "recorded, not planned" (`SPEC.md:837-841`), and the budget table marks
+the region-sidecar row **NOT BUDGETED** (`02-budgets.md:145`). The experiment-first
+protocol holds throughout: **the judge suite lands before the feature** (the
+Phase-10 protocol), so each H2/H3 item below names a suite that must pass first.
+
+### H0 — v0.6.x hardening (honestly near-empty)
+
+v0.6.0 was the carry-closure release: all three post-v0.5.0 carries closed
+(diversity=evidence, answer-cap study, hybrid healed-lane re-eval — PRs #26/#28/#27),
+21 invariants green, both profiles measured at scale. There is **no backlog of
+deferred correctness work** here, and the review will not pad one. The single
+exception worth pulling forward is the **F1 forget-remediation bundle** (§10.2):
+it is Horizon-0 correctness, not research, because it protects the appliance's
+strongest claim — a forced-merge/GC hook *or* one honest privacy.md sentence
+(G1), the `forget_domain` >10k loop (G2), and the usearch persisted-file
+slot-marking *verification* (not yet asserted). Small, above research, do first.
+
+### H1 — Phase-11 recorded candidates + the calendar-bound ADR-25 verdict
+
+The items SPEC §16 already records, with a recommended promotion order:
+
+1. **ADR-25 contextual-routing verdict (~2026-08-11, calendar-bound).** Execute
+   §7.4: pre-register the four branches *now*; land the **A2 graded reward before
+   any organic accrual** (it is worthless retroactively — rows are immutable); set
+   the extend-once rule (trailing-14-day rate ≥334/day). Modal outcome:
+   `insufficient_data → sunset`, ε-greedy retained, module stays dark. This is the
+   only date-bound obligation in the whole roadmap.
+2. **Region-lane metasearch sidecars (ADR-22).** Unlocks the multi-lane JSD
+   flagship (§9.4 D1), whose *math is design-complete now*. Blocked on the **NOT
+   BUDGETED** row (`02-budgets.md:145`, 384–512MB each) + operator sign-off + the
+   risk-#19 compose RAM ceiling (>6.5GB committed ⇒ feature stays off). Promote
+   only when the operator wants regional vantages enough to accept the budget row.
+3. **Binary quantization** — trigger-bound (>1.5M docs, `SPEC.md:840`); the BQ row
+   already encodes the correct future decision point (§13 rejects the premature
+   PCA rung between int8 and BQ).
+4. **crates.io publication** — follows the operator's repo-visibility decision
+   (orthogonal to research).
+
+### H2 — research prototypes (the top-five bets, experiment-first)
+
+Each bet's judge suite is built and must pass before the feature ships
+(§11.1). Recommended sequence by *evidence-readiness × cost*, not just priority:
+
+| Order | Bet | Why this slot | First gate |
+|---|---|---|---|
+| 1 | **E3 seasonal baselines** (§9.1) | cheapest, killable in hours, fixes a correlated bias in a *shipped* statistic | suite-10/17 seasonal variant: FPR ↓1.5× at matched TPR |
+| 2 | **Answer trust layer** = H3 abstention + C1 corroboration (§8.2–8.3) | data on disk, ~0 marginal compute, mitigates registered risk #26 on the flagship block | suite-18 ext: precision ≥0.9; selective h(τ*) holds on style variant |
+| 3 | **B1 embedding-redundancy pruning** (§8.5) | evidence-nominated (15b addendum), `voi.rs:57` seam reserved, `voi-embed` judge exists | suite-18b: hit-rate +2pp on paraphrase-heavy OR fetches −15% within ±1pp |
+| 4 | **V1 filtered ANN** (§6 Bet 4) | the worst identity/implementation mismatch (geo queries lose the dense lane, `planner.rs:624`); *measure the harm first* | suites 2/12 geo-filtered: recover ≥95% dense contribution at ≤+10ms |
+| 5 | **Hailo CE offload** = K1 (+K3, +K5) (§6 Bet 1) | largest hardware lever, but gated on the **unverified x86 DFC host + BERT-class compilability** (C4); fail-open-to-CPU is the design | suite-4 NPU arm: ms/pair ≤0.5× CPU AND nDCG@10 parity AND fail-open proven |
+
+H1/H2 confidence-predictor work (§8.4) rides alongside as a MEDIUM-HIGH adjunct
+(ship H1+H2 together so stability enters the ablation); C3 link-retention (§8.6)
+should land its *irreversible* extraction change early even though its analytics
+defer. J1/J3 (§11) are process bets with cross-track payoff and should land first
+of all — they cost bench time and a doc rule, nothing else.
+
+### H3 — evidence-gated futures (trigger-bound, not scheduled)
+
+- **Confidence bands** — return *only* through the standing suite-16 judge with a
+  materially stronger predictor (ADR-27's documented re-entry path); H1/H2 may
+  eventually constitute that evidence. Until they measurably do, no band ships.
+- **DP aggregate release** (§10.6, I1) — top-bet ranking *only* paired with an
+  operator-facing publish/export feature (the boundary that creates a protected
+  unit); standalone it is a contingency file with a pre-registered utility gate
+  (BH-FDR detections survive ε≤2 on the suite-10 extension) and the honest
+  expectation that res-5/day granularity will not survive it.
+- **C3 citation analytics** — gated on measured intra-corpus citation density
+  ≥0.05 edges/doc after re-ingest.
+- **Hailo K2 embedding upgrade** — only after K1 proves the toolchain, and only
+  with the 256→384-d schema-migration cost priced (the 600MB disk row busts).
+
+### Roadmap honesty notes
+
+- **Nothing here is on a release critical path that depends on the NPU.** Hailo
+  enters at H2 with a candidate-ADR for heterogeneous-compute policy
+  (accelerator-never-dependency, fail-open invariant inv22), never as a gate.
+- **The only date-bound item is the ADR-25 sunset.** Everything else is
+  trigger-bound or evidence-gated — consistent with an appliance that ships when
+  the measurement says so, not on a calendar.
+
+---
+
+## 13. Rejection list
+
+Two classes: methods the **repo already killed through its own gates** (binding
+evidence — must not be re-proposed without new evidence through the same judge),
+and methods **this review rejects** after engaging them. Full arguments in the
+track workpapers; the one-line verdict and the *re-entry condition* are recorded
+here so a future proposer knows exactly what would have to change.
+
+### 13a — Empirically killed by the repo's own gates (stay killed)
+
+| Method | Killed by | Re-entry condition |
+|---|---|---|
+| **Conformal coverage bands** | suite 16: 19pp absolute-coverage collapse under query-style shift; ADR-27 REFUTED | a materially stronger predictor through the *same* suite-16 judge (the H1/H2 path) — never a re-fit on variant data |
+| **MMR diversity rerank** | suite 13b (both seeds): demotes canonical originals with their copies; superseded by diversity=evidence, dominant on BOTH metrics | new evidence through suite 13b; none exists (diversity=evidence already owns the ground) |
+| **VoI embedding-coverage combiner (page objective)** | suite 15b: signal real (0.716 vs 0.052 cosine) but no profitable combiner — paraphrase copies still buy page-reveal rank mass | the **answer** objective, where the asymmetry flips (B1, §8.5) — explicitly the addendum's nominated path |
+| **Pandora's-box for the page objective** | suite 15: starves 2/3 subtopic clusters after its first decisive find | none for page; validated and shipped for the single-best/answer regime |
+| **Neural routers / MCTS / bandits-with-knapsacks** | ADR-25 a-priori (no training data, NP-hard, unexplainable) — and now on *worse* data (0 organic rows) | training data that does not exist + an explainability story the appliance does not have |
+
+### 13b — Rejected by this review (engaged, then rejected with the bar each must clear)
+
+| Method | Track | Verdict and re-entry condition |
+|---|---|---|
+| **NPU brute-force filtered dense scan** (the literal "Hailo speeds up ANN" test) | K4 | **REJECT with numbers**: per-query vectors are data not weights → 25.6MB must cross PCIe ≈ 64ms transfer (Gen2 x1) vs the *entire* CPU scan at 2–4ms; HailoRT exposes no generic-matmul API. The surviving R9 attack is index-side filtered ANN on CPU (V1). Re-open only if a runtime exposes resident generic GEMM with on-device data updates |
+| **Signed-graph contradiction detection** | C/R1 | REJECT: requires NLI — no model in-tree (the `ort` *runtime* exists, but adding an NLI model breaks the "no neural cost" idiom), O(k²) CE-class inferences blow the answer headroom, no contradiction-labeled corpus, and false "sources contradict" is the conformal lesson at max stakes. The Hailo-8L cannot rescue it (x86-only DFC, no retrieval HEF). C1 ships the unsigned (support-only) half. Re-entry: an offline-compiled model + a planted-contradiction suite |
+| **Full web-graph PageRank** | C/R2 | REJECT: no crawl exists or may exist (egress is metasearch + the bounded fetch ladder, 1 req/2s/domain, SSRF-guarded, hermetic egress-invariant gate). C3 is the lawful version — links over *ingested* docs only |
+| **Min-cut / spectral splitting of evidence clusters** | C/R3, G1 | REJECT: fixes zero observed failures (suite-9 false-merge 0.0, F1 0.918 hold-out); union-find is already conservative. Re-opens only if the false-merge tripwire fires on organic data |
+| **Spectral clustering of domain co-occurrence** | G1 | REJECT: the graph topology is *manufactured* by clique construction, the only ranking consumer (`domain_prior`) is weighted 0, eigengap unmeasured. Re-entry: `domain_prior` earns nonzero LTR weight from real training data AND a measured eigengap |
+| **RMT / Marchenko-Pastur trend denoising** | G2 | REJECT by construction: the only matrix the store yields is 20×90 (roots×days), p=20 ≪ asymptopia, and the bursts/weekly-cycles E3 fixes *are* the signal MP would erase. No re-entry at this store schema |
+| **Low-rank (PCA) embedding compression** | G3 | REJECT premature: int8 256-d is not a binding constraint at any profiled scale; the BQ trigger (>1.5M docs) already encodes the correct future decision point |
+| **Exact→sketch (CMS/HLL/KLL) for analytics counters** | F2/F3 | REJECT: exact wins 8–50× at single-operator scale and sketch bias destroys the EB z (§10.4); DDSketch already backs latency histograms. Re-open only if key cardinality grows ~100× |
+| **Query-time Kulldorff scan statistics** | E2 | REJECT for query-time (~30–60s/999-replicate, three orders over the 60ms row); defer the nightly batch until E2a proves the GDELT-spatial surface is consumed at all |
+| **Global Moran's I as a user statement** | E1 | REJECT: vacuous on a media-coverage surface (significant on any day). Only the LISA HL/LH *outlier* is defensible, and only if a consumer exists |
+| **DPP diversity rerank** | B/D | REJECT: a symmetric kernel re-imports the MMR failure; given cluster structure it collapses to diversity=evidence, already shipped and dominant. Nothing left to buy |
+| **MI feature selection / NCD / information-bottleneck excerpts** | D | REJECT: no labeled training data (MI selects nothing); MinHash owns lexical derivation and potion owns semantic register (NCD adds no third signal); IB's relevance variable is exactly what the CE already scores |
+| **Deep/Bayesian uncertainty, ranker ensembles** | H/R5,R6 | REJECT: need neural forward passes the budgets don't have, and answer a question H1's 7ms bootstrap already answers over the *actual* production fusion |
+| **Local DP / federated / MPC / secure aggregation** | I | REJECT: single-node single-operator — no honest threat model in which the node randomizes against itself. Re-enters only with the multi-node/region-sidecar contingency and its ADR |
+| **LLM / decoder models on Hailo-8L; neural intent classifier** | K | REJECT: wrong architecture class (static dataflow, no KV-cache) and on-chip memory excludes decoder-class models; the 4-class lexical intent has no training data and the NPU round-trip is ~1000× its µs budget |
+
+---
+
+## 14. Final recommendation
+
+### 14.1 One product and research identity
+
+**Meridian is a privacy-preserving, geo-aware analytical search appliance whose
+differentiator is not answer speed but *shown evidence under resource and
+deletion constraints*.** Competitors (Exa, Parallel, Tavily, Brave, deep-research
+agents) answer faster and at web scale; none of them expose evidence structure,
+source dependence, geographic divergence, or provable deletion, and none run on a
+private 8GB edge box. The review's through-line: the ranker ground is mined out
+(VoI within −0.0023 nDCG of fetch-all; answer mode 3.8× its nearest wrong
+objective), so the value-add is **trustworthy structure around results** —
+claim-level corroboration, calibrated abstention, regional divergence, and an
+honest "we don't know" — built on machinery the repo already shipped and gated.
+The Hailo-8L is a *force multiplier on that identity* (it buys rerank depth and
+answer-latency headroom), **not a new identity** and never a dependency.
+
+### 14.2 The first three experiments (each killable in ≤2 Pi-days, judge before feature)
+
+1. **E3 seasonal baselines** (§9.1) — extend the suite-10/17 generators with a
+   weekly cycle; run shipped-z vs DOW-adjusted-z. *Decides:* whether a shipped
+   statistic carries a correlated bias BH-FDR cannot absorb. Cheapest possible
+   start; kill in hours if the pooled dispersion already absorbs it.
+2. **Answer trust layer** (§8.2–8.3) — extend suite-18 with planted
+   {independent / syndicated / singleton} corroboration and a style-shift variant;
+   measure corroboration precision and the selective risk-coverage curve. *Decides:*
+   whether the flagship block can carry a claim-level trust signal and a principled
+   abstention without a false certificate. Data is already on disk.
+3. **The J3/J1 process pair** (§11.3, §11.6) — pre-register every gate's MDE and
+   synthesize the knob Pareto frontier from bench data already on disk. *Decides
+   nothing experimentally* but makes every subsequent experiment honest and
+   correctly powered — the cheapest leverage in the document.
+
+In parallel, two **non-experiment** obligations: land the **A2 graded reward
+before any ADR-25 organic accrual** (§7.4 — time-critical, worthless
+retroactively), and ship the **F1 forget-remediation bundle** (§10.2 — Horizon-0
+correctness protecting the strongest claim).
+
+### 14.3 What evidence would change this roadmap
+
+- **The ADR-25 verdict (~2026-08-11).** A `pass` flips contextual routing on and
+  re-orders H2 toward routing; the modal `insufficient_data` confirms the
+  sunset-and-stay-dark recommendation. Either way the date forces the decision.
+- **A measured filtered-query harm <2pp** (V1's first gate) retires Bet 4 — the
+  recorded geo/dense tradeoff (ADR-10) was right, and the "geo-aware" identity is
+  satisfied by lexical filtering alone. A harm ≥2pp promotes it.
+- **C4's DFC answer.** "Cannot compile a BERT-class encoder on the 8L" reduces the
+  entire Hailo track to a documented no-go with the §T5 arithmetic on the record;
+  "compiles single-context" promotes K1/K3 toward the top of H2.
+- **An operator export/publish feature** turns DP release (I1) from a contingency
+  file into a top bet with a crisp gate; absent that boundary it stays deferred.
+- **An organic decision rate ≥334/day** is the *only* thing that makes the routing
+  gate winnable under the 30-day TTL; below it, no amount of calendar time helps.
+
+### 14.4 Closing note on method
+
+Every recommendation here is a hypothesis with a named baseline, a complexity and
+Pi-5 cost, a privacy impact, a judge suite, and an explicit kill criterion; the
+review re-proposes no method the repo killed, and it is prepared to record
+*simple-baseline-wins* and *recorded-NOs* as first-class outcomes — the same
+discipline that produced suites 13b/15b/16. The document **proposes; it does not
+decide.** Promotion to plan-of-record stays with operator sign-off and a new ADR.
+
+---
+
+*End of review. As-of: v0.6.0 / `812d3d4` / 2026-06-13. Companion files:
+`01-rebaseline.md` (claim ledger), `02-competitive.md` (competitor ledger),
+`03-track-workpapers.md` (Tracks A–K, full math and Pi-5 costs).*
