@@ -9,6 +9,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 
 pub mod answer;
+pub mod answer_embed;
 pub mod answer_trust;
 pub mod changepoint;
 pub mod evidence;
@@ -278,7 +279,7 @@ fn compiled_suites() -> Vec<&'static str> {
     #[allow(unused_mut)]
     let mut v = vec![
         "fusion", "synfarm", "spike", "evidence", "ope", "voi", "changepoint", "answer", "seasonal",
-        "answer_trust",
+        "answer_trust", "answer_embed",
     ];
     #[cfg(feature = "bench-embed")]
     v.extend(["embed", "thermal"]);
