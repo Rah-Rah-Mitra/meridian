@@ -87,6 +87,10 @@ const SUITES: &[(&str, &str)] = &[
         "answer_trust",
         "suite 20: answer-mode trust layer — C1 corroboration (precision≥0.9, no same-cluster leakage) + H3 abstention (selective hit ≥+5pp at ≤20% abstain, no style collapse)",
     ),
+    (
+        "answer_embed",
+        "suite 18b: B1 answer-mode embedding-redundancy pruning vs the shipped sketch-only selector — amend-or-record (needs models/)",
+    ),
 ];
 
 fn main() -> ExitCode {
@@ -194,6 +198,10 @@ fn main() -> ExitCode {
 
     if wants("answer_trust") {
         run_and_print(&mut report, meridian_eval::bench::answer_trust::run(&cfg));
+    }
+
+    if wants("answer_embed") {
+        run_and_print(&mut report, meridian_eval::bench::answer_embed::run(&cfg));
     }
 
     if wants("voi-embed") {
