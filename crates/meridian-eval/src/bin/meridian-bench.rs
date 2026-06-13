@@ -79,6 +79,10 @@ const SUITES: &[(&str, &str)] = &[
         "voi-embed",
         "suite 15b: embedding-coverage study vs the frozen v0.4.0 selector — amend-or-record (needs models/)",
     ),
+    (
+        "answer_trust",
+        "suite 20: answer-mode trust layer — C1 corroboration (precision≥0.9, no same-cluster leakage) + H3 abstention (selective hit ≥+5pp at ≤20% abstain, no style collapse)",
+    ),
 ];
 
 fn main() -> ExitCode {
@@ -178,6 +182,10 @@ fn main() -> ExitCode {
 
     if wants("answer") {
         run_and_print(&mut report, meridian_eval::bench::answer::run(&cfg));
+    }
+
+    if wants("answer_trust") {
+        run_and_print(&mut report, meridian_eval::bench::answer_trust::run(&cfg));
     }
 
     if wants("voi-embed") {
