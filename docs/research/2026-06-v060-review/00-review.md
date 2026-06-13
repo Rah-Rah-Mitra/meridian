@@ -425,3 +425,435 @@ reward byte should be decided *before* organic accrual starts (T1: it
 halves the MDE; it is worthless retroactively); F1's forget remediations are
 Horizon-0 correctness work, above research; J1's Pareto synthesis is a
 documentation win sitting on measured data.
+
+---
+
+## 7. Routing as a constrained, privacy-aware policy problem
+
+This section gives the **formal object** the ADR-25 verdict (~2026-08-11) is a
+decision about — not a fresh design. The repo already implements the policy, the
+estimator, and the gate; the contribution here is to write the formulation down
+precisely, derive the gate's statistical power, and convert "wait for the
+sunset" into a pre-registered protocol. Full derivations live in
+`03-track-workpapers.md` §T1; the binding source anchors are restated inline.
+
+### 7.1 The decision process
+
+- **Context** `x`: the 26-dim one-hot of (intent class × coarse bucket), the
+  exact featurization the dark contextual policy already builds
+  (`contextual.rs:33-37`). Intent is the 4-class lexical heuristic
+  (`intent.rs:69-87`); there is **no query text, no URL, no fine timestamp** in
+  `x` — the ADR-24 privacy envelope is the state-space boundary, not a bolt-on.
+- **Action** `a ∈ {fast, broad, reference}`: K=3 curated engine subsets
+  (`bandit.rs:30-43`). The action set is **hard-bounded by the shed ladder**
+  (`shed.rs`): cost is a constraint, not a reward term — which is why no
+  latency-penalized reward is proposed (ADR-25's own argument,
+  `00-adr.md:622-625`).
+- **Policy** `π_ε`: ε-greedy, ε=0.1 (`main.rs:152`), with exact logged
+  propensities `(1−ε)+ε/K ≈ 0.9333` greedy / `ε/K ≈ 0.0333` explore
+  (`bandit.rs:133-138`). Logging today's propensities makes the incumbent its
+  own logging policy — the precondition for off-policy evaluation.
+- **Reward** `r ∈ {0,1}`: "the chosen arm contributed a result to the final
+  top-10" (`bandit.rs:1-2,176`). Bernoulli, computed from rank attribution the
+  planner already holds.
+- **Constraints** (hard, non-negotiable): (i) anon-lane outcomes **never** update
+  policy state — the planner does not call `reward()` on the anon branch
+  (`bandit.rs:5-7`), so isolation is a property of the call graph, not a runtime
+  check that could regress; (ii) the decision log is 13 bytes/row, k-floored at
+  5, 30-day TTL, anon never logged (`decision_log.rs:8,29,31-34,144-158`); (iii)
+  `/v1/forget` is untouched because the log holds no document references.
+
+The candidate policy is linear Thompson sampling (DIM=26, λ=1, v²=0.25, 64-draw
+MC propensities floored at 1/64), in-memory, **shipped DARK** —
+`searx.contextual_policy` defaults `false` (`config.rs:343`) and the module is
+"constructed only when [it] is on" (`contextual.rs:2`); when on it is rebuilt at
+boot by replaying the decision log (`contextual.rs:24-28,132-143`), so the 30-day
+TTL is already a sliding window on the posterior, a fact §7.4 exploits.
+
+### 7.2 Off-policy evaluation and the gate
+
+The verdict statistic is the doubly-robust uplift Δ = DR(candidate) − incumbent
+realized mean, with a paired percentile bootstrap CI (`ope.rs:117-167`); the gate
+passes iff the 95% CI excludes zero on ≥10k logged decisions, sunsetting at 60
+days (`00-adr.md:611-641`); the verdict surface is `GET /v1/decision-log/ope`
+with {pass, inconclusive, negative, insufficient_data}. DR uses a per-(bucket,
+arm) empirical-mean model with prior 0.5 (`ope.rs:52-71,96`); the suite-14 anchor
+measured DR relative bias 0.74% and **DR replicate sd 0.024 at n=10⁴**
+(`bench/2026-06-12-pi5-p9-ope.json:21-30`).
+
+### 7.3 Power — what the gate can and cannot certify
+
+From the measured anchor, sd(n) = 0.024·√(10⁴/n), the gate's minimum detectable
+uplift at 80% power is **MDE₈₀ = (1.96+0.84)·0.024 = 6.7pp at n=10k**, rising to
+12.3pp at n=3k and 21pp at n=1k. A variance decomposition (T1 §A1.1) refines this
+by the candidate's disagreement rate `d` with the logger's greedy arm: at the
+realistic d≈0.25, MDE₈₀ is 3.6pp @10k / 6.6pp @3k; the dominating term is the
+explore-arm IPS correction (weight 1/(ε/K)=30), which is exactly why DR's model
+term matters (IPS sd 0.0384 vs DR 0.024, json:24,27). Because the realized uplift
+is Δ = d·g (g = per-row reward gap on re-routed traffic), passing at organic
+volume requires a **≥14pp per-context arm gap** — the gate can only ever certify
+a *large, obvious* win. For an appliance that is the correct bar, and the verdict
+note should say so.
+
+**A structural finding (T1 §A1.2), load-bearing for the roadmap:** the OPE input
+is `read_all()` over *retained* rows, and the TTL drops rows older than 30 days
+(`decision_log.rs:180-191,247-276`). So `n_max = 30 × decisions/day`: reaching
+10k needs **≥334 organic direct-lane decisions/day sustained over the trailing 30
+days**. A single-operator appliance at 20–100 searches/day yields n∈[600, 3000],
+MDE₈₀ between 6.6pp and 27pp. Risk #23 (inconclusive-forever,
+`03-risk-register.md:33`) is therefore not merely likely — under the TTL it is
+**structural**: extending the calendar deadline is mathematically useless unless
+the *rate* rises. The modal 2026-08-11 outcome is `insufficient_data → sunset`.
+
+### 7.4 The recommended protocol (process, not code)
+
+1. **Pre-register four verdict branches before 2026-08-11** (T1 §A1.3): PASS →
+   flip `searx.contextual_policy=true` (`config.rs:333,343`), amend ADR-25, re-run
+   OPE with the TS MC propensities as the new logging policy (ADR-25 already
+   requires this re-validation), keep ε-greedy behind the flag one release as
+   rollback. INCONCLUSIVE / NEGATIVE / INSUFFICIENT_DATA execute ADR-25 verbatim:
+   ε-greedy retained, log TTLs out, module stays dark (<1MB, `02-budgets.md:144`).
+2. **Extend-once rule** (the only principled one given the TTL cap): extend 60
+   days iff the trailing-14-day direct-lane rate ≥334/day; otherwise sunset, no
+   second extension. **Do not** synthesize traffic to feed the gate — replayed
+   rewards measure the generator, not the operator (the risk-#21 pathology), and
+   "organic" is load-bearing in the ADR-25 record.
+3. **Graded reward, before accrual starts (A2 — the one time-critical change).**
+   Replace the binary reward's *logged value* with a rank-weighted graded reward
+   `r = Σ_{i∈arm hits} w_i / Σ_{i=1..10} w_i`, `w_i = 1/log₂(i+1)`, u8-quantized
+   into the **reserved** `row[11]` (`decision_log.rs:158`) — zero row growth, zero
+   migration, DR unchanged on r∈[0,1] (`ope.rs:25`). Expected ~2× sd reduction ⇒
+   MDE₈₀ @3k from 6.6–12.3pp to ~3.3–6.2pp. It does **not** rescue the 10k bar
+   alone, but it is the single highest-leverage move against risk #23 and it pays
+   only if it lands before rows are written (they are immutable). The cost is one
+   ADR-24 re-sign-off: the row's field list is operator-approved verbatim, and
+   populating a reserved byte changes that list even though the value is derived
+   purely from ranks (no query content, privacy delta ≈ nil). Keep live ε-greedy
+   on the binary reward; **log both**; switch the gate estimand only if
+   var(graded)/var(binary) < 0.5 on the first 500 organic rows.
+4. **Drift guard (A3).** Lifetime arm counts make "auto-demote a failed engine"
+   slow (months at organic rates). Pick the **zero-constant** option: re-replay
+   the decision log every 256 inserts (the existing sweep cadence) so the
+   posterior window *is* the already-signed-off 30-day TTL (~20M flops, <10ms
+   amortized on one core); plus a two-line exponential-forgetting cap on the live
+   ε-greedy (halve pulls and reward_sum at pulls≥2000). Both are Pi-free,
+   constant-free, and leave the propensity contract exact. Rejected alternatives:
+   discounted TS (new frozen γ needs its own suite), changepoint-restart reusing
+   ADR-28 Viterbi (machinery in search of a consumer — the BOCPD rejection
+   ground).
+5. **Optional, only if the operator wants the gate winnable at organic rates
+   (A2-ext):** retain per-(bucket, arm, day) sufficient statistics
+   (n, Σr, Σr/p, Σ(r/p)²) beyond the row TTL; IPS/DR are linear in rows so
+   aggregates reconstruct the estimates exactly, and a delta-method normal CI
+   replaces the bootstrap. This decouples the gate horizon from the TTL. It is a
+   new retention surface ⇒ explicit ADR-24 sign-off; the minimal version is a
+   single cumulative u64 counter so "≥10k" is at least *measurable* across TTL
+   windows.
+
+**What stays rejected** (T1 rejections, ADR-25 record unchanged and now on
+*worse* data — 0 organic rows): neural routers, MCTS, bandits-with-knapsacks
+(no training data, NP-hard, unexplainable; shed ladder already gates the action
+set); M/G/1 optimization (every assumption fails on single-operator bursty,
+closed-loop, bimodal-service traffic); RL scheduling (per-user state forbidden,
+no reward in telemetry). The Hailo-8L changes nothing here: routing is
+data-bound, not compute-bound, and the DFC is x86-only regardless (T1 §A1
+rejection note).
+
+### 7.5 Operations adjuncts (Track J, routing-adjacent)
+
+- **J2 class-aware admission** (P2, gauges-first): two atomic counters
+  (c_fast, c_heavy); admit heavy iff c_heavy<4 ∧ c_total<8, else serve the
+  fast-path with `degraded:["admission_shed"]`. H=4 is *anchored* to the
+  4-thread rayon pool, not tuned. Gate: new suite-19 `admission`, margin (mixed
+  fast-p99 ≤2× solo) + no-collapse (held-out mix ≤4×). Precondition: add
+  class-split latency gauges first; if measured mixes never inflate fast p99,
+  **do not ship**.
+- **J1 Pareto synthesis** (P1) and **J3 MDE pre-registration** (P1) are near-free
+  process bets feeding every future suite — detailed in §11.
+
+---
+
+## 8. Analytical search: evidence structure and information-gain design
+
+Meridian's product thesis (§1) is *"competitors answer faster; Meridian shows its
+evidence."* This section specifies the two systems that make that thesis
+load-bearing on the highest-stakes surface (answer mode): a **claim-level
+corroboration layer** and a **calibrated abstention layer**, plus the
+information-theoretic value model that governs *which* documents get fetched.
+Everything here composes already-shipped, gate-validated machinery; nothing
+re-opens a killed method. Detail in `03-track-workpapers.md` §T2 (B/D) and §T3
+(C/H).
+
+### 8.1 The value model is settled; only fetch savings remain
+
+The fetch selector is already at its objective's optimum, measured from both
+sides, and this bounds every "smarter retrieval" proposal:
+
+- **Page objective** (additive nDCG): `additive_walk` opens while
+  `p·gain − cost > 0` (`voi.rs:104-143`); greedy is near-optimal because the
+  novelty-discounted gains are diminishing by construction. Suite-15 hold-out:
+  nDCG@10 **0.7411 vs 0.7434 fetch-all at −30.5% fetches**
+  (`bench/2026-06-12-pi5-p9-voi.json:22-31`). The residual quality headroom for
+  *any* better page-value model is −0.0023 nDCG — essentially zero. Only fetch
+  savings are winnable, and they are capped by `deep_fetch_max=2` (`config.rs:303`).
+- **Single-best / answer objective**: Pandora's-box (Weitzman) `pandora_walk` is
+  *exactly* optimal for "best passage in hand"; suite-18 hold-out (n=1000) gives
+  answer hit-rate **0.700 vs 0.593** no-fetch (+10.7pp), **3.8×** the additive
+  page selector (`bench/2026-06-12-pi5-p10-answer.md:15-28`).
+
+The consequence: the analytical value-add is **not a better ranker** — that
+ground is mined out. It is *trustworthy evidence structure around the answer*,
+where competitors have no offering at all (§3).
+
+### 8.2 Evidence-graph corroboration for answer mode (C1, **HIGH**)
+
+**The gap.** `best_passage` cites exactly one page (`api.md:307-331`), and api.md
+itself warns "a confidently relevant passage can still be wrong, and the engine
+cannot tell" (risk #26). The existing `independent_source_count`
+(`evidence.rs:37`) is *page-set-level* — how many apparent origins are in the
+result list — and says nothing about whether a second origin supports *the claim
+in the winning passage*. Claim-level vs page-set-level is the entire gap.
+
+**The mechanism.** Let `w` be the winning passage and `C(w)` the ADR-18 evidence
+cluster of its source page. Score, cheapest test first:
+
+```
+(i)  textual support:   c(w, d) ≥ τ        (MinHash containment, MIN_MATCH_BINS=5, 00-adr.md:459-465)
+(ii) relevance support: |s_d − ce(w)| ≤ δ  (top-passage CE already in doc_ce, planner.rs:1231)
+independent_clusters = | { cluster(d) : (i)∨(ii), cluster(d) ≠ C(w) } |   ← same-cluster copies NEVER count
+```
+
+Same-cluster copies are excluded *by construction* — syndication is exactly what
+ADR-18 exists to discount, and counting a copy as corroboration would re-import
+the suite-9 baseline failure (F1 0.054, `evidence.rs:6-8`). Inputs are all in
+RAM: `fetched_sketches` (`planner.rs:1180-1182`, currently used only for VoI
+novelty and never surfaced), the per-doc CE scores (`planner.rs:1231`), and the
+ingested result-set sketches (`planner.rs:1349-1356`). The pure cluster function
+`evidence.rs:71` already takes any `HashMap<u64, Sketch>`. Cost: **≪1ms** for the
+textual+relevance variant; an optional paraphrase-support variant (CE-score `w`
+against other clusters' top passages) adds ~10-20ms — <5% of the ~500ms answer
+headroom (3.0s row, measured 2502ms @ cap 8, `02-budgets.md:148`).
+
+**API shape (additive, ADR-20 pattern, own `schema`):**
+
+```json
+"best_passage": {
+  "schema": 2, "url": "https://a.example/x", "text": "…", "ce_score": 4.1,
+  "corroboration": {
+    "schema": 1,
+    "independent_clusters": 2,
+    "supporting_urls": ["https://b.example/y", "https://c.example/z"],
+    "basis": { "candidates_checked": 7, "method": "containment+ce" }
+  }
+}
+```
+
+`basis` carries the honesty payload (how many candidates were checkable — the
+`sketched_results` idiom, `evidence.rs:39-41`), so the badge degrades gracefully
+when coverage is thin rather than silently claiming "1 source."
+
+**Judge.** Suite-18 harness extension: plant, beside each decisive original,
+(a) genuinely independent second originals (true corroboration), (b) syndicated
+copies (the trap — must not count), (c) uncorroborated singletons. **Accept:**
+corroboration-label precision ≥0.9 / recall ≥0.6 on the hold-out variant, AND
+hit-rate(corroborated) − hit-rate(uncorroborated) > 0 with planted-truth margin,
+AND answer p50 row holds (n≥16 interpolated median). **Kill:** precision <0.9 on
+either variant (a false "2 independent sources agree" badge is worse than none —
+the conformal lesson at claim level), or any same-cluster leakage.
+
+### 8.3 Calibrated abstention for answer mode (H3, **HIGH**)
+
+**The gap.** The engine today shows the best passage it found *no matter how bad*;
+`answer_unavailable` fires only on mechanical failure (`planner.rs:1267-1269`).
+Suite-18 measured hit-rate 0.700 — **30% of shipped passages are misses**, some
+fraction sitting at low `ce_score` and cheaply refusable. Risk #26 is mitigated
+today by wording alone.
+
+**The mechanism.** From suite-18 replay, per-query pairs `(ce_score, hit∈{0,1})`.
+Publish the full coverage-vs-selective-hit-rate curve — *the tradeoff is the
+deliverable* — and choose `τ* = max{τ : h(τ) ≥ h_target}` on tuning, verify on
+hold-out **and** the style-shift variant. When `ce(w) < τ`, withhold
+`best_passage` and emit `degraded:["answer_below_threshold"]` (distinct from
+`answer_unavailable`). Serving cost ~0ms (scores already computed).
+
+**The honesty framing, written into api.md:** this is selective prediction
+*without* distribution-free coverage guarantees — those are **killed** (ADR-27
+REFUTED; 19pp absolute-coverage collapse under style shift,
+`2026-06-12-pi5-p10-conformal.md:37-43`). The wording is "tuned on the repo eval
+set; the threshold filters low-relevance passages, it does not certify shown
+ones." The asymmetry vs bands is the whole reason this is allowed where bands
+were not: a band's failure mode is a *false certificate on shown results*;
+abstention's failure under shift is *mis-set coverage* (refusing too much/little)
+— a cheaper failure, but **only if no coverage number is ever advertised**.
+**Gate:** `h(τ*) ≥ h_target` on hold-out AND within 10pp on the style variant
+(no-collapse); ship default-OFF with the curve published if the style variant
+moves >10pp. **Kill:** risk-coverage curve ~flat (ce carries no selective signal
+on the answer corpus) → keep mechanical-only abstention.
+
+### 8.4 The confidence block: a stronger predictor, no new certificate (H1+H2)
+
+The shipped confidence block is NQC + Clarity squashed 0.5/0.5 — explicitly "NOT
+calibration, just bounded blending" (`qpp.rs:49-50`), ρ=0.256 barely clearing the
+0.25 gate (`2026-06-12-pi5-p8-gates.md:48-49`). Two cheap, orthogonal predictors
+are unused and are *structurally different* from the score-curve family that
+failed suite 16:
+
+- **H1 bootstrap rank-stability**: resample the RRF inputs B times with Poisson(1)
+  weights, `rank_stability = mean_b RBO_{0.9}(top10(π₀), top10(π_b))`. Fusion is
+  pure and measured at 0.144ms (`02-budgets.md:84`); B=20 ≈ 2.9ms on the fast
+  path, B=50 ≈ 7ms on deep. It measures the *ranking's own variance*, plausibly
+  the predictor least sensitive to query style — exactly the property suite 16
+  punishes the absence of.
+- **H2 QPP ensemble**: a small linear model over NQC, Clarity, score-gap,
+  **lane-agreement** `1 − JSD(local ‖ web)` computed within one response (reusing
+  `compare.rs:171` `jsd`, zero new egress), and optionally stability. Fit by OLS
+  on the suite-13 set, frozen in-repo.
+
+**Gate (both):** suite-13 ρ ≥ 0.30 tuning / ≥ 0.25 hold-out AND > each single
+feature; suite-16 harness for style-shift no-collapse of the *relative* lift. The
+output stays "uncalibrated, ranking-comparable" wording (`api.md:133-136`); the
+conformal door reopens **only** through the standing suite-16 judge if these ever
+constitute a materially stronger predictor (`00-adr.md:733-735`) — that is the
+documented path, not part of this proposal's acceptance.
+
+### 8.5 Growing the pool, not just re-ordering it (B1, B2 — conditional)
+
+- **B1 answer-mode embedding-redundancy pruning (HIGH).** Explicitly nominated by
+  the ADR-26 suite-15b addendum (`00-adr.md:691-693`); note `voi.rs:57-58` already
+  reserves the seam ("Embedding coverage joins when the planner wiring lands…").
+  In the single-best regime a *paraphrase* of an already-fetched page carries high
+  sketch-novelty (low exact overlap) yet ~zero reveal reward — the asymmetry the
+  page model could not exploit but the answer objective can. Add
+  `ν_emb(i)=1−max_{j∈S}cos(e_i,e_j)` to `pandora_walk`'s gain (soft
+  `min(novelty_sketch, ν_emb)` or hard prune at τ∈[0.3,0.6], the 15b-measured
+  band). Microsecond cost (potion at 42.9k docs/s). Judge: new suite-18b composing
+  the 15b paraphrase generator × suite-18 outcome semantics; the standing
+  `voi-embed` judge. **Kill:** if every τ trades hit-rate >1pp for its fetch
+  savings (the exact 15b failure shape), record the no and close the 15b
+  nomination permanently.
+- **B2 non-generative query decomposition (LOW-MEDIUM, conditional).** The only
+  candidate that *grows* the result pool (k-means pseudo-aspects over the RRF
+  head, submodular coverage allocation), but the prior is genuinely weak (PRF
+  topic-drift), it needs a new harness, and there is **no measured pain signal**.
+  Run the zero-cost precondition first: count the fraction of deep queries whose
+  head collapses to one evidence cluster (computable from in-RAM clusters, no
+  logging). Full candidate only if aspect-deficient pools are real. Hard guards:
+  ≤2 extra sub-queries, deep-only, never anon, per-arm reward attribution
+  unchanged (SearXNG rate tolerance, risk #12).
+
+### 8.6 A second independence axis (C3 citation graph, MEDIUM — do the irreversible part early)
+
+Extraction keeps only `{title, text}` and discards HTML by hard rule
+(`extract.rs:1-9`); **no outlink survives ingest**. ADR-18 sees *textual*
+derivation (copies); a hyperlink graph would see *attributed* derivation — ten
+differently-worded articles all citing one primary source are 10 ADR-18 clusters
+but one citation origin. Retain ≤64 registered-domain outlink hashes per doc in a
+new `links_v1` table **written in the same forget-coupled transaction** as
+`sketch_v1` (ADR-18 pattern), ≤512B/doc (4× the sketch — record the ceiling). The
+analytics (domain-level directed fold, citation-root detection) defer until
+intra-corpus density is *measured* (kill if <0.05 edges/doc after re-ingest), but
+the **link-retention schema change is the unrecoverable part** — links discarded
+today are gone — so it lands early or not at all. Forget story: per-doc row joins
+the atomic transaction (class (a)); domain aggregate is provably rebuildable on
+the nightly schedule (class (b)); the hermetic forget test extends to assert both.
+This is the lawful, ingest-only answer to "source graph" — full web-graph
+PageRank is rejected (§13): no crawl exists or may exist.
+
+---
+
+## 9. Geo-analytics: statistically valid regional comparison
+
+Two data surfaces must not be conflated (the brief does): **`/v1/geo/heatmap`
+counts operator-ingested docs** (Tantivy fast-field scan, `lexical.rs:368-465`),
+while **`/v1/trends` consumes GDELT counters** (`trends.rs:65-72`). Gi*+BH runs on
+the doc surface (`stats.rs:158-207`); EB quasi-NB z + BH + burst run on the GDELT
+surface (`stats.rs:48-141`, `burst.rs:76-134`). Crucially, **there is no spatial
+statistic over the GDELT surface today** — trends take one optional `h3_r5` cell
+at a time. That asymmetry, not exotic spatial methods, is where the genuine
+greenfield is. Detail in `03-track-workpapers.md` §T4 (E).
+
+### 9.1 The shortlist item: seasonal baselines (E3, **MEDIUM-HIGH**)
+
+**The verified gap.** The mover baseline is the unweighted window mean minus the
+latest day (`stats.rs:61-71`); the burst baseline is head-60% moments
+(`burst.rs:82-89`). **No weekly-periodicity handling exists anywhere** in
+`trends.rs`/`stats.rs`/`burst.rs`, and neither suite generator models it (suite 10
+plants Poisson/NB+ramp, `spike.rs:10-18`; suite 17 stationary-baseline ramps). GDELT
+media volume has a strong weekend dip, so a Monday latest-day judged against a
+weekend-containing baseline gets an inflated z. Two aggravators make this worse
+than a per-series nuisance: (1) the error is **correlated across all ~20 root
+codes simultaneously** (a common day-of-week factor), so **BH-FDR cannot absorb
+it** — every p-value shifts together; (2) the pooled quasi-NB dispersion partly
+eats weekly variance as overdispersion, deflating power on *every* day rather than
+fixing the bias on the wrong days. This is the one place the otherwise-rigorous
+trends stack carries an untested systematic bias.
+
+**The fix.** A multiplicative day-of-week pre-adjustment before the EB fit:
+`f_d = (n_d·r_d + λ)/(n_d + λ)` (ratio-to-mean seasonal index, shrunk toward 1),
+`y′_t = y_t / f_{dow(t)}`, `dow(t) = (day_epoch+4) mod 7`; skip when the window is
+<21 days (<3 obs/weekday); the same adjustment feeds the burst head-window
+moments. ~30 lines in `stats.rs`, O(n) per report, <1ms against the ≤60ms row.
+Privacy: none (GDELT-only). **Judge:** extend suites 10 and 17 with a
+multiplicative weekly cycle (weekend factor swept 0.6–1.4), tuning/hold-out
+variants per risk #21. **Accept:** FPR reduction ≥1.5× vs unadjusted at matched
+TPR on seasonal variants AND no regression on non-seasonal variants (TPR within
+2pp, FPR ≤ unadjusted). **Kill:** if the pooled dispersion already holds seasonal
+FPR within 1.5× — a legitimate "the existing machinery was adequate" outcome.
+
+### 9.2 The first spatial view of the GDELT surface (E2a, **LOW-MEDIUM**)
+
+`heatmap_stats` (`stats.rs:158`) is data-source-agnostic `&[(u64,u32)]`. Feeding
+it `store.scan(day,day,root,None)` (`store.rs:117`) yields the *first* spatial
+hot-spot view of the GDELT surface at the already-measured ~24ms cost class
+(heatmap+Gi* 23.7ms p50, `02-budgets.md:123`) — Getis-Ord Gi* with BH-FDR, whose
+constants are *already* suite-10-judged, so the method risk is ≈0. Ship as a
+`/v1/trends?spatial=day` additive block. **Accept:** p50 ≤60ms. **Kill:** no
+operator consumption after one release (the ADR-25 sunset discipline). This is the
+cheapest way to test whether anyone wants GDELT-spatial analytics *before*
+building anything heavier on top.
+
+### 9.3 The honest spatial-outlier story (E1 LISA, **LOW**)
+
+Global Moran's I enables no defensible user statement on a media-coverage surface
+— "clustering exists at all" is vacuous and will be significant on essentially any
+day (population geography dominates). LISA's *only* non-redundant statement is the
+**HL/LH spatial outlier**: a cell anomalously quiet relative to a hot neighborhood
+— on GDELT, a *media-coverage hole*, an honest-signals statement in the ADR-15
+spirit. But the inference cost is the killer: at n≈12k res-5 cells the BH rank-1
+threshold is q/n ≈ 4.2e-6, so permutation p-values need P ≥ ~240k replications to
+clear it (~1.7e10 ops, **nightly-batch only**); P=999 yields a 1e-3 p-floor,
+useless under BH at this family size. Ship **only if** a consumer for the
+coverage-hole label exists; otherwise it stays a documented possibility. The
+normal-approximation escape hatch just recreates the moment-reliability
+compromises Gi* already makes.
+
+### 9.4 Uncertainty and privacy controls for the geo layer
+
+- **Sparse-count honesty is already the repo idiom and must scale.** Plug-in
+  divergence/entropy on 10–50 results is upward-biased (Miller–Madow-type
+  ≈ support/(2n ln2)); the established answer is empirical — *measure the noise
+  floor per configuration* (`compare.rs:32-38`, the same-lane p90 0.30 floor,
+  ADR-22). Any multi-vantage or spatial extension gets its own suite-12-style
+  floor probe (≥300 same-config pairs) before any "exceeds floor" claim means
+  anything. Never mix a smoothed statistic with an unsmoothed floor.
+- **Region-by-topic summaries must not become a query log.** A standing
+  region×topic divergence report built from *organic* queries would be
+  query-derived persistent state — it collides with the no-query-logging promise.
+  Clean resolution: topic summaries are an **operator batch probe** over a
+  *published canned query list* (the suite-12b shape), producing population-level
+  claims the per-request block explicitly disclaims (`compare.rs:35-38`), and
+  bounding Tor/lane load to scheduled windows.
+- **Multi-lane JSD math, frozen now / blocked in code (D1, MEDIUM-spec).** For m
+  vantages, ship the omnibus `GJS_π = H(ΣπᵢPᵢ) − Σπᵢ H(Pᵢ) ∈ [0, log₂ m]`
+  normalized by log₂ m, **plus** the pairwise JSD matrix (each entry on today's
+  [0,1] floor-comparable scale) for attribution, **plus** per-lane one-vs-rest
+  for "who is the outlier." This is the flagship differentiator (no SaaS API
+  exposes local-first geo divergence), but the *code* is blocked on the Phase-11
+  region-sidecar row, which is **NOT BUDGETED** (`02-budgets.md:145`, risk #19,
+  384–512MB each) — design-complete, implementation-gated on operator sign-off.
+
+What is **rejected** in the geo track (§13): query-time Kulldorff scan
+(~30–60s/999-replicate, three orders over the 60ms row; defer the nightly batch
+until E2a proves demand), global Moran's I as a user statement, and (Track G)
+spectral clustering / RMT denoising of the 20×90 root-day matrix — the bursts and
+weekly cycles E3 fixes *are* the non-stationarity those methods would erase.
