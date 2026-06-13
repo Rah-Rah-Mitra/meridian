@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Meridian — operator console</title>
+    <link rel="stylesheet" href="/ui/style.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="brand">
+        <span class="brand-mark">meridian</span>
+        <span class="brand-sub">operator console</span>
+      </div>
+      <form class="token-form" autocomplete="off" onsubmit="return false">
+        <label for="op-token">operator token</label>
+        <input
+          id="op-token"
+          name="op-token"
+          type="password"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="optional — used only for guarded panels"
+        />
+        <span class="token-note">
+          held for this page session only — never stored, never a cookie
+        </span>
+      </form>
+    </header>
+
+    <nav class="app-nav" aria-label="panels">
+      <a href="#panel-lanes">lanes</a>
+      <a href="#panel-trends">trends</a>
+      <a href="#panel-geo">geo</a>
+      <a href="#panel-search">search</a>
+      <a href="#panel-ope">ope gate</a>
+    </nav>
+
+    <!-- The runtime renders global honest/degraded notices here. -->
+    <div id="global-banner" class="global-banner" hidden></div>
+
+    <main class="panels">
+      <section id="panel-lanes" class="panel" aria-label="lane health"></section>
+      <section id="panel-trends" class="panel" aria-label="trends"></section>
+      <section id="panel-geo" class="panel" aria-label="geo heatmap"></section>
+      <section id="panel-search" class="panel" aria-label="search"></section>
+      <section id="panel-ope" class="panel" aria-label="ope ship-gate"></section>
+    </main>
+
+    <footer class="app-footer">
+      <span>read-only console — issues GET requests only.</span>
+      <span class="muted">
+        scores shown here are uncalibrated and ranking-comparable on this
+        deployment, not probabilities.
+      </span>
+    </footer>
+
+    <script type="module" src="/ui/app.js"></script>
+  </body>
+</html>
