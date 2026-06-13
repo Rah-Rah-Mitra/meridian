@@ -83,7 +83,7 @@ Response:
   "lane_effective": "direct",
   "degraded": ["searx_timeout"],
   "evidence": {
-    "schema": 1,
+    "schema": 2,
     "independent_source_count": 3,
     "apparent_source_count": 10,
     "sketched_results": 7,
@@ -281,6 +281,11 @@ return `404` while `searx.decision_log` is `false` (the default). `GET`
 reports `{ enabled, rows, approx_bytes, oldest_day, newest_day,
 retention_days, max_bytes }`; `wipe` drops every retained row and returns
 `{ "removed": n }`.
+
+A search request accrues exactly one row IFF `lane=direct` AND `scope` includes
+web AND engines are unpinned (no `compare`) AND the bandit selected an arm —
+`anon`/`region` lanes and `compare=vantages` are never logged; do not pad the
+log with synthetic traffic. See [`skills/meridian-operate`](../skills/meridian-operate/SKILL.md).
 
 ## GET /v1/decision-log/ope  (bearer)
 

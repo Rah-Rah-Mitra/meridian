@@ -63,6 +63,15 @@ edge servers without redesign.
 
 The full, binding specification is [`docs/SPEC.md`](docs/SPEC.md) (v2.2).
 
+## Using Meridian from agents / skills
+
+Portable, copy-paste skills for driving a running appliance — usable by both
+humans and agents from one source of truth — live in [`skills/`](skills/README.md)
+(`meridian-search`, `meridian-operate`). The integration guide
+([`docs/integrations.md`](docs/integrations.md)) covers the canonical request,
+the Hermes Meridian provider plugin (the reference integration), the
+SearXNG-format mismatch caveat, and retry/degraded handling.
+
 ## Repository layout
 
 | Path | Contents |
