@@ -83,7 +83,7 @@ Response:
   "lane_effective": "direct",
   "degraded": ["searx_timeout"],
   "evidence": {
-    "schema": 1,
+    "schema": 2,
     "independent_source_count": 3,
     "apparent_source_count": 10,
     "sketched_results": 7,
