@@ -335,6 +335,18 @@ fewer fetches). When no passage materializes (fetches failed, CE
 unavailable), the response says so: `degraded: ["answer_unavailable"]` and
 the block is absent — silence never means "no answer exists".
 
+**Selective abstention (`search.answer_abstain_threshold`, default OFF).** When
+the operator sets this threshold, a winning passage whose `ce_score` falls below
+it is **withheld** and the response carries `degraded: ["answer_below_threshold"]`
+(distinct from `answer_unavailable`: a passage *was* found, but its relevance was
+judged too low to surface). This is **selective prediction without a coverage
+guarantee** — distribution-free confidence bands were refuted on this corpus
+(suite 16, 19pp coverage collapse under a query-style shift), so the threshold
+*filters* low-relevance passages, it does **not** certify the ones it shows.
+The right value is corpus-specific (`ce_score` is a raw cross-encoder logit); the
+suite-20 `answer_trust` judge publishes the coverage-vs-selective-hit-rate curve
+the operator picks it from. Default `0.0` keeps the v0.5.0 always-show behaviour.
+
 ## GET /healthz
 
 `{ "status": "ok", "uptime_secs": n }`. Unauthenticated, not rate-limited.
