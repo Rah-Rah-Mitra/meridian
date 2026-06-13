@@ -94,7 +94,9 @@ fn generate(rng: &mut Rng, n: usize, style: bool) -> Vec<Query> {
                     cands.push(Cand {
                         cluster: 0,
                         passage_ce: copy,
-                        snippet_ce: clamp01(copy - 0.25 + snip_shift + 0.18 * rng.next_gaussian() as f64),
+                        snippet_ce: clamp01(
+                            copy - 0.25 + snip_shift + 0.18 * rng.next_gaussian() as f64,
+                        ),
                         support_score: clamp01(0.82 + 0.08 * rng.next_gaussian() as f64),
                         is_answer: false,
                     });
@@ -108,7 +110,9 @@ fn generate(rng: &mut Rng, n: usize, style: bool) -> Vec<Query> {
                     cands.push(Cand {
                         cluster: 10 + j, // distinct clusters
                         passage_ce: ce,
-                        snippet_ce: clamp01(ce - 0.25 + snip_shift + 0.18 * rng.next_gaussian() as f64),
+                        snippet_ce: clamp01(
+                            ce - 0.25 + snip_shift + 0.18 * rng.next_gaussian() as f64,
+                        ),
                         support_score: clamp01(0.80 + 0.10 * rng.next_gaussian() as f64),
                         is_answer: false,
                     });
@@ -126,7 +130,11 @@ fn generate(rng: &mut Rng, n: usize, style: bool) -> Vec<Query> {
                     is_answer: false,
                 });
             }
-            Query { cands, has_independent_support: has_independent, syndication_only }
+            Query {
+                cands,
+                has_independent_support: has_independent,
+                syndication_only,
+            }
         })
         .collect()
 }
@@ -134,7 +142,12 @@ fn generate(rng: &mut Rng, n: usize, style: bool) -> Vec<Query> {
 fn score_stats(q: &Query) -> (f64, f64) {
     let n = q.cands.len() as f64;
     let mean = q.cands.iter().map(|c| c.snippet_ce).sum::<f64>() / n;
-    let sd = (q.cands.iter().map(|c| (c.snippet_ce - mean).powi(2)).sum::<f64>() / n)
+    let sd = (q
+        .cands
+        .iter()
+        .map(|c| (c.snippet_ce - mean).powi(2))
+        .sum::<f64>()
+        / n)
         .sqrt()
         .max(1e-9);
     (mean, sd)
@@ -165,8 +178,17 @@ fn run_answer(q: &Query) -> AnswerOutcome {
         let cands: Vec<Candidate> = (0..q.cands.len())
             .filter(|i| !fetched.contains(i))
             .map(|i| {
-                let novelty = if read_clusters.contains(&q.cands[i].cluster) { 0.05 } else { 1.0 };
-                Candidate { id: i as u64, p: p_of(q.cands[i].snippet_ce, mean, sd), gain: novelty, cost: 0.2 }
+                let novelty = if read_clusters.contains(&q.cands[i].cluster) {
+                    0.05
+                } else {
+                    1.0
+                };
+                Candidate {
+                    id: i as u64,
+                    p: p_of(q.cands[i].snippet_ce, mean, sd),
+                    gain: novelty,
+                    cost: 0.2,
+                }
             })
             .collect();
         let before = fetched.len();
@@ -188,8 +210,14 @@ fn run_answer(q: &Query) -> AnswerOutcome {
         }
     }
     match best {
-        Some((i, ce)) => AnswerOutcome { hit: q.cands[i].is_answer, winner_ce: ce },
-        None => AnswerOutcome { hit: false, winner_ce: 0.0 },
+        Some((i, ce)) => AnswerOutcome {
+            hit: q.cands[i].is_answer,
+            winner_ce: ce,
+        },
+        None => AnswerOutcome {
+            hit: false,
+            winner_ce: 0.0,
+        },
     }
 }
 
@@ -302,7 +330,10 @@ fn eval_h3(queries: &[Query]) -> H3Curve {
         points.push((tau, coverage, selective_hit));
         tau += 0.05;
     }
-    H3Curve { baseline_hit, points }
+    H3Curve {
+        baseline_hit,
+        points,
+    }
 }
 
 /// Choose τ* = the highest selective-hit point with coverage ≥ 1−ABSTAIN_CAP.
@@ -351,10 +382,22 @@ pub fn run(_cfg: &BenchConfig) -> SuiteResult {
     for (tag, s) in [("tuning", &c1_t), ("holdout", &c1_h), ("styled", &c1_s)] {
         result.metric(format!("c1_precision_{tag}").as_str(), round3(s.precision));
         result.metric(format!("c1_recall_{tag}").as_str(), round3(s.recall));
-        result.metric(format!("c1_same_cluster_counted_{tag}").as_str(), s.same_cluster_counted as u64);
-        result.metric(format!("c1_syndication_averted_{tag}").as_str(), round3(s.syndication_averted));
-        result.metric(format!("c1_hit_corroborated_{tag}").as_str(), round3(s.hit_corroborated));
-        result.metric(format!("c1_hit_uncorroborated_{tag}").as_str(), round3(s.hit_uncorroborated));
+        result.metric(
+            format!("c1_same_cluster_counted_{tag}").as_str(),
+            s.same_cluster_counted as u64,
+        );
+        result.metric(
+            format!("c1_syndication_averted_{tag}").as_str(),
+            round3(s.syndication_averted),
+        );
+        result.metric(
+            format!("c1_hit_corroborated_{tag}").as_str(),
+            round3(s.hit_corroborated),
+        );
+        result.metric(
+            format!("c1_hit_uncorroborated_{tag}").as_str(),
+            round3(s.hit_uncorroborated),
+        );
     }
 
     // ---- H3 abstention ----
@@ -374,7 +417,10 @@ pub fn run(_cfg: &BenchConfig) -> SuiteResult {
     result.metric("h3_selective_hit_styled", round3(sel_s));
     // Publish the hold-out curve (the tradeoff IS the deliverable).
     for (t, cov, sh) in &h3_h.points {
-        result.note(format!("h3 curve holdout: τ={:.2} coverage={:.3} selective_hit={:.3}", t, cov, sh));
+        result.note(format!(
+            "h3 curve holdout: τ={:.2} coverage={:.3} selective_hit={:.3}",
+            t, cov, sh
+        ));
     }
 
     // ---- MDE pre-registration (J3) ----
@@ -408,8 +454,9 @@ pub fn run(_cfg: &BenchConfig) -> SuiteResult {
     // ---- gate (combined; one slot) ----
     let g_c1_precision = c1_t.precision >= 0.9 && c1_h.precision >= 0.9 && c1_s.precision >= 0.9;
     let g_c1_recall = c1_h.recall >= 0.6;
-    let g_c1_no_leak =
-        c1_t.same_cluster_counted == 0 && c1_h.same_cluster_counted == 0 && c1_s.same_cluster_counted == 0;
+    let g_c1_no_leak = c1_t.same_cluster_counted == 0
+        && c1_h.same_cluster_counted == 0
+        && c1_s.same_cluster_counted == 0;
     let g_h3_dominates = sel_h >= h3_h.baseline_hit + H3_MARGIN && cov_h >= 1.0 - ABSTAIN_CAP;
     let g_h3_no_collapse = (sel_h - sel_s).abs() <= NO_COLLAPSE;
     for (k, v) in [
@@ -421,7 +468,8 @@ pub fn run(_cfg: &BenchConfig) -> SuiteResult {
     ] {
         result.metric(k, u8::from(v));
     }
-    let passed = g_c1_precision && g_c1_recall && g_c1_no_leak && g_h3_dominates && g_h3_no_collapse;
+    let passed =
+        g_c1_precision && g_c1_recall && g_c1_no_leak && g_h3_dominates && g_h3_no_collapse;
     if !g_c1_no_leak {
         result.note(
             "KILL: same-cluster syndication leaked into the independent-corroboration count — a false \
@@ -455,8 +503,14 @@ mod tests {
         let qs = generate(&mut rng, 200, false);
         for q in qs.iter().filter(|q| q.syndication_only) {
             let (_indep, same_cluster_counted, averted) = corroboration(q);
-            assert_eq!(same_cluster_counted, 0, "same-cluster copies must never be counted");
-            assert_eq!(averted, 1, "the syndicated cluster must be detected and averted");
+            assert_eq!(
+                same_cluster_counted, 0,
+                "same-cluster copies must never be counted"
+            );
+            assert_eq!(
+                averted, 1,
+                "the syndicated cluster must be detected and averted"
+            );
         }
     }
 
@@ -470,6 +524,9 @@ mod tests {
             .filter(|q| corroboration(q).0 >= 1)
             .count();
         let truth = qs.iter().filter(|q| q.has_independent_support).count();
-        assert!(flagged as f64 / truth.max(1) as f64 >= 0.6, "recall too low: {flagged}/{truth}");
+        assert!(
+            flagged as f64 / truth.max(1) as f64 >= 0.6,
+            "recall too low: {flagged}/{truth}"
+        );
     }
 }

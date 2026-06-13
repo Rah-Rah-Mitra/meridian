@@ -371,19 +371,12 @@ fn build_signals(
         .collect();
     let embs: Vec<Vec<Vec<f32>>> = queries
         .iter()
-        .map(|q| {
-            embedder.embed_batch(&q.cands.iter().map(|c| c.text.clone()).collect::<Vec<_>>())
-        })
+        .map(|q| embedder.embed_batch(&q.cands.iter().map(|c| c.text.clone()).collect::<Vec<_>>()))
         .collect();
     (sketches, embs)
 }
 
-fn eval(
-    queries: &[Query],
-    sketches: &[Vec<Sketch>],
-    embs: &[Vec<Vec<f32>>],
-    sel: Selector,
-) -> Agg {
+fn eval(queries: &[Query], sketches: &[Vec<Sketch>], embs: &[Vec<Vec<f32>>], sel: Selector) -> Agg {
     let out: Vec<Outcome> = queries
         .iter()
         .zip(sketches)
@@ -472,7 +465,11 @@ pub fn run(cfg: &BenchConfig) -> SuiteResult {
          {:.2}pp; the +2pp hit-rate arm of the gate is {} at this n",
         p_base,
         mde * 100.0,
-        if mde * 100.0 <= 2.0 { "powered" } else { "UNDERPOWERED" }
+        if mde * 100.0 <= 2.0 {
+            "powered"
+        } else {
+            "UNDERPOWERED"
+        }
     ));
 
     let combiners: Vec<(&str, Selector)> = {
@@ -553,14 +550,8 @@ pub fn run(cfg: &BenchConfig) -> SuiteResult {
 
     result.metric("holdout_shipped_hit_rate", round3(shipped.hit_rate));
     result.metric("holdout_candidate_hit_rate", round3(cand.hit_rate));
-    result.metric(
-        "holdout_shipped_mean_fetches",
-        round3(shipped.mean_fetches),
-    );
-    result.metric(
-        "holdout_candidate_mean_fetches",
-        round3(cand.mean_fetches),
-    );
+    result.metric("holdout_shipped_mean_fetches", round3(shipped.mean_fetches));
+    result.metric("holdout_candidate_mean_fetches", round3(cand.mean_fetches));
 
     let hit_delta_pp = (cand.hit_rate - shipped.hit_rate) * 100.0;
     let fetch_save_pct = if shipped.mean_fetches > 0.0 {
@@ -624,10 +615,7 @@ pub fn run(cfg: &BenchConfig) -> SuiteResult {
     // A clean record-NO on the hold-out (gate did not amend) is decisive when
     // the fetch arm is observable (always, n=QUERIES) — the only inconclusive
     // case is when neither arm moved AND the +2pp arm is underpowered.
-    let inconclusive = !amend
-        && !fewer_fetches
-        && fetch_save_pct.abs() < 1e-9
-        && !powered;
+    let inconclusive = !amend && !fewer_fetches && fetch_save_pct.abs() < 1e-9 && !powered;
     result.metric("verdict_powered", u8::from(powered));
     let valid_adjudication = decisive && !inconclusive;
     result.gate(

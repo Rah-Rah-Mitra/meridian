@@ -367,7 +367,8 @@ mod tests {
         assert!(rows.iter().all(|d| d.arm == 0 && d.reward));
         assert!(rows.iter().all(|d| (d.propensity - 0.93).abs() < 1e-6));
         assert!(
-            rows.iter().all(|d| (d.reward_graded - 191.0 / 255.0).abs() < 0.005),
+            rows.iter()
+                .all(|d| (d.reward_graded - 191.0 / 255.0).abs() < 0.005),
             "A2 graded reward round-trips through row[11]"
         );
         let _ = std::fs::remove_dir_all(dir);

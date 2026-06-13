@@ -278,8 +278,17 @@ fn compiled_suites() -> Vec<&'static str> {
     // `mut` is unused only when every bench feature is off.
     #[allow(unused_mut)]
     let mut v = vec![
-        "fusion", "synfarm", "spike", "evidence", "ope", "voi", "changepoint", "answer", "seasonal",
-        "answer_trust", "answer_embed",
+        "fusion",
+        "synfarm",
+        "spike",
+        "evidence",
+        "ope",
+        "voi",
+        "changepoint",
+        "answer",
+        "seasonal",
+        "answer_trust",
+        "answer_embed",
     ];
     #[cfg(feature = "bench-embed")]
     v.extend(["embed", "thermal"]);

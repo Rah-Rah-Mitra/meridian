@@ -14,7 +14,7 @@
 //! the binary, not a request-amplification surface.
 
 use axum::extract::Path;
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 
 /// One embedded asset: its MIME type and its bytes baked into the binary.

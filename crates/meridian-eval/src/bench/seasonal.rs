@@ -124,8 +124,16 @@ fn simulate(seed: u64, counts: Counts, cycle: Cycle, offset: u32) -> Replicate {
             rng.next_gamma(2.0, 3.0).max(0.5)
         };
         let (factor, onset, ramp_len) = match counts {
-            Counts::Poisson => ([2.0, 3.0, 4.0][rng.below(3)], 20 + rng.below(4), 3 + rng.below(3)),
-            Counts::NegBin => ([2.0, 3.0][rng.below(2)], 20 + rng.below(4), 3 + rng.below(3)),
+            Counts::Poisson => (
+                [2.0, 3.0, 4.0][rng.below(3)],
+                20 + rng.below(4),
+                3 + rng.below(3),
+            ),
+            Counts::NegBin => (
+                [2.0, 3.0][rng.below(2)],
+                20 + rng.below(4),
+                3 + rng.below(3),
+            ),
         };
 
         let mut days = Vec::with_capacity(DAYS);
@@ -186,7 +194,9 @@ fn score(reps: &[Replicate], lambda: Option<f64>) -> Arm {
         let inputs: Vec<MoverInput> = rep
             .series
             .iter()
-            .map(|s| MoverInput { days: s.days.clone() })
+            .map(|s| MoverInput {
+                days: s.days.clone(),
+            })
             .collect();
         let stats = match lambda {
             None => mover_stats(&inputs),
@@ -271,28 +281,52 @@ pub fn run(_cfg: &BenchConfig) -> SuiteResult {
     // The GATE judges the FIXED-PEAK phase (worst realistic systematic bias — a
     // weekly report always run on the same peak weekday). The AVERAGED phase
     // (continuous ad-hoc querying) is reported informationally below.
-    let tuning = gen_reps(0x5EA5_2026, Counts::Poisson, Cycle::WeekendDip, Phase::FixedPeak);
-    let held_out = gen_reps(0x0DD5_EA50, Counts::NegBin, Cycle::MondaySurge, Phase::FixedPeak);
+    let tuning = gen_reps(
+        0x5EA5_2026,
+        Counts::Poisson,
+        Cycle::WeekendDip,
+        Phase::FixedPeak,
+    );
+    let held_out = gen_reps(
+        0x0DD5_EA50,
+        Counts::NegBin,
+        Cycle::MondaySurge,
+        Phase::FixedPeak,
+    );
     let flat_pois = gen_reps(0xF1A7_2026, Counts::Poisson, Cycle::None, Phase::FixedPeak);
     let flat_nb = gen_reps(0xF1A7_0DD5, Counts::NegBin, Cycle::None, Phase::FixedPeak);
 
     // Informational: the same weekend-dip cycle under continuous (phase-averaged)
     // querying — the realistic-deployment FPR when the report day is not fixed.
-    let avg_tuning = gen_reps(0x5EA5_2026, Counts::Poisson, Cycle::WeekendDip, Phase::Averaged);
+    let avg_tuning = gen_reps(
+        0x5EA5_2026,
+        Counts::Poisson,
+        Cycle::WeekendDip,
+        Phase::Averaged,
+    );
     let avg_unadj = score(&avg_tuning, None);
 
     // ---- sweep λ on the TUNING seasonal variant only (risk #21) ----
     let unadj_t = score(&tuning, None);
-    result.metric("seasonal_null_fpr_unadjusted_tuning", round5(unadj_t.null_fpr));
-    result.metric("seasonal_ramp_tpr_unadjusted_tuning", round3(unadj_t.ramp_tpr));
-    result.metric("seasonal_spike_tpr_unadjusted_tuning", round3(unadj_t.spike_tpr));
+    result.metric(
+        "seasonal_null_fpr_unadjusted_tuning",
+        round5(unadj_t.null_fpr),
+    );
+    result.metric(
+        "seasonal_ramp_tpr_unadjusted_tuning",
+        round3(unadj_t.ramp_tpr),
+    );
+    result.metric(
+        "seasonal_spike_tpr_unadjusted_tuning",
+        round3(unadj_t.spike_tpr),
+    );
 
     let mut chosen: Option<(f64, Arm, f64)> = None; // (λ, adj_arm, reduction)
     for l in LAMBDA_SWEEP {
         let adj = score(&tuning, Some(l));
         let red = reduction(unadj_t.null_fpr, adj.null_fpr);
-        let tpr_ok = adj.ramp_tpr >= unadj_t.ramp_tpr - 0.02
-            && adj.spike_tpr >= unadj_t.spike_tpr - 0.02;
+        let tpr_ok =
+            adj.ramp_tpr >= unadj_t.ramp_tpr - 0.02 && adj.spike_tpr >= unadj_t.spike_tpr - 0.02;
         result.note(format!(
             "sweep λ={l}: tuning adj_null_fpr={:.5} reduction={:.2}x ramp_tpr={:.3} spike_tpr={:.3} tpr_ok={}",
             adj.null_fpr, red, adj.ramp_tpr, adj.spike_tpr, tpr_ok
@@ -318,8 +352,14 @@ pub fn run(_cfg: &BenchConfig) -> SuiteResult {
     result.metric("chosen_lambda", lambda);
     // Informational averaged-phase reduction at the frozen λ.
     let avg_adj = score(&avg_tuning, Some(lambda));
-    result.metric("avg_phase_null_fpr_unadjusted_tuning", round5(avg_unadj.null_fpr));
-    result.metric("avg_phase_null_fpr_adjusted_tuning", round5(avg_adj.null_fpr));
+    result.metric(
+        "avg_phase_null_fpr_unadjusted_tuning",
+        round5(avg_unadj.null_fpr),
+    );
+    result.metric(
+        "avg_phase_null_fpr_adjusted_tuning",
+        round5(avg_adj.null_fpr),
+    );
     result.metric(
         "avg_phase_fpr_reduction_tuning",
         round2(reduction(avg_unadj.null_fpr, avg_adj.null_fpr)),
@@ -332,9 +372,15 @@ pub fn run(_cfg: &BenchConfig) -> SuiteResult {
     let unadj_h = score(&held_out, None);
     let adj_h = score(&held_out, Some(lambda));
     let red_h = reduction(unadj_h.null_fpr, adj_h.null_fpr);
-    result.metric("seasonal_null_fpr_unadjusted_holdout", round5(unadj_h.null_fpr));
+    result.metric(
+        "seasonal_null_fpr_unadjusted_holdout",
+        round5(unadj_h.null_fpr),
+    );
     result.metric("seasonal_null_fpr_adjusted_holdout", round5(adj_h.null_fpr));
-    result.metric("seasonal_ramp_tpr_unadjusted_holdout", round3(unadj_h.ramp_tpr));
+    result.metric(
+        "seasonal_ramp_tpr_unadjusted_holdout",
+        round3(unadj_h.ramp_tpr),
+    );
     result.metric("seasonal_ramp_tpr_adjusted_holdout", round3(adj_h.ramp_tpr));
     result.metric("seasonal_fpr_reduction_holdout", round2(red_h));
 
@@ -344,8 +390,8 @@ pub fn run(_cfg: &BenchConfig) -> SuiteResult {
         let u = score(reps, None);
         let a = score(reps, Some(lambda));
         let fpr_ok = a.null_fpr <= u.null_fpr + 1e-9;
-        let tpr_ok = (a.ramp_tpr - u.ramp_tpr).abs() <= 0.02
-            && (a.spike_tpr - u.spike_tpr).abs() <= 0.02;
+        let tpr_ok =
+            (a.ramp_tpr - u.ramp_tpr).abs() <= 0.02 && (a.spike_tpr - u.spike_tpr).abs() <= 0.02;
         (fpr_ok && tpr_ok, u.null_fpr, a.null_fpr)
     };
     let (par_p, par_p_u, par_p_a) = parity(&flat_pois);
@@ -385,7 +431,10 @@ pub fn run(_cfg: &BenchConfig) -> SuiteResult {
     let g_red_tuning = red_t >= 1.5;
     let g_red_holdout = red_h >= 1.0;
     let g_powered = abs_delta >= mde80;
-    result.metric("gate_seasonal_fpr_reduction_ge_1_5_tuning", u8::from(g_red_tuning));
+    result.metric(
+        "gate_seasonal_fpr_reduction_ge_1_5_tuning",
+        u8::from(g_red_tuning),
+    );
     result.metric("gate_seasonal_no_collapse_holdout", u8::from(g_red_holdout));
     result.metric("gate_seasonal_tpr_nonregression", u8::from(g_tpr));
     result.metric("gate_nonseasonal_parity", u8::from(g_parity));
@@ -461,9 +510,21 @@ mod tests {
     fn generator_plants_classes_and_cycle() {
         let rep = simulate(7, Counts::Poisson, Cycle::WeekendDip, 1);
         assert_eq!(rep.series.len(), N_SERIES);
-        assert_eq!(rep.series.iter().filter(|s| s.class == Class::Null).count(), N_NULL);
-        assert_eq!(rep.series.iter().filter(|s| s.class == Class::Ramp).count(), N_RAMP);
-        assert_eq!(rep.series.iter().filter(|s| s.class == Class::Spike).count(), N_SPIKE);
+        assert_eq!(
+            rep.series.iter().filter(|s| s.class == Class::Null).count(),
+            N_NULL
+        );
+        assert_eq!(
+            rep.series.iter().filter(|s| s.class == Class::Ramp).count(),
+            N_RAMP
+        );
+        assert_eq!(
+            rep.series
+                .iter()
+                .filter(|s| s.class == Class::Spike)
+                .count(),
+            N_SPIKE
+        );
         for s in &rep.series {
             assert_eq!(s.days.len(), DAYS);
         }
