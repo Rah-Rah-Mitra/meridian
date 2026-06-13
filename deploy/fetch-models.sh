@@ -29,7 +29,11 @@ for entry in "${ARTIFACTS[@]}"; do
     echo ">> exists: $rel"
   else
     echo ">> fetching $rel"
-    curl -fSL --retry 3 -o "$out.tmp" "$url"
+    # HuggingFace rate-limits anonymous CI fetches with HTTP 429; 3 retries over
+    # ~7s was too short and intermittently reddened CI on unrelated commits.
+    # Ride out a 429 burst: more retries, fixed 10s spacing (~60s window), and
+    # --retry-all-errors so curl also retries 403/transient HTTP failures under -f.
+    curl -fSL --retry 6 --retry-delay 10 --retry-all-errors --connect-timeout 30 -o "$out.tmp" "$url"
     mv "$out.tmp" "$out"
   fi
   actual=$(sha256sum "$out" | cut -d' ' -f1)
