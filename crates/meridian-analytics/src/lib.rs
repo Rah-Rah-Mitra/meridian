@@ -8,6 +8,7 @@
 pub mod burst;
 pub mod gdelt;
 pub mod graph;
+pub mod seasonal;
 pub mod stats;
 pub mod store;
 pub mod trends;

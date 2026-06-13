@@ -46,26 +46,56 @@ pub struct MoverInput {
 /// EB + quasi-NB z + BH over a set of temporal units (suite-10 candidate,
 /// k-ring 0). Units need ≥2 days; callers filter shorter windows out.
 pub fn mover_stats(units: &[MoverInput]) -> Vec<MoverStats> {
-    let n = units.len();
+    let series: Vec<Vec<f64>> = units
+        .iter()
+        .map(|u| u.days.iter().map(|&x| f64::from(x)).collect())
+        .collect();
+    mover_stats_core(&series)
+}
+
+/// E3 seasonal-adjusted movers: identical to [`mover_stats`] but each unit's
+/// day-series is day-of-week de-seasonalised (`seasonal::deseasonalize`) before
+/// the EB fit, removing the weekly cycle that inflates the latest-day z and is
+/// correlated across the whole BH family (so BH-FDR cannot absorb it). All units
+/// share the report window, hence the same `first_day` (window start, in
+/// `CounterKey` unix-epoch-day units; `dow(i) = (first_day + i) % 7`). Falls back
+/// to the shipped behaviour for windows shorter than `seasonal::SEASONAL_MIN_DAYS`.
+pub fn mover_stats_seasonal(units: &[MoverInput], first_day: u32, lambda: f64) -> Vec<MoverStats> {
+    let dow0 = (first_day % 7) as usize;
+    let series: Vec<Vec<f64>> = units
+        .iter()
+        .map(|u| {
+            let f: Vec<f64> = u.days.iter().map(|&x| f64::from(x)).collect();
+            crate::seasonal::deseasonalize(&f, dow0, lambda)
+        })
+        .collect();
+    mover_stats_core(&series)
+}
+
+/// Shared EB + quasi-NB z + BH core over per-unit f64 day-series (latest LAST).
+/// `mover_stats` feeds it the raw counts; `mover_stats_seasonal` feeds it the
+/// day-of-week de-seasonalised counts. The arithmetic is identical either way.
+fn mover_stats_core(series: &[Vec<f64>]) -> Vec<MoverStats> {
+    let n = series.len();
     if n == 0 {
         return Vec::new();
     }
-    let window_days = units
+    let window_days = series
         .iter()
-        .map(|u| u.days.len().saturating_sub(1))
+        .map(|s| s.len().saturating_sub(1))
         .max()
         .unwrap_or(0)
         .max(1) as f64;
 
     // Baseline rate per unit (window excluding the latest day).
-    let baseline: Vec<f64> = units
+    let baseline: Vec<f64> = series
         .iter()
-        .map(|u| {
-            let w = &u.days[..u.days.len().saturating_sub(1)];
+        .map(|s| {
+            let w = &s[..s.len().saturating_sub(1)];
             if w.is_empty() {
                 0.0
             } else {
-                w.iter().map(|&x| f64::from(x)).sum::<f64>() / w.len() as f64
+                w.iter().sum::<f64>() / w.len() as f64
             }
         })
         .collect();
@@ -74,16 +104,12 @@ pub fn mover_stats(units: &[MoverInput]) -> Vec<MoverStats> {
     // (NB2 moment identity var = m + m²/r; ratio-of-sums beats per-unit ratios
     // at ~2-week windows). Self-reduces to ≈0 on equidispersed counts.
     let (mut over_num, mut over_den) = (0.0f64, 0.0f64);
-    for (u, &xbar) in units.iter().zip(baseline.iter()) {
-        let w = &u.days[..u.days.len().saturating_sub(1)];
+    for (s, &xbar) in series.iter().zip(baseline.iter()) {
+        let w = &s[..s.len().saturating_sub(1)];
         if w.len() < 2 || xbar <= 0.0 {
             continue;
         }
-        let s2 = w
-            .iter()
-            .map(|&x| (f64::from(x) - xbar).powi(2))
-            .sum::<f64>()
-            / (w.len() - 1) as f64;
+        let s2 = w.iter().map(|&x| (x - xbar).powi(2)).sum::<f64>() / (w.len() - 1) as f64;
         over_num += (s2 - xbar).max(0.0);
         over_den += xbar * xbar;
     }
@@ -108,9 +134,9 @@ pub fn mover_stats(units: &[MoverInput]) -> Vec<MoverStats> {
 
     let mut zs = Vec::with_capacity(n);
     let mut shrunk = Vec::with_capacity(n);
-    for (u, &xbar) in units.iter().zip(baseline.iter()) {
-        let latest = f64::from(*u.days.last().unwrap_or(&0));
-        let w_len = u.days.len().saturating_sub(1).max(1) as f64;
+    for (s, &xbar) in series.iter().zip(baseline.iter()) {
+        let latest = *s.last().unwrap_or(&0.0);
+        let w_len = s.len().saturating_sub(1).max(1) as f64;
         let post_base = (alpha + xbar * w_len) / (beta + w_len);
         let expected = post_base.max(1e-9);
         let z = (latest - expected) / (expected + inv_r * expected * expected).sqrt();
@@ -122,12 +148,12 @@ pub fn mover_stats(units: &[MoverInput]) -> Vec<MoverStats> {
     let pvals: Vec<f64> = zs.iter().map(|&z| normal_sf(z)).collect();
     let qvals = bh_qvalues(&pvals);
 
-    units
+    series
         .iter()
         .enumerate()
-        .map(|(i, u)| {
+        .map(|(i, s)| {
             let significant = qvals[i] <= Q_LEVEL;
-            let latest = f64::from(*u.days.last().unwrap_or(&0));
+            let latest = *s.last().unwrap_or(&0.0);
             let elevated = baseline[i] > 0.0 && latest / baseline[i].max(1e-9) >= 2.0;
             MoverStats {
                 shrunk_rate: shrunk[i] as f32,

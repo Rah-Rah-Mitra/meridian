@@ -79,6 +79,10 @@ const SUITES: &[(&str, &str)] = &[
         "voi-embed",
         "suite 15b: embedding-coverage study vs the frozen v0.4.0 selector — amend-or-record (needs models/)",
     ),
+    (
+        "seasonal",
+        "suite 19: E3 day-of-week seasonal-baseline study, shipped z vs deseasonalised — gate FPR↓≥1.5× at matched TPR",
+    ),
 ];
 
 fn main() -> ExitCode {
@@ -174,6 +178,10 @@ fn main() -> ExitCode {
 
     if wants("changepoint") {
         run_and_print(&mut report, meridian_eval::bench::changepoint::run(&cfg));
+    }
+
+    if wants("seasonal") {
+        run_and_print(&mut report, meridian_eval::bench::seasonal::run(&cfg));
     }
 
     if wants("answer") {
