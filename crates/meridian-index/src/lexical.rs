@@ -720,6 +720,90 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// G2 regression (roadmap §10.2 F1): `url_keys_by_domain` enumerates at most
+    /// 10k docs per call (a `TopDocs` bound), so a domain with >10k docs cannot
+    /// be forgotten in a single enumerate-delete pass. The forget path drains it
+    /// by looping enumerate→delete→commit→reload until enumeration returns empty.
+    /// This test exercises that exact mechanism directly against `LexicalIndex`
+    /// (the loop the `Ingestor::forget_domain` wrapper relies on) and asserts
+    /// nothing of the domain survives — guarding the privacy.md promise that
+    /// domain forget removes "every currently indexed document of the domain".
+    #[test]
+    fn forget_domain_drains_past_the_10k_enumeration_cap() {
+        let (index, dir) = temp_index();
+        let dh = domain_hash("big.example");
+        // 12_500 docs under ONE domain: more than one 10k enumeration window, so
+        // a single pass cannot drain it. A handful of other-domain docs verify
+        // the drain is domain-scoped and leaves the rest intact.
+        let n_target: u64 = 12_500;
+        let n_other: u64 = 7;
+        for i in 0..n_target {
+            let url = format!("https://big.example/page/{i}");
+            index
+                .add(&IndexDoc {
+                    domain_hash: dh,
+                    ..doc(&url, "Bulk", "domain forget bulk doc")
+                })
+                .unwrap();
+        }
+        for i in 0..n_other {
+            let url = format!("https://other.example/{i}");
+            index
+                .add(&IndexDoc {
+                    domain_hash: domain_hash("other.example"),
+                    ..doc(&url, "Keep", "unrelated domain doc")
+                })
+                .unwrap();
+        }
+        index.commit().unwrap();
+        assert_eq!(index.num_docs(), n_target + n_other);
+
+        // One pass alone is capped: it can enumerate at most 10k of the 12_500.
+        let first = index.url_keys_by_domain(dh).unwrap();
+        assert_eq!(
+            first.len(),
+            10_000,
+            "single enumeration is bounded by the TopDocs cap"
+        );
+
+        // The drain loop the forget path uses: enumerate (≤10k) → delete → commit
+        // → reload, repeat until the domain enumeration drains to empty.
+        let mut total_removed = 0usize;
+        let max_passes = (index.num_docs() as usize / 10_000) + 2;
+        let mut passes = 0;
+        loop {
+            passes += 1;
+            assert!(passes <= max_passes, "drain did not converge within bound");
+            let keys = index.url_keys_by_domain(dh).unwrap();
+            if keys.is_empty() {
+                break;
+            }
+            for k in &keys {
+                index.delete_by_url_key(*k);
+            }
+            index.commit().unwrap();
+            total_removed += keys.len();
+        }
+
+        // The whole domain is gone; the other-domain docs are untouched.
+        assert_eq!(total_removed, n_target as usize, "every domain doc removed");
+        assert!(
+            index.url_keys_by_domain(dh).unwrap().is_empty(),
+            "no doc of the forgotten domain remains enumerable"
+        );
+        assert_eq!(
+            index.num_docs(),
+            n_other,
+            "only the unrelated-domain docs survive"
+        );
+        assert!(
+            passes > 1,
+            "the >10k domain required multiple drain passes ({passes})"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn reopen_preserves_documents() {
         let (index, dir) = temp_index();
