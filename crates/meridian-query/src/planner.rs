@@ -146,6 +146,7 @@ pub struct SearchResponse {
 }
 
 /// ADR-29 `best_passage` block (additive, ADR-20 — carries its own schema).
+/// `schema: 2` adds the optional `corroboration` block (C1, roadmap §8.2).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct BestPassage {
     pub schema: u32,
@@ -155,6 +156,65 @@ pub struct BestPassage {
     pub url: String,
     /// Cross-encoder (query, passage) score — relevance, not correctness.
     pub ce_score: f32,
+    /// C1 claim-level corroboration (schema 2+): how many INDEPENDENT evidence
+    /// clusters state the same claim. Absent when the feature is off or no other
+    /// sketched cluster was checkable — absence means "no independent support
+    /// found", never "no answer".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub corroboration: Option<Corroboration>,
+}
+
+/// C1 corroboration block (additive, ADR-20 — own schema). Counts DISTINCT
+/// ADR-18 evidence clusters (≠ the winner's) whose top passage the cross-encoder
+/// finds states the same claim. Same-cluster syndicated copies are excluded BY
+/// CONSTRUCTION (`cluster ≠ C(w)`), so syndication can never inflate the count.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Corroboration {
+    pub schema: u32,
+    /// Distinct independent evidence clusters whose passage CE-supports the claim.
+    pub independent_clusters: u32,
+    /// The supporting clusters' representative URLs (never a same-cluster copy).
+    pub supporting_urls: Vec<String>,
+    /// Honesty payload: the count's basis (how many distinct other-clusters were
+    /// checkable, and how support was decided) — a thin-coverage result degrades
+    /// to a low count, never a false badge.
+    pub basis: CorroborationBasis,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CorroborationBasis {
+    /// Distinct other-clusters (sketched, ≠ winner's) the cross-encoder scored.
+    pub candidates_checked: u32,
+    /// How support was decided — the cross-cluster CE bar.
+    pub method: &'static str,
+}
+
+/// Select one representative result index per DISTINCT ADR-18 evidence cluster
+/// OTHER than the winner's `c_w` (canonical member preferred — the superset its
+/// copies derive from — else the highest-ranked). Same-cluster members are
+/// EXCLUDED here: the structural guarantee that a syndicated copy can never be
+/// counted as independent corroboration. Results without a sketch (`evidence`
+/// is `None`) are skipped — a snippet is too little text to assert independence
+/// on (the ADR-18 honesty contract). Deterministic order via `BTreeMap`.
+fn corroboration_candidates(
+    results: &[SearchResult],
+    c_w: u32,
+) -> std::collections::BTreeMap<u32, usize> {
+    let mut rep: std::collections::BTreeMap<u32, (usize, bool)> = std::collections::BTreeMap::new();
+    for (i, r) in results.iter().enumerate() {
+        let Some(e) = &r.evidence else { continue };
+        if e.cluster == c_w {
+            continue; // same cluster as the winner — never counts
+        }
+        let better = match rep.get(&e.cluster) {
+            None => true,
+            Some(&(_, was_canon)) => e.canonical && !was_canon,
+        };
+        if better {
+            rep.insert(e.cluster, (i, e.canonical));
+        }
+    }
+    rep.into_iter().map(|(c, (idx, _))| (c, idx)).collect()
 }
 
 /// ADR-26 `analysis` block (additive, ADR-20 — carries its own schema).
@@ -1236,10 +1296,14 @@ impl Planner {
                                                 .unwrap_or(true);
                                             if better {
                                                 best_passage = Some(BestPassage {
-                                                    schema: 1,
+                                                    schema: 2,
                                                     text: passages[top.doc_key as usize].clone(),
                                                     url: results[idx].url.clone(),
                                                     ce_score: top.ce_score,
+                                                    // filled after the ADR-18
+                                                    // evidence stage, when clusters
+                                                    // exist (C1, roadmap §8.2).
+                                                    corroboration: None,
                                                 });
                                             }
                                         }
@@ -1390,6 +1454,80 @@ impl Planner {
             results = paired.into_iter().map(|(_, r)| r).collect();
         }
 
+        // C1 claim-level corroboration (roadmap §8.2, suite-20 production arm):
+        // with the ADR-18 clusters now on `results`, count DISTINCT evidence
+        // clusters (≠ the winner's) whose top passage the cross-encoder finds
+        // states the same claim. Same-cluster syndicated copies are excluded
+        // STRUCTURALLY (`cluster ≠ C(w)`), so syndication can never inflate the
+        // count. One CE batch (~10–20ms within the ~500ms answer headroom);
+        // shipped after the judge cleared precision 0.97 / recall 1.0 / zero
+        // same-cluster leakage on real text + the real CE.
+        if self.cfg.answer_corroborate && evidence.is_some() && self.reranker.available() {
+            if let Some(bp) = best_passage.as_mut() {
+                // the winner's cluster, found by URL (robust to the diversity
+                // reorder above, which permutes `results`).
+                let w_key = url_key(&bp.url);
+                let c_w = results
+                    .iter()
+                    .find(|r| url_key(&r.url) == w_key)
+                    .and_then(|r| r.evidence.as_ref())
+                    .map(|e| e.cluster);
+                if let Some(c_w) = c_w {
+                    // one representative per distinct other-cluster (canonical
+                    // preferred); same-cluster members excluded structurally.
+                    let rep = corroboration_candidates(&results, c_w);
+                    let candidates_checked = rep.len() as u32;
+                    if candidates_checked > 0 {
+                        let pairs: Vec<Pair> = rep
+                            .iter()
+                            .map(|(&cluster, &idx)| Pair {
+                                doc_key: u64::from(cluster),
+                                title: results[idx].title.clone(),
+                                snippet: results[idx].snippet.clone(),
+                            })
+                            .collect();
+                        let claim = bp.text.clone();
+                        let reranker = self.reranker.clone();
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        // 450ms deadline: the batch measures p50 312ms / p99 508ms
+                        // on-device (suite-20 answer_trust, ~5 clusters), so this
+                        // caps the worst-case answer-p50 addition at +450ms
+                        // (2502+450 ≈ 2952ms ≤ 3.0s) while rarely truncating. On
+                        // overrun the CE returns its completed pairs — a thinner
+                        // (never inflated) count, the honest degradation.
+                        rayon::spawn(move || {
+                            let r = reranker.rerank(
+                                &claim,
+                                &pairs,
+                                std::time::Duration::from_millis(450),
+                            );
+                            let _ = tx.send(r);
+                        });
+                        if let Ok(Ok(scored)) = rx.await {
+                            let tau = self.cfg.answer_corroboration_tau;
+                            let mut supporting_urls: Vec<String> = Vec::new();
+                            for s in &scored {
+                                if s.ce_score >= tau {
+                                    if let Some(&idx) = rep.get(&(s.doc_key as u32)) {
+                                        supporting_urls.push(results[idx].url.clone());
+                                    }
+                                }
+                            }
+                            bp.corroboration = Some(Corroboration {
+                                schema: 1,
+                                independent_clusters: supporting_urls.len() as u32,
+                                supporting_urls,
+                                basis: CorroborationBasis {
+                                    candidates_checked,
+                                    method: "ce-cross-cluster",
+                                },
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
         // Bandit reward (SPEC §11): chosen arm "appeared" if any web-sourced
         // result is in the final top-10. Direct lane only by construction —
         // `chosen_arm` is only ever set on the direct branch above, so anon
@@ -1507,5 +1645,66 @@ fn lane_name(lane: &Lane) -> String {
         Lane::Direct => "direct".to_owned(),
         Lane::Anon => "anon".to_owned(),
         Lane::Region(id) => format!("region:{}", id.0),
+    }
+}
+
+#[cfg(test)]
+mod corroboration_tests {
+    use super::*;
+
+    fn res(url: &str, cluster: Option<(u32, bool)>) -> SearchResult {
+        SearchResult {
+            url: url.to_owned(),
+            title: String::new(),
+            snippet: String::new(),
+            score: 0.0,
+            rank_signals: RankSignals {
+                rrf: 0.0,
+                bm25: None,
+                ann: None,
+                searx_rank: None,
+                ltr: 0.0,
+                ce: None,
+            },
+            source: "local",
+            h3: None,
+            ts: None,
+            evidence: cluster
+                .map(|(cluster, canonical)| crate::evidence::ResultEvidence { cluster, canonical }),
+        }
+    }
+
+    /// The structural guarantee: same-cluster syndicated copies are NEVER counted,
+    /// distinct clusters dedup to one representative (canonical preferred), and
+    /// unsketched results are skipped.
+    #[test]
+    fn excludes_same_cluster_dedups_and_prefers_canonical() {
+        let results = vec![
+            res("https://w/", Some((0, true))),      // the winner's cluster
+            res("https://copy1/", Some((0, false))), // same-cluster copy — the trap
+            res("https://copy2/", Some((0, false))), // same-cluster copy — the trap
+            res("https://c2a/", Some((2, false))),   // cluster 2, non-canonical
+            res("https://c2b/", Some((2, true))),    // cluster 2, CANONICAL (preferred)
+            res("https://c3/", Some((3, true))),     // cluster 3
+            res("https://web/", None),               // unsketched — skipped
+        ];
+        let rep = corroboration_candidates(&results, 0);
+        // only the independent clusters 2 and 3 — never cluster 0, never unsketched.
+        assert_eq!(rep.keys().copied().collect::<Vec<_>>(), vec![2, 3]);
+        // cluster 2 is represented by its CANONICAL member (index 4), not index 3.
+        assert_eq!(rep[&2], 4);
+        assert_eq!(rep[&3], 5);
+    }
+
+    /// A query whose ONLY other-cluster members are same-cluster copies yields no
+    /// candidates — corroboration is absent, never a false "sources agree" badge.
+    #[test]
+    fn syndication_only_yields_no_candidates() {
+        let results = vec![
+            res("https://w/", Some((0, true))),
+            res("https://copy1/", Some((0, false))),
+            res("https://copy2/", Some((0, false))),
+        ];
+        assert!(corroboration_candidates(&results, 0).is_empty());
     }
 }

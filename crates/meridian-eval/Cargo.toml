@@ -19,6 +19,11 @@ bench-embed = ["dep:model2vec-rs"]
 bench-lexical = ["dep:tantivy"]
 bench-ann = ["dep:usearch", "dep:cxx"]
 bench-rerank = ["dep:tract-onnx", "dep:tokenizers"]
+# Suite 20 C1 arm-B: the REAL production cross-encoder (ort, INT8 model) over a
+# planted claim corpus — validates the shipped corroboration support signal, not
+# a synthetic stand-in. ort needs glibc ≥2.39 (gnu, ADR-02); on the default
+# musl/scratch build the arm is compiled out and the suite reports it deferred.
+bench-ce-real = ["dep:meridian-rerank", "meridian-rerank/ort-backend"]
 bench-anon = ["dep:arti-client", "dep:tokio", "dep:rustls"]
 # Suite 12 noise-floor probe: queries a RUNNING meridiand over localhost HTTP.
 # Network-touching — device-only, never CI (04-bench-plan §6).
@@ -45,6 +50,8 @@ usearch = { workspace = true, optional = true }
 cxx = { workspace = true, optional = true }
 tract-onnx = { workspace = true, optional = true }
 tokenizers = { workspace = true, optional = true }
+# Real production CE for the suite-20 C1 arm (gnu/ort only — see bench-ce-real).
+meridian-rerank = { workspace = true, optional = true }
 arti-client = { workspace = true, optional = true, features = [
     "tokio",
     "rustls",

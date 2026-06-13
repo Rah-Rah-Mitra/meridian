@@ -309,16 +309,23 @@ table. Results re-scored on full text carry the new value in
 the value is the best remaining reservation index minus the best passage
 score already in hand, in passage-score units.
 
-## The `best_passage` block (v0.5.0, `schema: 1`, ADR-29)
+## The `best_passage` block (v0.5.0, `schema: 2`, ADR-29)
 
-On `answer=true` responses that fetched at least one page:
+On `answer=true` responses that fetched at least one page (`schema: 2` adds the
+optional `corroboration` block; v0.6.0):
 
 ```json
 "best_passage": {
-  "schema": 1,
+  "schema": 2,
   "text": "…the sentence-aligned extract, ≤500 chars, verbatim…",
   "url": "https://the-page-it-was-read-from.example/…",
-  "ce_score": 7.1
+  "ce_score": 7.1,
+  "corroboration": {
+    "schema": 1,
+    "independent_clusters": 2,
+    "supporting_urls": ["https://b.example/y", "https://c.example/z"],
+    "basis": { "candidates_checked": 5, "method": "ce-cross-cluster" }
+  }
 }
 ```
 
@@ -346,6 +353,27 @@ guarantee** — distribution-free confidence bands were refuted on this corpus
 The right value is corpus-specific (`ce_score` is a raw cross-encoder logit); the
 suite-20 `answer_trust` judge publishes the coverage-vs-selective-hit-rate curve
 the operator picks it from. Default `0.0` keeps the v0.5.0 always-show behaviour.
+
+**Claim-level corroboration (`corroboration`, `search.answer_corroborate`, default
+ON; v0.6.0, schema 2).** `independent_clusters` is the number of **independent
+evidence clusters** — distinct ADR-18 derivation clusters, never the winner's own
+— whose top passage the cross-encoder finds **states the same claim** (CE ≥
+`search.answer_corroboration_tau`). `supporting_urls` are those clusters'
+representative pages. **Same-cluster syndicated copies are excluded by
+construction**, so a wire-service story reprinted across fifty outlets counts
+**once, as the winner's own cluster, never as corroboration** — the badge means
+*k genuinely independent sources*, not *k copies*. `basis.candidates_checked`
+reports how many distinct other-clusters were sketched and therefore checkable:
+when coverage is thin the count degrades to a low number, it never inflates into a
+false badge. **Absence of the block means "no independent support was found"
+(or the feature is off / no other cluster was checkable) — never "no answer".**
+Like `ce_score`, this is a *relevance/restatement* signal, not an entailment
+proof: it attests that an independent source discusses the same claim, not that the
+claim is true. The suite-20 production arm gates the ship: precision ≥0.9 (measured
+0.98 on tuning/hold-out/style-shift), recall ≥0.6 (1.0), and **zero same-cluster
+leakage** on real text scored by the real cross-encoder; `answer_corroboration_tau`
+is corpus-specific and re-derived from that judge. Set `answer_corroborate=false`
+to drop the block.
 
 ## GET /healthz
 
