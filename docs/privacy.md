@@ -132,9 +132,9 @@ quietly grow into it. Safeguards, all enforced in code:
 
 | Store | Contents | Where | Lifetime / cap |
 |---|---|---|---|
-| Lexical index + vector store | Ingested documents (operator's corpus) | `/data` volume | Until deleted via `/v1/forget` |
+| Lexical index + vector store | Ingested documents (operator's corpus) | `/data` volume | Until `/v1/forget` makes them unservable; the deleted bytes are reclaimed on the next lexical segment merge / vector slot reuse (see Deletion → "at rest") |
 | Dedup store | 16-byte content hashes + url-key→hash map | `/data` | Until forgotten (then tombstoned) |
-| Tombstones | Content hashes of forgotten docs | `/data` | Permanent by design (blocks re-ingest) |
+| Tombstones | 16-byte content-hash prefixes of forgotten docs | `/data` | Permanent by design (blocks re-ingest; retains a membership fingerprint — see Deletion → "membership residual") |
 | Query cache (direct) | Fused result lists | RAM only | 256 MB weighted, 15 m idle / 2 h max |
 | Query cache (anon) | Anon result lists | RAM only | 32 MB, 5 m |
 | Fetch cache | Extracted pages | RAM only | 96 MB, 24 h |
@@ -166,6 +166,71 @@ deletion survives a crawler re-discovering the page. By default the query and
 fetch caches are purged in the same call (`purge_caches: false` opts out —
 only safe if the document never appeared in results). Cached anon entries
 also expire within 5 minutes regardless.
+
+**What "removed" means at rest (honest residual).** The SPEC promise is
+*delete-term + commit* — the document is made unfindable in the same call — not
+*erasure of every byte at rest*. Both stores defer the physical reclaim:
+
+- **Lexical index (Tantivy).** `delete_by_url_key` plus `commit` deletes the
+  term and tombstones the document so it can never again appear in a result or
+  enumeration. But Tantivy segments are immutable: the deleted document's bytes
+  (title, body, fast fields) remain in the on-disk segment files, masked by a
+  deletion bitset, until that segment is rewritten by a `LogMergePolicy` merge —
+  which happens opportunistically as new docs arrive, not on the forget call.
+  On a node that has stopped ingesting, the residual bytes can persist
+  indefinitely because no merge is triggered. They are never *served* — every
+  search and `/v1/forget` enumeration honors the deletion — but they are still
+  on disk and visible to an operator with raw `/data` access. To force the
+  reclaim, resume ingest (any new docs eventually trigger a merge) or re-create
+  the index from a fresh ingest of the surviving corpus.
+- **Vector store (USearch).** `VectorStore::remove` calls usearch `remove()`,
+  which (verified in `usearch-2.25.3`, `index_dense.hpp::remove`) does **not**
+  free or zero the vector's bytes. It marks the node's key as the free
+  sentinel, erases the key from the lookup map (so the vector can never be
+  searched or returned), and pushes the now-orphaned slot onto an internal
+  free-list ring for reuse by a later `add`. The int8 vector payload stays in
+  the allocator's tape — and in the persisted `vectors.usearch` file, whose
+  matrix length is written from the *total* slot count — until that exact slot
+  is overwritten by a future insert. So a forgotten embedding's bytes are
+  slot-marked, not reclaimed: an operator reading the raw file could still find
+  the quantized vector until the slot is reused (or the store is rebuilt from a
+  fresh ingest). The vector is, as with the lexical index, never *served* after
+  removal.
+
+In short: forget guarantees **unservability immediately** (no query, neighbor
+search, or enumeration can surface the document) and **byte reclaim eventually**
+(on the next lexical segment merge / vector slot reuse, or immediately via a
+clean re-ingest of the survivors). Operators who need guaranteed at-rest
+erasure on demand should treat `/v1/forget` as the logical-deletion step and
+follow it with a rebuild, or rely on encrypted-at-rest storage so that
+unreclaimed residue is not readable.
+
+**Domain forget drains past the 10k enumeration cap.** A `domain` forget
+enumerates the domain's docs through a bounded query (10k docs per pass) and
+then loops — delete the batch, commit, re-enumerate — until the enumeration
+returns empty, so a domain with more than 10k indexed docs is fully forgotten
+within the single call (not just the first 10k). The loop is bounded by a
+stall guard: if a pass removes nothing while docs remain (an index
+inconsistency, never normal operation) it stops rather than spin. Regression
+test: `forget_domain_drains_past_the_10k_enumeration_cap` in
+`crates/meridian-index/src/lexical.rs` indexes 12,500 docs of one domain and
+asserts none survive.
+
+**Tombstone membership residual (accepted by design).** The tombstone that
+blocks re-ingest stores the document's 16-byte blake3 content-hash prefix
+permanently (see the retention table). That hash is one-way over the content,
+but an adversary who already possesses a candidate document — and who obtains
+raw `/data` read access — can hash it and test the tombstone set to learn
+*whether that exact content was once forgotten on this node* (a membership /
+re-ingest-oracle signal; it never reveals content the operator did not already
+hold). This is the deliberate cost of the "survives re-discovery" guarantee:
+the node must remember a fingerprint to refuse re-ingest. Operators for whom
+even this fingerprint is sensitive can harden it by storing
+`HMAC(node-secret, hash)` instead of the bare hash — the boot-random node
+secret makes the tombstone set un-testable by anyone without that secret while
+still matching the node's own re-ingest checks. This keyed-tombstone option is
+not the default (it complicates cross-restart secret management) and is offered
+as an opt-in hardening, not a shipped guarantee.
 
 The audit log line for a forget records the number of documents removed and
 whether caches were purged — never the selector.

@@ -362,12 +362,40 @@ impl Ingestor {
     }
 
     /// Forget every document under a domain (SPEC §10 `{domain}` form).
+    ///
+    /// `url_keys_by_domain` enumerates at most 10k docs per call (a tantivy
+    /// `TopDocs` bound), so a domain with more than 10k indexed docs is only
+    /// partially drained by a single pass. We therefore loop: each
+    /// `forget_keys` batch commits the index and reloads the reader, making the
+    /// just-removed docs invisible to the next enumeration, so repeated passes
+    /// converge on "every currently indexed document of the domain" (privacy.md)
+    /// within this one call. The pass count is bounded as a stall guard: if a
+    /// pass removes nothing while keys remain (which would indicate an index
+    /// inconsistency, not normal operation), we stop rather than spin forever.
     pub fn forget_domain(&self, domain: &str) -> Result<usize, IngestError> {
-        let keys = self
-            .index
-            .url_keys_by_domain(domain_hash(domain))
-            .map_err(|e| IngestError::Index(e.to_string()))?;
-        self.forget_keys(&keys)
+        let dh = domain_hash(domain);
+        let mut total = 0;
+        // 10k-doc enumeration cap; a domain of N docs needs ceil(N/10k) passes.
+        // The +2 absorbs the final empty-enumeration pass and rounding.
+        let max_passes = (self.index.num_docs() as usize / 10_000) + 2;
+        for _ in 0..max_passes {
+            let keys = self
+                .index
+                .url_keys_by_domain(dh)
+                .map_err(|e| IngestError::Index(e.to_string()))?;
+            if keys.is_empty() {
+                break;
+            }
+            let removed = self.forget_keys(&keys)?;
+            total += removed;
+            // Stall guard: keys remained but nothing was removed. This can only
+            // happen on an index inconsistency (a doc enumerable but not
+            // deletable); break rather than loop forever.
+            if removed == 0 {
+                break;
+            }
+        }
+        Ok(total)
     }
 
     /// Forget by content hash (SPEC §10 `{content_hash}` form, 16-byte hex).
