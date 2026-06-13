@@ -175,3 +175,39 @@ heatmap 27ms, RSS ~250MB plateau); forget-correctness 100% (incl. ADR-19
 structures); privacy smoke green; hermetic egress-invariant count monotonically
 non-decreasing (13 → ≥16 at P8 → ≥17 at P9; as built at the P9 exit: 20, so the
 floor is now ≥20).
+
+## 8. Pre-registered MDE — every gate states its detectable effect (J3)
+
+The single highest-leverage process rule (roadmap §11.3): **every gate pre-registers
+its minimum detectable effect at 80% power (MDE₈₀); an observed margin below the
+gate's MDE is recorded "underpowered," never "pass."** The arithmetic each gate type
+reduces to:
+
+- **Proportion gates** (FPR/TPR/hit-rate/F1): `MDE₈₀ ≈ 2.8·√(2·p̄·(1−p̄)/n)`.
+- **Paired-nDCG gates** (the ±δ equivalence bars): `MDE₈₀ ≈ 2.8·sd/√n`, paired sd≈0.1.
+- **Correlation gates** (ρ): SE(ρ)≈1/√(n−3); detecting ρ vs 0 needs ρ ≳ 2.8/√(n−3).
+- **Latency medians at n=16** (the probes idiom): run-sd ≲30ms ⇒ only deltas ≳~100ms
+  are detectable; a gate targeting a <50ms delta at n=16 is underpowered (the
+  fast/ANN/fusion gates are absolute thresholds with 20–40× headroom, so MDE is moot).
+- **OPE gate**: the proportion case inflated ×1.15–×30 by the candidate's disagreement
+  rate with the logger (the IPS correction); §7.3.
+
+| Suite | Gate | Type | n | p̄ / sd | **MDE₈₀** | Shipped margin | Verdict |
+|---|---|---|---|---|---|---|---|
+| 10 `spike` | ≥3× FPR↓ at matched TPR | proportion (abs FPR Δ) | ~11k null cell-obs | p̄≈0.05 | ~0.008 | Δ≈0.037 (0.05→0.013) | **powered** |
+| 13 `qpp` | ρ ≥ 0.25 | correlation | ~200 | — | ρ≳0.20 (vs 0) | ρ=0.256 | **powered (barely)**; an H2 *improvement* over a single feature (Δρ≈0.05) needs n≫200 |
+| 14 `ope` | DR-uplift 95% CI excludes 0 | proportion×IPS | 10⁴ target | sd 0.024 | **6.7pp @10k** (12.3pp@3k, 21pp@1k) | gate, not yet run on organic rows | structural: needs ≥334 organic decisions/day (§7.3) |
+| 15 `voi` | ≥25% fewer fetches at **±0.01** nDCG | paired-nDCG | 200 | sd≈0.1 | **±0.02** | observed Δ 0.0023 | **fetch-saving powered; the ±0.01 equivalence is NOT — honest claim is ±0.02** (±0.01 needs n≥~780) |
+| 16 `conformal` | hold-out coverage within 5pp/band | proportion (per band) | top-5% band ≪ n | small per-band n | wide (tens of pp) | REFUTED (19pp collapse) | the low per-band n is *why* the band CI is wide — the gate correctly killed it |
+| 17 `changepoint` | ramp TPR ≥ z+0.2 (tuning) | proportion | 120 ramps | p̄≈0.5 | **~0.18** | +0.28 (0.692 vs 0.408) | **powered (margin > MDE)**; null FPR arm n=560 → MDE≈0.05 |
+| 18 `answer` | hit-rate ≥ baseline +10pp | proportion | 1000 | p̄≈0.65 | **6.0pp** | +10.7pp | **powered**; certifying a 3pp effect would need n≈3,970 |
+| 19 `seasonal` | FPR↓≥1.5× at matched TPR | proportion | 560 null-obs | p̄≈0.039 | **0.033** | Δ 0.0036 (wrong sign) | decisive NO (direction negative + parity fail); not an underpowered near-miss |
+
+**Honest findings this pre-registration surfaces:** (1) suite-15's **±0.01** nDCG
+equivalence bar is underpowered at n=200 — the defensible claim is ±0.02 equivalence
+(the *fetch saving* is well-powered); (2) suite-17's +0.2 ramp-TPR margin sits comfortably
+above its ~0.18 MDE only because the effect is large — a smaller burst gain would be
+unprovable at n=120; (3) the OPE gate is **structurally** underpowered at single-operator
+organic rates (§7.3); (4) suite-19 records a NO by *direction and parity*, not power.
+New suites adopt the seasonal-suite pattern: emit the MDE line as a `result.note`, and
+fail the gate when a near-miss falls below MDE (the `inconclusive_underpowered` verdict).
