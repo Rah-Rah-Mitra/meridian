@@ -286,6 +286,18 @@ pub struct SearchConfig {
     /// winning the 3.0s budget row back. Raise it to trade latency for
     /// deeper-in-page passages.
     pub answer_passage_cap: usize,
+    /// H3 selective-abstention threshold on the winning passage's `ce_score`
+    /// (Phase-11 candidate, roadmap §8.3). When `best_passage.ce_score` falls
+    /// below this, the passage is WITHHELD and `degraded:["answer_below_threshold"]`
+    /// is set instead of shipping a low-relevance answer. This is selective
+    /// prediction WITHOUT a distribution-free coverage guarantee (conformal bands
+    /// were REFUTED in suite 16) — the threshold filters low-relevance passages,
+    /// it does NOT certify shown ones. **Default 0.0 = OFF** (mechanical
+    /// abstention only): the operator sets it from this deployment's suite-18
+    /// risk-coverage curve (the suite-20 `answer_trust` judge publishes the
+    /// tradeoff). `ce_score` is the raw cross-encoder logit, so the right value
+    /// is corpus-specific — never hard-coded.
+    pub answer_abstain_threshold: f32,
 }
 
 impl Default for SearchConfig {
@@ -304,6 +316,7 @@ impl Default for SearchConfig {
             deep_fetch_deadline_ms: 1_200,
             answer_deadline_ms: 1_800,
             answer_passage_cap: 8,
+            answer_abstain_threshold: 0.0,
         }
     }
 }

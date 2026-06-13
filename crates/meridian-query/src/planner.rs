@@ -1264,7 +1264,22 @@ impl Planner {
                                 kb.partial_cmp(&ka).unwrap_or(std::cmp::Ordering::Equal)
                             });
                         }
-                        if best_passage.is_none() {
+                        // H3 selective abstention (§8.3, suite-20 judge): when the
+                        // winning passage's relevance falls below the operator's
+                        // threshold, WITHHOLD it rather than ship a low-relevance
+                        // answer — distinct from the mechanical `answer_unavailable`.
+                        // Default-OFF (threshold 0.0). Honest framing: this filters
+                        // low-relevance passages, it does NOT certify shown ones
+                        // (no coverage guarantee — conformal bands died in suite 16).
+                        if let Some(bp) = &best_passage {
+                            if bp.ce_score < self.cfg.answer_abstain_threshold {
+                                best_passage = None;
+                                degraded.push("answer_below_threshold");
+                            }
+                        }
+                        if best_passage.is_none()
+                            && !degraded.iter().any(|d| *d == "answer_below_threshold")
+                        {
                             degraded.push("answer_unavailable");
                         }
                     }
