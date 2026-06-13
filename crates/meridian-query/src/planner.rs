@@ -1277,9 +1277,7 @@ impl Planner {
                                 degraded.push("answer_below_threshold");
                             }
                         }
-                        if best_passage.is_none()
-                            && !degraded.contains(&"answer_below_threshold")
-                        {
+                        if best_passage.is_none() && !degraded.contains(&"answer_below_threshold") {
                             degraded.push("answer_unavailable");
                         }
                     }
