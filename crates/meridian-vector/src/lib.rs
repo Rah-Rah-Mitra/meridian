@@ -98,6 +98,76 @@ impl VectorStore {
             .collect())
     }
 
+    /// V1 tier (i) — exact int8 cosine scan over a FILTERED candidate set
+    /// (ADR-10 dense-lane restoration under a geo/time filter). Reconstructs each
+    /// candidate's stored int8 vector (usearch `get`, the index's own
+    /// representation — no parallel array) and scores cosine against the query.
+    /// The int8 scale cancels under cosine, so the query stays full-precision and
+    /// no quantization-scale guess is needed. `candidate_keys` are the doc ids
+    /// the lexical filter already admitted (H3 TermSet → url_keys); ≤50k keeps
+    /// this within the fast-path budget (T5: ≈2–4ms on A76).
+    pub fn exact_scan(
+        &self,
+        query: &[f32],
+        candidate_keys: &[u64],
+        k: usize,
+    ) -> Result<Vec<(u64, f32)>, VectorError> {
+        if query.len() != self.dims {
+            return Err(VectorError(format!(
+                "dimension mismatch: got {}, store is {}",
+                query.len(),
+                self.dims
+            )));
+        }
+        let qnorm = query.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-9);
+        let mut buf = vec![0i8; self.dims];
+        let mut scored: Vec<(u64, f32)> = Vec::with_capacity(candidate_keys.len());
+        for &key in candidate_keys {
+            let found = self.index.get::<i8>(key, &mut buf).map_err(err)?;
+            if found == 0 {
+                continue; // forgotten / never-embedded doc — skip, never guess
+            }
+            // cosine(query_f32, doc_i8) — dot / (|q| · |d|); int8 magnitudes are
+            // relative, cosine is scale-invariant.
+            let mut dot = 0.0f32;
+            let mut dnorm = 0.0f32;
+            for (q, &d) in query.iter().zip(buf.iter()) {
+                let df = f32::from(d);
+                dot += q * df;
+                dnorm += df * df;
+            }
+            let sim = dot / (qnorm * dnorm.sqrt().max(1e-9));
+            scored.push((key, sim));
+        }
+        scored.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(k);
+        Ok(scored)
+    }
+
+    /// V1 tier (ii) — predicate-aware HNSW via usearch's filter callback (ADR-07
+    /// ladder: in-binding, no fork). The closure admits only keys in `allow`, so
+    /// the dense traversal never surfaces out-of-area docs. For the large
+    /// candidate-set regime where the tier-(i) exact scan would exceed budget;
+    /// can under-return when the predicate is very selective (entry points all
+    /// filtered) — tier (i) remains the floor for small sets.
+    pub fn filtered_search(
+        &self,
+        query: &[f32],
+        k: usize,
+        allow: &std::collections::HashSet<u64>,
+    ) -> Result<Vec<(u64, f32)>, VectorError> {
+        let matches = self
+            .index
+            .filtered_search(query, k, |key| allow.contains(&key))
+            .map_err(err)?;
+        Ok(matches
+            .keys
+            .iter()
+            .zip(matches.distances.iter())
+            .map(|(&key, &dist)| (key, 1.0 - dist))
+            .collect())
+    }
+
     /// Atomic full-file persist (tmp + rename). Coarse by design — SD-friendly
     /// cadence is the caller's job (`vector.persist_every_docs`).
     pub fn persist(&self) -> Result<(), VectorError> {

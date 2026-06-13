@@ -90,6 +90,34 @@ fresh-session task, not an end-of-marathon one.
    accept ≥95% of the dense contribution recovered at ≤+10ms p50 @100k; kill on a required fork
    or a vector-budget-row bust.
 
+**OUTCOME (2026-06-14) — RECORDED NO; the ADR-10 tradeoff was right.** Binding evidence: the
+dense lane adds only **+0.85pp nDCG@10 UNFILTERED** on the real corpus
+(`2026-06-13-pi5-hybrid-healed-lane.md`); a filter only RESTRICTS candidates, so the filtered
+harm is ≤ that, well under the 2pp bar. A *synthetic* corpus cannot measure the harm magnitude
+honestly (`nDCG(BM25-only)` is a linear function of the chosen lexical/semantic mismatch rate),
+and the repo's real eval corpus is not geo-tagged — so the decision is anchored to the measured
+real gain, not a manufactured number. **The dense lane is NOT shipped under filters.**
+
+The new suite 21 `ann_filtered` (real `LexicalIndex` + `VectorStore`, geo res-7 k-ring + time
+predicate, 100k/384 queries) instead proves the implementation is READY if a real geo-eval ever
+flips the call: with qrels = the f32 dense top-K neighbours, **tier (i)** `VectorStore::exact_scan`
+recovers **95.5%** of the f32 dense ranking (recall@20-vs-f32 **1.0**) — functionally ready; its
+**scalar** kernel is 17.5ms p50 over ~3.1k candidates (over the +10ms budget), with numkong NEON
+`i8::angular` (no fork, already in the usearch dep tree) the documented ~2–4ms path, unwired
+because harm=NO. **tier (ii)** usearch `filtered_search` (predicate-HNSW, **no fork** — the ADR-07
+kill-gate does NOT fire) recovers 93.4% at p50 6.2ms but under-returns at high filter selectivity,
+so the exact scan stays the floor. Record: `2026-06-14-pi5-v1-filtered-ann.md`. No vector-budget
+bust; no fork required.
+
+---
+
+## Both deferred bets — resolved (2026-06-14)
+
+| Bet | Outcome | Where |
+|---|---|---|
+| **C1 claim-level corroboration** | **SHIPPED default-ON** — suite-20 production arm PASS (cluster precision 0.98 tuning/holdout/style, recall 1.0, ZERO same-cluster leakage on real text + the real ort CE); `best_passage.corroboration` schema 2; answer p50 ≈2813ms ≤3.0s | `feat/c1-corroboration` (PR #32), `2026-06-13-pi5-c1-corroboration.md` |
+| **V1 filtered ANN** | **RECORDED NO** — harm <2pp (anchored to the real +0.85pp); tier-(i)/(ii) proven implementation-ready (no fork, no budget bust) | `feat/v1-filtered-ann`, `2026-06-14-pi5-v1-filtered-ann.md` |
+
 ## Operational note (this implementation pass)
 
 Worked entirely in git worktrees (`meridian-{e3,b1,f1,ui,k1,c1}`) sharing one `target/` —

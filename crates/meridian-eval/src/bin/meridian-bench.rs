@@ -23,6 +23,10 @@ const SUITES: &[(&str, &str)] = &[
         "USearch 1M×256d int8 build + search + recall + 16K mmap view — gate p99 <40ms",
     ),
     (
+        "ann_filtered",
+        "suite 21: V1 filtered-ANN harm — nDCG@10 of the dropped dense lane under geo/ts; tier-(i) int8 exact-scan + tier-(ii) HNSW recovery (needs bench-ann + bench-lexical)",
+    ),
+    (
         "lexical",
         "tantivy index + BM25 top-1000 latency curve — gate p50 <30ms",
     ),
@@ -235,6 +239,19 @@ fn main() -> ExitCode {
         run_and_print(
             &mut report,
             SuiteResult::skipped("ann", "not compiled in (bench-ann)"),
+        );
+    }
+
+    if wants("ann_filtered") {
+        #[cfg(all(feature = "bench-ann", feature = "bench-lexical"))]
+        run_and_print(&mut report, meridian_eval::bench::ann_filtered::run(&cfg));
+        #[cfg(not(all(feature = "bench-ann", feature = "bench-lexical")))]
+        run_and_print(
+            &mut report,
+            SuiteResult::skipped(
+                "ann_filtered",
+                "not compiled in (needs bench-ann + bench-lexical)",
+            ),
         );
     }
 
