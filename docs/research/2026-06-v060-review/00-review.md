@@ -857,3 +857,220 @@ What is **rejected** in the geo track (§13): query-time Kulldorff scan
 until E2a proves demand), global Moran's I as a user statement, and (Track G)
 spectral clustering / RMT denoising of the 20×90 root-day matrix — the bursts and
 weekly cycles E3 fixes *are* the non-stationarity those methods would erase.
+
+---
+
+## 10. Data management: bounded structures, compaction, and provable deletion
+
+The brief frames this track as design; the repo's state turns it mostly into
+**audit**. `/v1/forget` provability is the appliance's single strongest claim
+("forget-correctness 100%", `SPEC.md:774`), so the primary duty is to *certify it
+with cites or surface the gap*, not to invent new streaming machinery. The full
+trace is in `03-track-workpapers.md` §T4 (F); the result is one certification, one
+P0 remediation bundle, and a documented rejection of premature sketches.
+
+### 10.1 Forget-correctness — traced end to end (F1, CERTIFIED at the result surface)
+
+The forget transaction (`POST /v1/forget` → `forget_keys`,
+`ingest.rs:307-362`) is one redb write txn covering: tombstone insert (re-ingest
+refused, `ingest.rs:167-175,332-334`), dedup row + url_key→hash removal
+(`:335-341`), **sketch row removed unconditionally in the same txn** (`:343-347`,
+ADR-19/risk-17), lexical delete-by-term staged + committed (`:348,357-359`),
+vector remove + persist (`:349-352,360`); both query caches and the fetch/extract
+cache purge default-true (`api/lib.rs:790-792`, `ladder.rs:66-67`); the audit line
+carries counts, never the selector (`api/lib.rs:795-797`). Every derived aggregate
+classifies cleanly under ADR-19 (`00-adr.md:467-483`):
+
+| Structure | Class | Certification |
+|---|---|---|
+| Lexical docs / vectors / dedup / sketches | (a) joins the atomic txn | `ingest.rs:335-360` |
+| Evidence/cluster annotations | (b) computed per query from the live SketchReader; nothing persisted; deleted sketches cannot contribute; cached SERPs die in the purge | certified |
+| Geo heatmap counts | (b) computed on read from live fast fields (`lexical.rs:368-465`); no materialized counts; propagates at the next query | certified |
+| Trends counters + edges, PageRank priors | (c) GDELT-only; the ingest path never references `AnalyticsStore`; nightly wholesale replace | certified |
+| Decision log / bandit arm stats | no doc data (13 fixed bytes; per-intent means) — reward-bit *influence* tracked separately (I3) | certified |
+| Moka caches | purged in-call; anon cache additionally 5-min TTL | certified |
+
+**Verdict: CERTIFIED — no enumerated structure can resurface a forgotten document
+in any response.** This is the review's strongest single confirmation and should
+be quoted as such.
+
+### 10.2 Three gaps surfaced (F1 remediation bundle — Horizon-0, **P0 correctness**)
+
+None are the risk-17 resurfacing class; all three are honesty/coverage gaps that
+sit *above* research priority because they protect the flagship claim:
+
+- **F1-G1 (bytes-at-rest residual, MEDIUM).** Lexical deletion is
+  delete-term + commit; the doc's bytes remain in immutable segments until
+  LogMergePolicy merges (`lexical.rs:195-197`). The `SegmentStore` trait
+  *anticipates* "`/v1/forget` compactions" (`meridian-index/src/lib.rs:43`) **but
+  no code forces a merge/GC on forget.** SPEC's literal promise is only "delete
+  term + commit" (`SPEC.md:609-610`), yet `privacy.md:162` ("removed from the
+  lexical index") may read as erasure-at-rest. The persisted usearch file after
+  `remove` has the same question (slot-marking semantics — **verify, do not
+  assert**). Fix: a forced merge/GC hook post-forget OR one honest sentence in
+  privacy.md stating the residual and the merge schedule. Cheap either way.
+- **F1-G2 (doc-vs-code mismatch, LOW-MEDIUM).** `forget_domain` enumerates via
+  `TopDocs::with_limit(10_000)` (`lexical.rs:479`); a domain with >10k docs is
+  only partially forgotten per call, while `privacy.md:159` promises "every
+  currently indexed document of the domain." Fix: loop until the enumeration
+  drains, or document "repeat until removed=0."
+- **F1-G3 (membership inference, LOW — deliberate).** Tombstones retain a 16-byte
+  content hash forever (`privacy.md:137`); an offline attacker with disk access
+  and a candidate document can confirm "this content was ingested and forgotten."
+  Accepted by design; optional hardening = keyed tombstones HMAC(node-secret,
+  hash). Document-only.
+
+### 10.3 Pan-privacy: does any internal state retain a forgotten doc's influence? (I3, joint with F1)
+
+All refit-per-request or nightly-wholesale state is clean (EB prior, quasi-NB
+dispersion, burst moments, PageRank priors, the dark TS posterior — all rebuilt,
+nothing persisted). **One residual, accepted:** bandit means / decision-log reward
+bits retain the *statistical influence* of a forgotten doc (a forgotten local doc
+may have flipped a past top-10 reward bit) — but this is **influence, not content
+or identity**: one non-invertible bit, no doc reference, 30-day TTL / rolling.
+Recommendation: a one-line ADR-19 clarification distinguishing *content/identity
+retention* (prohibited) from *statistical influence on coarse aggregates*
+(accepted), so the classification is recorded policy rather than reviewer
+judgment. The tombstone (F1-G3) is the one structure that deliberately retains a
+derivative of forgotten content forever — already on the record.
+
+### 10.4 Exact beats sketch at this scale (F2, REJECT premature)
+
+The deletability rule already confines non-deletable sketches to GDELT aggregates;
+the arithmetic shows they buy nothing even there:
+
+- **Per-(day,cell,root) counters.** Measured 128MB/14 simulated days against a
+  700MB gate (`02-budgets.md:121`, `store.rs:352-356`). A CMS holding error below
+  the *single-digit per-cell-day* signal (the whole point of suite 10/ADR-21)
+  needs ε≈1.3e-5 ⇒ ~4MB **per deletable (day,root) unit** ⇒ 90×15 ≈ **5.4GB vs
+  ≤700MB exact** — sketches lose ~8× at granularity parity, before the +ε·N bias
+  destroys the EB z outright.
+- **Per-domain counters:** ~1.5MB exact vs ~74MB CMS. **Distinct domains:** 240KB
+  exact set vs HLL saving 224KB — pointless. **Heavy hitters:** 20 root codes,
+  exact is free.
+
+**Verdict: REJECT — sketches are premature at 100k–1M docs / single operator.**
+The only justified sketch in the system remains MinHash/SimHash (ADR-18), which
+earns its place answering a *similarity* question, not a counting one. Re-open
+only if key cardinality grows ~100× (multi-tenant or per-URL analytics, neither
+planned).
+
+### 10.5 Latency telemetry (F3, NO ROW — file as a chore)
+
+Quantile sketching is already present: `metrics-exporter-prometheus` backs
+histograms with DDSketch, and `meridian_request_ms` is recorded per route
+(`api/lib.rs:118`). Per-stage `timings` exist per response (`planner.rs:474`) but
+are not exported; adding `meridian_stage_ms{stage=…}` is a one-line
+`metrics::histogram!` within the existing bounded-cardinality labels. KLL's
+deterministic guarantees are irrelevant at single-node sample volumes — an
+engineering chore if per-stage p99s are wanted on dashboards, not a research row.
+
+### 10.6 What this track is *not*
+
+No CMS/HLL/KLL adoption, no new persistent query-derived state, no DP on
+GDELT-derived series (the protected unit is a *public event* — DP there protects
+nothing; the only aggregate with a real protected unit is the operator-doc
+heatmap, deferred to §12/H3 with the export boundary). The design discipline is:
+**every new persisted structure must name its ADR-19 deletion class and extend the
+hermetic forget test before it ships** — that is the standing rule §10.2's
+`links_v1` (C3, §8.6) and any future structure must satisfy.
+
+---
+
+## 11. Evaluation plan
+
+The repo already runs an experiment-first protocol — 16 numbered suites, the
+tuning-margin / hold-out-no-collapse gate idiom, on-device measurement (risk #8's
+bench-first rule), and recorded NOs (suites 13b/15b/16) treated as first-class
+outcomes. This section specifies the **datasets, synthetic workloads, statistical
+discipline, and acceptance gates** that every §6–§10 proposal must clear, in that
+same idiom, and adds two cross-cutting process bets.
+
+### 11.1 Datasets and synthetic workloads (per proposal)
+
+All judges are hermetic generators in `meridian-eval/src/bench/` — no web-scale
+training data, no query logs — extended, never replaced:
+
+| Proposal | Generator (existing → extension) | Qrels / ground truth |
+|---|---|---|
+| C1 corroboration (§8.2) | `answer.rs` + `synfarm.rs` → plant {independent 2nd original, syndicated copy, singleton} beside each decisive original | planted corroboration labels; planted answer hit |
+| H3 abstention (§8.3) | `answer.rs` → + style-shift variant (suite-16 phrase trick on the answer corpus) | per-query (ce_score, hit∈{0,1}) |
+| H1/H2 confidence (§8.4) | `qpp`/suite-13 set + suite-16 variant generator | per-query nDCG@10 (ρ target) |
+| B1 embedding-prune (§8.5) | `voi_embed.rs` 15b paraphrase generator × `answer.rs` outcomes (new suite 18b) | planted decisive original + paraphrase/copy |
+| E3 seasonal (§9.1) | `spike.rs`/`changepoint.rs` → + multiplicative weekly cycle, weekend factor 0.6–1.4 | planted spike/ramp truth on seasonal baseline |
+| V1 filtered ANN (§6 Bet 4) | suites 2/12 → + geo/time-filtered query set at 100k/1M | nDCG@10 vs unfiltered dense contribution |
+| K1/K3 Hailo (§6 Bets 1) | suites 4/13/18 unchanged; new CPU-vs-NPU arm | ms/pair (batch 1/4/8); nDCG@10 parity |
+| J2 admission (§7.5) | new suite 19 `admission`: closed-loop mixed fast/heavy | fast p99 inflation ratio; heavy completion rate |
+
+### 11.2 Geo and adversarial scenarios
+
+- **Geo scenarios.** E3 seasonal nulls (weekend-dip series that must *not* fire);
+  planted spatio-temporally compact moderate elevations (the one shape z+burst
+  jointly miss, the E2/Kulldorff motivation — used to *bound* the value, then
+  reject query-time scan); planted cold-cell-in-hot-ring for the E1 LISA recall
+  gate; multi-vantage floor probes (≥300 same-config pairs per lane-set before any
+  "exceeds floor" claim).
+- **Adversarial scenarios (the risk-#21 "measure the generator, not the operator"
+  discipline).** Syndication farms for C1 (the copy must *never* count as
+  corroboration — same-cluster leakage is an automatic kill); query-style shift
+  for H1/H2/H3 (the standing falsifier that killed conformal — relative lift must
+  not collapse); aspect-deficient pools for B2 (decisive aspect-2 docs retrievable
+  only by the sub-query); threshold-nudging tripwire — re-fitting a failed ρ on
+  the variant data is *prohibited* (the risk-#24 precedent), a failed style
+  variant is a recorded NO, not a re-roll.
+
+### 11.3 Statistical discipline — gates, power, and pre-registration (J3, **P1**)
+
+The single highest-leverage process change: **every bench gate pre-registers its
+MDE₈₀ in one line of the bench doc; an observed margin below the gate's MDE is
+recorded "underpowered," never "pass."** The arithmetic the repo's existing gate
+types reduce to (T1 §J3):
+
+- **Proportion gates** (suite-18 style): MDE₈₀ ≈ 2.8·√(2p̄(1−p̄)/n). At p̄=0.65,
+  n=1000 → **6.0pp** (suite-18's +10.7pp was adequately powered); certifying a 3pp
+  effect needs n≈3,970.
+- **Paired nDCG gates** (suite-15's ±0.01 bar): with paired sd≈0.1, MDE₈₀ =
+  2.8·0.1/√n ⇒ the ±0.01 bar needs **n≥~780 paired queries**; 200-query suites can
+  only honestly claim ±0.02.
+- **Latency medians at n=16** (the probes idiom): replicate medians imply run-sd
+  ≲30ms ⇒ deltas ≳~100ms detectable; gates targeting <50ms deltas at n=16 are
+  underpowered (record, don't claim).
+- **The OPE gate** is the proportion case inflated by the IPS correction (×1.15 to
+  ×30 per-row variance by disagreement rate) — the bridge that makes §7.3's MDE
+  the same arithmetic as every other gate.
+
+### 11.4 On-device measurement protocol
+
+Bench-first, on the Pi, never simulated (risk #8). Latency arms use **n≥16
+interpolated medians** (the probes idiom; n<16 medians are interpolated and
+flagged). Every latency-touching proposal re-measures its budget row on device
+(fast ≤25ms working target, deep p50 ≤2.5s, answer p50 ≤3.0s — measured 2502ms @
+cap 8, `02-budgets.md:148`). Hailo arms additionally instrument suite 6 (thermal)
+with PMIC power sampling (`vcgencmd pmic_read_adc`), CPU-CE vs NPU-CE, reporting
+°C / throttle flags / J/query (K5), and **must prove fail-open**: yank
+`/dev/hailo0` mid-run → the path degrades to CPU, never errors. The amd64/CI lane
+hosts only the x86-only Hailo DFC compile step (the HEF artifact), never a serving
+measurement.
+
+### 11.5 Simple-baseline comparisons (mandatory, the repo's own rule)
+
+Every proposal names the trivial baseline it must beat, and the review is prepared
+to record **simple-baseline-wins**: E3 vs unadjusted z (kill if dispersion already
+absorbs DOW); C2 PageRank vs raw weighted degree (predicted ρ>0.9 → replace the
+30-iteration power method with an O(E) degree pass); E2a Gi* vs per-cell z; H2
+ensemble vs each single feature (ship the single feature if the fit's gain is
+one-feature); V1 filtered ANN vs lexical-only under filters (deprioritize if
+measured harm <2pp — the recorded tradeoff was right); B2 decomposition vs
+single-query (dead at step one if planted aspect-2 recall <50%). A baseline that
+wins is a *result*, not a failure.
+
+### 11.6 J1 Pareto synthesis (P1) — the documentation win on measured data
+
+Knobs with measured curves already on disk (`answer_passage_cap`, ef/expansion,
+VoI `deep_fetch_max`, rerank depth/batch — T1 §J1) get one operator-facing
+frontier table normalizing each to (quality, latency) and marking *dominated*
+settings (e.g. ef=64 @1M is dominated: −4pp recall to save 0.95ms p99 against a
+40ms gate). Gaps to fill with bench-only sweeps (no production code): rerank depth
+{10,20,40}×batch{4,8}; answer cap 12; the never-swept `deep_fetch_deadline_ms`.
+Cheap, high-value, and it gives J2 and every future shed-ladder tuning their cost
+curves.
