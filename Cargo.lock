@@ -3282,6 +3282,7 @@ dependencies = [
  "meridian-index",
  "meridian-query",
  "meridian-rank",
+ "meridian-rerank",
  "meridian-searx",
  "meridian-vector",
  "model2vec-rs",

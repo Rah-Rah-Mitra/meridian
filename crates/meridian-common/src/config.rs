@@ -298,6 +298,21 @@ pub struct SearchConfig {
     /// tradeoff). `ce_score` is the raw cross-encoder logit, so the right value
     /// is corpus-specific — never hard-coded.
     pub answer_abstain_threshold: f32,
+    /// C1 claim-level corroboration (roadmap §8.2, suite-20 judge). When on, the
+    /// answer response carries `best_passage.corroboration`: the count of DISTINCT
+    /// ADR-18 evidence clusters (≠ the winner's) whose top passage the
+    /// cross-encoder finds states the same claim above `answer_corroboration_tau`.
+    /// Same-cluster syndicated copies are excluded BY CONSTRUCTION, so syndication
+    /// can never inflate the count. **Default ON** — shipped after the suite-20
+    /// production arm cleared precision ≥0.9 (0.97 tuning/holdout/styled), recall
+    /// ≥0.6 (1.0), and ZERO same-cluster leakage on real text + the real CE.
+    pub answer_corroborate: bool,
+    /// The conservative absolute CE-relevance bar a cross-cluster passage must
+    /// clear to count as corroboration. Frozen on the suite-20 tuning seed
+    /// (τ_corr = 3.0) where it gave precision 0.97 at recall 1.0; the raw
+    /// ms-marco logit scale is corpus-specific, so an operator re-derives it from
+    /// their own `answer_trust` run before relying on the badge.
+    pub answer_corroboration_tau: f32,
 }
 
 impl Default for SearchConfig {
@@ -317,6 +332,8 @@ impl Default for SearchConfig {
             answer_deadline_ms: 1_800,
             answer_passage_cap: 8,
             answer_abstain_threshold: 0.0,
+            answer_corroborate: true,
+            answer_corroboration_tau: 3.0,
         }
     }
 }
