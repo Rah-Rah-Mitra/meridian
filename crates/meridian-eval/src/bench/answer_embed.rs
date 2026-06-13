@@ -611,7 +611,7 @@ pub fn run(cfg: &BenchConfig) -> SuiteResult {
     // the only FAIL. The MDE arm is checked: if the +2pp arm is underpowered
     // AND the fetch arm did not decide, the verdict is inconclusive.
     let powered = mde * 100.0 <= 2.0;
-    let decisive = amend || fewer_fetches || hit_lift || non_degrading != true || powered;
+    let decisive = amend || fewer_fetches || hit_lift || !non_degrading || powered;
     // A clean record-NO on the hold-out (gate did not amend) is decisive when
     // the fetch arm is observable (always, n=QUERIES) — the only inconclusive
     // case is when neither arm moved AND the +2pp arm is underpowered.

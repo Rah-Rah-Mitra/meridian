@@ -1278,7 +1278,7 @@ impl Planner {
                             }
                         }
                         if best_passage.is_none()
-                            && !degraded.iter().any(|d| *d == "answer_below_threshold")
+                            && !degraded.contains(&"answer_below_threshold")
                         {
                             degraded.push("answer_unavailable");
                         }
