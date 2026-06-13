@@ -30,6 +30,11 @@ pub mod embed;
 #[cfg(feature = "bench-ann")]
 pub mod ann;
 
+// Suite 21: filtered-ANN harm measurement needs both the vector store (usearch)
+// and a real lexical index (tantivy).
+#[cfg(all(feature = "bench-ann", feature = "bench-lexical"))]
+pub mod ann_filtered;
+
 #[cfg(feature = "bench-lexical")]
 pub mod lexical;
 
@@ -294,6 +299,8 @@ fn compiled_suites() -> Vec<&'static str> {
     v.extend(["embed", "thermal"]);
     #[cfg(feature = "bench-ann")]
     v.push("ann");
+    #[cfg(all(feature = "bench-ann", feature = "bench-lexical"))]
+    v.push("ann_filtered");
     #[cfg(feature = "bench-lexical")]
     v.extend(["lexical", "disk"]);
     #[cfg(feature = "bench-rerank")]
