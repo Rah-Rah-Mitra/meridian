@@ -92,7 +92,9 @@ assert_asset "shell"        "$BASE/ui/"               200 "text/html"
 # App entry module -> 200 text/javascript.
 assert_asset "app.js"       "$BASE/ui/app.js"         200 "text/javascript"
 # A panel module (parallel-authored) -> 200 (js mime).
-assert_asset "panels/lanes" "$BASE/ui/panels/lanes.js" 200 "text/javascript"
+assert_asset "panels/lanes"   "$BASE/ui/panels/lanes.js"   200 "text/javascript"
+assert_asset "panels/metrics" "$BASE/ui/panels/metrics.js" 200 "text/javascript"
+assert_asset "panels/deploy"  "$BASE/ui/panels/deploy.js"  200 "text/javascript"
 # Unknown path -> 404 (negative coverage of the asset table; no fs traversal).
 assert_asset "unknown 404"  "$BASE/ui/nope"           404
 
@@ -147,6 +149,35 @@ assert isinstance(conf, dict) and "score" in conf, "no confidence.score block"
 assert "lane_requested" in d and "lane_effective" in d, "missing lane_* fields"
 print(1)
 '
+
+# config panel: /v1/config (ADR-30) — feature availability + tunable defaults +
+# read-only deploy config. Bearer-optional; on a guarded node a 401 is expected.
+CFG_CODE=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/v1/config" || echo 000)
+if [[ "$CFG_CODE" == "401" ]]; then
+  skip "config: /v1/config 401 — bearer-gated on this node (require_bearer_for_search)"
+else
+  assert_json "config: features + tunable + deploy" "$BASE/v1/config" '
+assert isinstance(d.get("features"), dict) and "cross_encoder_present" in d["features"], "no features.cross_encoder_present"
+assert isinstance(d.get("tunable"), dict) and "bm25_top_k" in d["tunable"], "no tunable.bm25_top_k"
+assert isinstance(d.get("deploy"), dict) and "index" in d["deploy"], "no deploy.index"
+print(1)
+'
+fi
+
+# overrides (ADR-30): a CHANGED knob is echoed (clamped) in applied_overrides,
+# and a misspelled knob is a loud 400 (deny_unknown_fields). scope=local so the
+# assertion never depends on web reachability.
+assert_json "overrides: applied_overrides echoed" "$BASE/v1/search?q=city&scope=local&limit=3&ov_bm25_top_k=50" '
+ao = d.get("applied_overrides")
+assert isinstance(ao, dict) and ao.get("bm25_top_k") == 50, "applied_overrides missing/incorrect"
+print(1)
+'
+BOGUS_CODE=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/v1/search?q=city&scope=local&ov_bogus=1" || echo 000)
+if [[ "$BOGUS_CODE" == "400" ]]; then
+  pass "overrides: ov_bogus -> 400 (deny_unknown_fields rejects a misspelled knob)"
+else
+  failit "overrides: ov_bogus -> $BOGUS_CODE (want 400)"
+fi
 
 # --- 3. guarded OPE endpoint (bearer); insufficient_data IS the honesty pass -
 

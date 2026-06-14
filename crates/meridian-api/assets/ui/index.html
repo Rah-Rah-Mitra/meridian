@@ -1,18 +1,66 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="referrer" content="no-referrer" />
+    <meta name="color-scheme" content="dark light" />
     <title>Meridian — operator console</title>
+    <!-- Pre-paint theme: read the (non-secret) UI theme preference before first
+         paint to avoid a flash. This is the ONLY inline script and it touches no
+         secrets — the operator bearer is never stored, only the theme name. -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem("meridian.theme");
+          if (t === "light" || t === "dark") {
+            document.documentElement.setAttribute("data-theme", t);
+          }
+        } catch (e) {
+          /* localStorage may be unavailable — keep the dark default */
+        }
+      })();
+    </script>
     <link rel="stylesheet" href="/ui/style.css" />
   </head>
-  <body>
-    <header class="app-header">
+  <body class="app-shell">
+    <!-- ===== sidebar: brand + view switcher ===== -->
+    <aside class="sidebar" aria-label="navigation">
       <div class="brand">
         <span class="brand-mark">meridian</span>
         <span class="brand-sub">operator console</span>
       </div>
+      <nav class="nav" aria-label="views">
+        <a class="nav-item" href="#/search" data-view="search">
+          <span class="nav-glyph" aria-hidden="true">⌕</span><span>search</span>
+        </a>
+        <a class="nav-item" href="#/metrics" data-view="metrics">
+          <span class="nav-glyph" aria-hidden="true">▤</span><span>metrics</span>
+        </a>
+        <a class="nav-item" href="#/lanes" data-view="lanes">
+          <span class="nav-glyph" aria-hidden="true">≣</span><span>lanes</span>
+        </a>
+        <a class="nav-item" href="#/geo" data-view="geo">
+          <span class="nav-glyph" aria-hidden="true">◴</span><span>geo</span>
+        </a>
+        <a class="nav-item" href="#/trends" data-view="trends">
+          <span class="nav-glyph" aria-hidden="true">⋀</span><span>trends</span>
+        </a>
+        <a class="nav-item" href="#/gate" data-view="gate">
+          <span class="nav-glyph" aria-hidden="true">⊘</span><span>ope gate</span>
+        </a>
+        <a class="nav-item" href="#/deploy" data-view="deploy">
+          <span class="nav-glyph" aria-hidden="true">⚙</span><span>deploy</span>
+        </a>
+      </nav>
+      <div class="sidebar-foot">
+        <span class="ver-pill" id="ver-pill" title="image version and cross-encoder availability">…</span>
+      </div>
+    </aside>
+
+    <!-- ===== topbar: operator token + theme toggle ===== -->
+    <header class="topbar">
+      <div class="topbar-title" id="view-title">search</div>
       <form class="token-form" autocomplete="off" onsubmit="return false">
         <label for="op-token">operator token</label>
         <input
@@ -27,25 +75,41 @@
           held for this page session only — never stored, never a cookie
         </span>
       </form>
+      <button
+        type="button"
+        id="theme-toggle"
+        class="theme-toggle"
+        title="toggle light / dark theme"
+        aria-label="toggle theme"
+      >◑</button>
     </header>
-
-    <nav class="app-nav" aria-label="panels">
-      <a href="#panel-lanes">lanes</a>
-      <a href="#panel-trends">trends</a>
-      <a href="#panel-geo">geo</a>
-      <a href="#panel-search">search</a>
-      <a href="#panel-ope">ope gate</a>
-    </nav>
 
     <!-- The runtime renders global honest/degraded notices here. -->
     <div id="global-banner" class="global-banner" hidden></div>
 
-    <main class="panels">
-      <section id="panel-lanes" class="panel" aria-label="lane health"></section>
-      <section id="panel-trends" class="panel" aria-label="trends"></section>
-      <section id="panel-geo" class="panel" aria-label="geo heatmap"></section>
-      <section id="panel-search" class="panel" aria-label="search"></section>
-      <section id="panel-ope" class="panel" aria-label="ope ship-gate"></section>
+    <!-- ===== main: one view per sidebar entry; the router shows one ===== -->
+    <main class="content">
+      <section class="view" data-view="search">
+        <section id="panel-search" class="panel panel--wide" aria-label="search"></section>
+      </section>
+      <section class="view" data-view="metrics">
+        <section id="panel-metrics" class="panel panel--wide" aria-label="metrics & observability"></section>
+      </section>
+      <section class="view" data-view="lanes">
+        <section id="panel-lanes" class="panel" aria-label="lane health"></section>
+      </section>
+      <section class="view" data-view="geo">
+        <section id="panel-geo" class="panel panel--wide" aria-label="geo heatmap"></section>
+      </section>
+      <section class="view" data-view="trends">
+        <section id="panel-trends" class="panel panel--wide" aria-label="trends"></section>
+      </section>
+      <section class="view" data-view="gate">
+        <section id="panel-ope" class="panel" aria-label="ope ship-gate"></section>
+      </section>
+      <section class="view" data-view="deploy">
+        <section id="panel-deploy" class="panel panel--wide" aria-label="deployment & config"></section>
+      </section>
     </main>
 
     <footer class="app-footer">
