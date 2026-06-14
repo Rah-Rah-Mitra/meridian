@@ -9,10 +9,19 @@
 # NOTE: ort statically links ONNX Runtime (libonnxruntime.a), so the binary is
 # self-contained — no shared lib or LD_LIBRARY_PATH needed. The distroless-cc
 # base still provides glibc ≥2.39 + libstdc++ for the static C++ runtime deps.
+#
+# Layout MIRRORS the scratch image (binary at /meridiand, models at /models) so
+# it is a true drop-in: compose's `["CMD","/meridiand","--healthcheck"]` and the
+# `/meridiand` entrypoint both work unchanged on an in-place image swap.
 
 FROM gcr.io/distroless/cc-debian13:nonroot
 
-COPY stage-deep/ /app/
-ENV MERIDIAN_MODELS__DIR=/app/models
-WORKDIR /app
-ENTRYPOINT ["/app/meridiand"]
+COPY stage-deep/meridiand /meridiand
+COPY stage-deep/models /models
+ENV MERIDIAN_MODELS__DIR=/models
+# Run as 65534 (distroless ships a `nobody` entry at that uid) to MATCH the
+# scratch appliance image and the data volume's owner: the deploy chowns /data to
+# 65534, and the deep image is an in-place swap onto that PRESERVED volume. The
+# base's default :nonroot is 65532, which could not write /data.
+USER 65534:65534
+ENTRYPOINT ["/meridiand"]

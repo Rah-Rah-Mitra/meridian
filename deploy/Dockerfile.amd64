@@ -17,4 +17,8 @@ FROM gcr.io/distroless/cc-debian13:nonroot
 
 COPY stage-amd64/meridiand /meridiand
 COPY stage-amd64/models /models
+# Match the scratch image's uid (65534, a `nobody` entry distroless ships) so a
+# data volume chowned to 65534 per the deploy docs is writable — the base default
+# :nonroot is 65532.
+USER 65534:65534
 ENTRYPOINT ["/meridiand"]
