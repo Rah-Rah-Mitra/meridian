@@ -29,9 +29,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: derive build version (release tag, no leading v)
+        # Surfaced by GET /v1/config (the image version is the git tag, not
+        # Cargo.toml which stays 0.1.0). Baked into every binary via option_env!.
+        run: echo "BUILD_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-unknown-linux-musl
+          targets: aarch64-unknown-linux-musl, aarch64-unknown-linux-gnu
+      - name: deep-image cross toolchain (aarch64-gnu for the ort variant)
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
       - uses: mlugg/setup-zig@v2
       - uses: taiki-e/install-action@v2
         with:
@@ -42,6 +48,7 @@ jobs:
       - name: build arm64 (Pi 5 tuning)
         run: cargo zigbuild --release --target aarch64-unknown-linux-musl -p meridiand
         env:
+          MERIDIAN_BUILD_VERSION: ${{ env.BUILD_VERSION }}
           RUSTFLAGS: -C target-cpu=cortex-a76
           # numkong 7.7.0 under zig (ADR-07 P7-exit amendment): the NEON/fp16
           # probes false-negative on GCC feature spellings ('simd'), while the
@@ -73,6 +80,44 @@ jobs:
           NK_TARGET_SMEFA64: "0"
       - name: build amd64 (native gnu — the P10 restoration)
         run: cargo build --release -p meridiand
+        env:
+          MERIDIAN_BUILD_VERSION: ${{ env.BUILD_VERSION }}
+      - name: build deep arm64 (gnu + ort cross-encoder — ADR-31)
+        # The deep/gnu variant: deep mode, answer mode and C1 corroboration are
+        # DORMANT in the scratch image (no ort, ADR-02); this build carries the
+        # cross-encoder. Exact env mirrors ci.yml's proven image-deep job.
+        run: >
+          cargo build --release --target aarch64-unknown-linux-gnu
+          -p meridiand --features rerank-ort
+        env:
+          MERIDIAN_BUILD_VERSION: ${{ env.BUILD_VERSION }}
+          RUSTFLAGS: -C target-cpu=cortex-a76
+          NK_TARGET_NEON: "1"
+          NK_TARGET_NEONSDOT: "1"
+          NK_TARGET_NEONHALF: "0"
+          NK_TARGET_NEONBFDOT: "0"
+          NK_TARGET_NEONFHM: "0"
+          NK_TARGET_NEONFP8: "0"
+          NK_TARGET_SVE: "0"
+          NK_TARGET_SVEHALF: "0"
+          NK_TARGET_SVEBFDOT: "0"
+          NK_TARGET_SVESDOT: "0"
+          NK_TARGET_SVE2: "0"
+          NK_TARGET_SVE2P1: "0"
+          NK_TARGET_SME: "0"
+          NK_TARGET_SME2: "0"
+          NK_TARGET_SME2P1: "0"
+          NK_TARGET_SMEF64: "0"
+          NK_TARGET_SMEHALF: "0"
+          NK_TARGET_SMEBF16: "0"
+          NK_TARGET_SMEBI32: "0"
+          NK_TARGET_SMELUT2: "0"
+          NK_TARGET_SMEFA64: "0"
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
+          # ort fetches the aarch64-gnu ONNX Runtime prebuilt at build time.
+          ORT_DOWNLOAD_BINARIES: "1"
       - name: amd64 boot smoke (parity before publish)
         run: |
           mkdir -p /tmp/amd64-models
@@ -99,6 +144,12 @@ jobs:
           mkdir -p deploy/stage-amd64
           cp target/release/meridiand deploy/stage-amd64/
           cp -r deploy/stage/models deploy/stage-amd64/models
+      - name: stage deep image contents (ADR-31)
+        run: |
+          mkdir -p deploy/stage-deep
+          cp target/aarch64-unknown-linux-gnu/release/meridiand deploy/stage-deep/
+          # ort statically links ONNX Runtime — no .so to copy.
+          cp -r deploy/stage/models deploy/stage-deep/models
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -115,6 +166,26 @@ jobs:
             -t "$IMAGE:$VERSION-amd64" --push deploy
           docker buildx imagetools create -t "$IMAGE:$VERSION" -t "$IMAGE:latest" \
             "$IMAGE:$VERSION-arm64" "$IMAGE:$VERSION-amd64"
+      - name: build + push deep image (arm64 gnu + ort — ADR-31)
+        # arm64-only (the live appliance is the Pi 5); NOT folded into the
+        # multi-arch manifest — :latest/:VERSION stay the canonical scratch
+        # appliance (ADR-02). Operators opt into :VERSION-deep-arm64 explicitly.
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          docker buildx build --platform linux/arm64 -f deploy/Dockerfile.deep \
+            -t "$IMAGE:$VERSION-deep-arm64" --push deploy
+      - name: deep image size (informational — well over the scratch 120MB budget)
+        # The deep image carries ort + ONNX Runtime + the CE model, so the
+        # scratch tripwire does NOT apply; report the size, never fail on it.
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          RAW=$(docker buildx imagetools inspect "$IMAGE:$VERSION-deep-arm64" --raw)
+          if ! echo "$RAW" | jq -e '.layers' > /dev/null; then
+            DIGEST=$(echo "$RAW" | jq -r '[.manifests[] | select(.platform.architecture=="arm64" and .platform.os=="linux")][0].digest')
+            RAW=$(docker buildx imagetools inspect "$IMAGE@$DIGEST" --raw)
+          fi
+          BYTES=$(echo "$RAW" | jq '[.layers[].size] | add')
+          echo "deep image compressed layers: $BYTES bytes (informational, no gate)"
       - name: amd64 image size tripwire (budget ≤120MB compressed)
         # buildx pushes an OCI INDEX (image + provenance attestation), so the
         # tag-level manifest has no .layers — resolve through to the
@@ -142,6 +213,9 @@ jobs:
             -o spdx-json=sbom-image.spdx.json
           syft scan "registry:$IMAGE:latest" --platform linux/amd64 \
             -o spdx-json=sbom-image-amd64.spdx.json
+          VERSION="${GITHUB_REF_NAME#v}"
+          syft scan "registry:$IMAGE:$VERSION-deep-arm64" --platform linux/arm64 \
+            -o spdx-json=sbom-image-deep.spdx.json
         env:
           SYFT_REGISTRY_AUTH_USERNAME: ${{ github.actor }}
           SYFT_REGISTRY_AUTH_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
@@ -157,6 +231,8 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           cp "target/aarch64-unknown-linux-musl/release/meridiand" "meridiand-${VERSION}-aarch64-linux-musl"
           cp "target/release/meridiand" "meridiand-${VERSION}-x86_64-linux-gnu"
+          # arm64-gnu deep binary, for operators who run the CE variant bare.
+          cp "target/aarch64-unknown-linux-gnu/release/meridiand" "meridiand-${VERSION}-aarch64-linux-gnu-deep"
           sha256sum meridiand-* sbom-*.json > SHA256SUMS
       - name: create GitHub release
         env:
@@ -165,4 +241,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             --title "Meridian $GITHUB_REF_NAME" \
             --notes-file docs/release-notes/$GITHUB_REF_NAME.md \
-            meridiand-* sbom-image.spdx.json sbom-image-amd64.spdx.json sbom-source.spdx.json SHA256SUMS
+            meridiand-* sbom-image.spdx.json sbom-image-amd64.spdx.json sbom-image-deep.spdx.json sbom-source.spdx.json SHA256SUMS
