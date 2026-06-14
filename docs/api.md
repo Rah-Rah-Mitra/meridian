@@ -52,6 +52,55 @@ alpha-nDCG gains came only at >1% plain-nDCG cost at every λ tried. The
 carried replacement shipped in v0.6.0 as `diversity=evidence` (above) and
 dominates MMR on both metrics on the same harness.
 
+### Per-request tuning overrides (`ov_*`, v0.6.5.1, ADR-30)
+
+Every value below has a deployment default (`MERIDIAN_SEARCH__*` /
+`MERIDIAN_VECTOR__*` / `MERIDIAN_EVIDENCE__*`); pass the matching `ov_*` query
+param to override it **for that one request only**. Out-of-range values are
+**clamped (saturated) to the safe range, never rejected** — and the response
+echoes the clamped effective values in `applied_overrides` (below). A *misspelled*
+knob is a `400` (`deny_unknown_fields`). Overrides persist nothing, are never
+logged with the query text, and key the result cache (tunings never collide). The
+authoritative defaults + ranges + rationale for the running deployment are served
+by [`GET /v1/config`](#get-v1config) — the console's tuning drawer pre-fills from it.
+
+| Param | Type | Range | Overrides |
+|---|---|---|---|
+| `ov_bm25_top_k` | int | 1–5000 | `search.bm25_top_k` (BM25 candidate depth) |
+| `ov_vector_top_k` | int | 1–1000 | `vector.top_k` (ANN candidate depth) |
+| `ov_max_per_domain` | int | 1–50 | `search.max_per_domain` (domain diversity cap) |
+| `ov_searx_deadline_ms` | int | 100–4000 | `search.searx_deadline_ms` (direct fan-out deadline) |
+| `ov_deep_fetch_max` | int | 0–8 | `search.deep_fetch_max` (per-request fetch ceiling) |
+| `ov_deep_fetch_deadline_ms` | int | 200–4000 | `search.deep_fetch_deadline_ms` |
+| `ov_answer_deadline_ms` | int | 200–4000 | `search.answer_deadline_ms` |
+| `ov_answer_passage_cap` | int | 1–32 | `search.answer_passage_cap` |
+| `ov_answer_abstain_threshold` | float | −20–20 | `search.answer_abstain_threshold` (CE logit) |
+| `ov_answer_corroborate` | bool | — | `search.answer_corroborate` |
+| `ov_answer_corroboration_tau` | float | −20–20 | `search.answer_corroboration_tau` (CE logit) |
+| `ov_compare_jitter_ms_max` | int | 0–60000 | `search.compare_jitter_ms_max` |
+| `ov_compare_noise_floor_p90` | float | 0–1 | `search.compare_noise_floor_p90` |
+| `ov_rrf_k` | int | 1–1000 | RRF fusion constant `k` (was `rrf::RRF_K`) |
+| `ov_containment_tau` | float | 0.05–0.95 | `evidence.containment_tau` (query-time clustering) |
+| `ov_rerank_deadline_ms` | int | 200–4000 | deep CE rerank stage deadline |
+| `ov_answer_passage_deadline_ms` | int | 200–3000 | answer-mode passage-CE batch deadline |
+| `ov_answer_corroboration_deadline_ms` | int | 100–2000 | C1 corroboration CE batch deadline |
+
+`ef` (`vector.expansion_search`) is **not** a per-request knob — it is applied
+store-wide, so per-request variation would race shared index state; it is shown
+read-only in `/v1/config`'s `deploy.vector`. Loosening a deadline via override is
+the operator's explicit, reflected-back choice — the default (no-override) path
+is unchanged, so the measured `fast ≤25ms / deep p50 ≤2.5s / answer p50 ≤3.0s`
+budgets hold.
+
+When any override was applied, the response gains:
+
+```json
+"applied_overrides": { "bm25_top_k": 5000, "answer_passage_cap": 4 }
+```
+
+— only the knobs you changed, with their **clamped effective** value (so a
+request that asked `ov_bm25_top_k=9000` shows `5000`).
+
 Geo/time filters apply to **local results only** — the SearXNG fan-out cannot
 be geo-filtered (recorded tradeoff, ADR-10). Under a geo/time filter the local
 retrieval path is exact lexical (ANN is skipped: usearch has no filtered
@@ -384,3 +433,44 @@ to drop the block.
 Prometheus exposition. Aggregate-only by construction: label cardinality is
 bounded to route/status/stage/lane/store — never per-IP, per-user, or
 per-query.
+
+## GET /v1/config
+
+The effective per-request tuning defaults + safe clamp ranges, the read-only
+deploy/index config (each field with its env var), and feature availability.
+Drives the operator console's tuning drawer and deploy panel. **Bearer-optional**:
+gated only when `auth.require_bearer_for_search` is set (same as search).
+
+**Never serializes secrets** — no bearer token, no `auth.token_file`, no internal
+`searx.url`/`anon_url` (only an `anon_configured` boolean), no `models.dir`/
+`index.data_dir`.
+
+```json
+{
+  "schema": 1,
+  "version": "0.6.5.1",
+  "features": {
+    "cross_encoder_present": true,   // → deep/answer/corroboration live vs dormant
+    "deep_available": true, "answer_available": true,
+    "corroboration_available": true,
+    "evidence_enabled": true, "analytics_enabled": true,
+    "trends_available": true, "decision_log_enabled": true,
+    "contextual_policy": false,      // ADR-25-gated; see the OPE gate
+    "anon_configured": true, "anon_lane_enabled": true,
+    "regions_lane_enabled": false
+  },
+  "tunable": {
+    "bm25_top_k": { "default": 1000, "min": 1, "max": 5000, "unit": "candidates", "rationale": "…" }
+    // … one entry per ov_* knob; `default` is the LIVE config value, `min`/`max`
+    //    are the same range the override clamping enforces.
+  },
+  "deploy": {
+    "index":  { "shingle_k": 4, "sketch_bins": 60, "min_match_bins": 5, "note": "INDEX-TIME → re-ingest", "env_prefix": "MERIDIAN_INDEX__" },
+    "vector": { "connectivity": 16, "expansion_add": 128, "expansion_search": 64, "note": "…", "env_prefix": "MERIDIAN_VECTOR__" },
+    "server": { … }, "analytics": { … }, "lanes": { … }, "searx": { … }
+  }
+}
+```
+
+`version` is injected at build time (`MERIDIAN_BUILD_VERSION`, the release git
+tag), falling back to the crate version for local/dev builds.

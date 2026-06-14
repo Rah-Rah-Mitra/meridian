@@ -31,16 +31,46 @@ is gated too (recommended when exposed). If no token is configured, gated
 endpoints return `503 auth not configured`. **Query text and selectors are never
 logged.**
 
-### The web UI
-The embedded analytics UI is served with no extra dependencies at:
+### The web UI — operator console v2
+The embedded operator console is served with no extra dependencies (vanilla ES
+modules + hand-rolled `<canvas>`, baked into the binary, no build step, no CDN) at:
 
 ```
 http://127.0.0.1:8080/ui
 ```
 
-Five zero-dependency panels (search, evidence clusters, geo heatmap, trends,
-lane health) over the same endpoints documented here. `/ui/{*path}` serves the
-bundled static assets; nothing is fetched from the network.
+A left **sidebar** selects one view at a time (hidden views do no network/draw,
+so the console stays light); a **topbar** holds the session-only operator token
+input, a **light/dark theme toggle** (the only persisted UI state — the theme
+name in `localStorage`; the bearer is never stored), and a **version • CE** pill
+showing the running image and whether the cross-encoder is live.
+
+Views:
+
+- **search** — the full control set (mode, scope, **lane** direct/anon/region,
+  limit, answer, fetch_budget, diversity, compare, geo lat/lon/radius **or** h3,
+  time window) plus an **Advanced / Tuning** drawer. The drawer pre-fills every
+  per-request knob with this deployment's default, safe range and one-line
+  rationale (from `GET /v1/config`); change a value and the URL carries it as
+  `ov_<knob>` — the response shows the clamped effective value
+  (`applied_overrides`). Renders every response block (results + rank-signal
+  breakdown, evidence clusters, confidence gauges, divergence, best passage +
+  corroboration, VoI analysis, timings) with every honesty caveat verbatim.
+- **metrics** — parses `GET /metrics` client-side: uptime, request totals/rates,
+  latency p50/p90/p99 from the histogram, storage/cache occupancy, load-shed
+  stages, free disk, GDELT rows.
+- **lanes / geo / trends / ope gate** — lane health; the Gi\* hot-spot heatmap
+  (now with a `q` filter, colormap legend and per-cell hover); GDELT trends
+  (topic / window / h3 selectors); and the ADR-25 OPE ship-gate report
+  (`insufficient_data` is a first-class calm state, never an error).
+- **deploy** — read-only effective config: image version, **which features are
+  live vs dormant** (the cross-encoder gate), the contextual-policy gate
+  explained, and every deploy-time setting with the `MERIDIAN_<STRUCT>__<FIELD>`
+  env var to change it. The console never mutates the server (it is GET-only).
+
+`/ui/{*path}` serves the bundled static assets; nothing is fetched from the
+network. Charts have hover tooltips; `lineChart` series readouts and the geo
+map cross-reference the table.
 
 ## 2. Search — `GET /v1/search`
 

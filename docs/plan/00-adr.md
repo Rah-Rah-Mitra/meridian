@@ -821,6 +821,92 @@ realization, `best_passage` block, `answer_unavailable` honesty marker,
 
 ---
 
+## ADR-30 — Per-request tuning overrides (v0.6.5.1, console v2)
+
+**Decision.** The operator console is an experimentation surface, so the search
+planner accepts **per-request tuning overrides**: flat `ov_*` query params on
+`GET /v1/search` (e.g. `ov_bm25_top_k`, `ov_rrf_k`, `ov_containment_tau`,
+`ov_answer_passage_cap`, the CE/fetch deadlines), each replacing its config
+default for that one request. Three pieces: (1) the previously-hardcoded
+query-time constants (`RRF_K`, `sketch::CONTAINMENT_TAU`, the rerank/passage/
+corroboration CE deadlines) were first promoted to `SearchConfig`/
+`EvidenceConfig` (the consts remain the canonical defaults; only query-time reads
+reroute, so index-time paths and tests are untouched); (2) a `SearchOverrides`
+struct threads onto `SearchRequest`, read as `req.overrides.X.unwrap_or(cfg.X)`
+at every site; (3) `GET /v1/config` advertises each knob's default + safe range +
+rationale, sharing ONE clamp table (`meridian-api::tuning::KNOBS`) with the
+override clamping so the advertised range can never exceed the enforced one.
+
+**Flat params, not a `tune=` blob.** `SearchParams` keeps `#[serde(deny_unknown_fields)]`,
+so a misspelled knob (`ov_bogus`) is a loud 400 — a blob would silently drop a
+typo'd sub-key, letting an operator think they tuned something they didn't. serde
+gives per-field type-checking for free; clamping is per-field and uniform.
+
+**Clamp, don't reject.** Out-of-range values SATURATE to the bound (not 400): an
+operator dialing past a slider's max wants "as far as allowed", and the response
+carries `applied_overrides` — the clamped EFFECTIVE values of only the knobs that
+changed ("you asked 9000, got 5000"). The bounds are chosen so even a maxed combo
+stays within the server request ceiling, or yields an honest 504 (no harm).
+
+**`ef` is deliberately NOT a live knob.** `vector.expansion_search` is query-time
+in principle, but this build applies it store-wide — varying it per request would
+race shared index state. It is surfaced read-only in `/v1/config`'s `deploy.vector`
+instead. Honesty over a fake live knob.
+
+**Privacy.** Overrides persist NOTHING — no decision-log rows, no new state — and
+are NEVER logged with the query text (the position-only telemetry idiom holds).
+The override set is folded into the moka cache key so two tunings never collide;
+`applied_overrides` is returned to the caller only. The no-override path is
+byte-identical to pre-ADR-30 behavior, so the measured fast/deep/answer budgets
+are unaffected — only an explicit operator override may loosen a deadline.
+
+**Tradeoff.** A wider API surface (18 `ov_*` params + `/v1/config`) and a few
+clamp/cache-key lines vs operators exploring the latency/quality frontier per
+query without a redeploy. The console (ADR-02) stays GET-only / read-only — this
+is per-request and ephemeral, NOT a mutable settings store (which would be new
+persisted state needing its own ADR + ADR-19 deletion class + forget-test; left
+unbuilt by operator decision).
+
+**Status: SHIPPED v0.6.5.1.** fmt + clippy `-D warnings` + clamp unit tests +
+the `lane_invariants` no-override regression green on-device; default-path
+budgets re-confirmed live on the deployed image (no regression).
+
+---
+
+## ADR-31 — Deep image: build, publish & run the cross-encoder variant (v0.6.5.1)
+
+**Decision.** ADR-02 makes the canonical published appliance the FROM-scratch
+musl image with no `ort` — so deep mode, answer mode and C1 corroboration are
+DORMANT there. To run them, the **deep/gnu variant** (`deploy/Dockerfile.deep`,
+distroless/cc, aarch64-gnu, `--features rerank-ort`, ms-marco-MiniLM INT8 baked)
+is now built AND published on release: `release.yml` pushes
+`:N.N.N-deep-arm64` (arm64-only; the live appliance is the Pi 5) alongside the
+scratch multi-arch tags, with its own SBOM. The live deployment override points
+`meridiand` at the deep tag, activating the CE features on the PRESERVED v5 data
+volume (no re-ingest — the CE is purely query-time).
+
+**The scratch image stays the canonical default.** `:latest`/`:N.N.N` remain the
+scratch multi-arch index (ADR-02 unchanged for the published default). The deep
+image is an explicit, SBOM'd, opt-in variant — and the live box running distroless
+instead of scratch is a deployment choice, recorded here, not a change to what
+"the appliance" means.
+
+**Honesty.** `/v1/config` reports `cross_encoder_present` and the console's
+deploy panel shows deep/answer/corroboration as LIVE vs DORMANT accordingly — the
+operator always sees which image is running and therefore which features are real.
+
+**Tradeoff.** A larger gnu image (ort + ONNX Runtime + the CE model, well over the
+scratch 120MB tripwire — so the deep tag gets an informational size echo, not the
+hard gate) and a second CI build path vs the only way to make "all features
+active" true on the live box. amd64-deep deferred (no current consumer).
+
+**Status: SHIPPED v0.6.5.1.** Deep image published on the tag; live `meridiand`
+refreshed to `:0.6.5.1-deep-arm64` on the v5 volume; CE features verified live
+(`answer=true` returns `best_passage.corroboration`; deep results carry
+`rank_signals.ce`).
+
+---
+
 ## Environment-driven ADRs (not in the spec)
 
 ## ADR-D1 — Dev-on-target deviation: local check, CI builds
