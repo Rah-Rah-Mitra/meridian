@@ -125,6 +125,15 @@ function appendChildren(node, children) {
   }
 }
 
+/** Escape a value for safe interpolation into a tooltip's innerHTML. */
+export function escapeHtml(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 // ---------------------------------------------------------------------------
 // Canvas plumbing shared by the chart helpers: HiDPI-correct sizing + a small
 // plot-area frame with axes. Returns the 2d context and a px<->data projector.
@@ -329,6 +338,30 @@ export function lineChart(canvas, series, opts = {}) {
       lx += 13 + tw + 14;
     }
   }
+
+  // Hover: nearest x across series → tooltip readout (DOM tooltip, no redraw).
+  const xfmtH = opts.xFormat || fmtNum;
+  installHover(canvas, (mx, my) => {
+    if (my < plot.y1 - 6 || my > plot.y0 + 6) return null;
+    const live = series.filter((s) => (s.points || []).some((p) => Number.isFinite(p.x) && Number.isFinite(p.y)));
+    if (!live.length) return null;
+    const dataX = xLo + ((mx - plot.x0) / (plot.w || 1)) * (xHi - xLo);
+    let anchor = null;
+    const rows = [];
+    for (const s of live) {
+      const pts = s.points.filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
+      let np = pts[0];
+      for (const p of pts) if (Math.abs(p.x - dataX) < Math.abs(np.x - dataX)) np = p;
+      rows.push(`<span style="color:${escapeHtml(s.color || "currentColor")}">■</span> ${escapeHtml(s.label || "y")} ${escapeHtml(fmtNum(np.y))}`);
+      if (!anchor || Math.abs(np.x - dataX) < Math.abs(anchor.x - dataX)) anchor = np;
+    }
+    if (!anchor) return null;
+    return {
+      html: `<b>${escapeHtml(xfmtH(anchor.x))}</b>\n${rows.join("\n")}`,
+      x: projX(anchor.x),
+      y: projY(anchor.y),
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -397,6 +430,20 @@ export function barChart(canvas, bars, opts = {}) {
     ctx.fillText(opts.yLabel, 0, 0);
     ctx.restore();
   }
+
+  // Hover: the bar under the cursor → exact label + value.
+  installHover(canvas, (mx) => {
+    if (mx < plot.x0 || mx > plot.x1 || !bars.length) return null;
+    const idx = Math.floor((mx - plot.x0) / (slot || 1));
+    if (idx < 0 || idx >= bars.length) return null;
+    const b = bars[idx];
+    const cx = plot.x0 + slot * (idx + 0.5);
+    return {
+      html: `<b>${escapeHtml(b.label == null ? "" : String(b.label))}</b>\n${escapeHtml(vfmt(b.value))}`,
+      x: cx,
+      y: projY(b.value),
+    };
+  });
 }
 
 function drawWrappedLabel(ctx, text, cx, y, maxW) {
@@ -479,6 +526,33 @@ export function hexMap(canvas, cells, opts = {}) {
   ctx.textAlign = "left";
   ctx.textBaseline = "bottom";
   ctx.fillText("ring = significant hot spot (q≤0.05) · area = raw count", plot.x0 + 4, plot.y0 - 4);
+
+  // Hover: the cell under the cursor → its honest readout (cross-references the
+  // table; significance is the defensible flag, raw count is kept visible).
+  installHover(canvas, (mx, my) => {
+    let best = null;
+    let bestD = Infinity;
+    for (const d of cells) {
+      const x = px(d.lon);
+      const y = py(d.lat);
+      const dist = Math.hypot(mx - x, my - y);
+      const r = 4 + Math.sqrt((Number(d.count) || 0) / maxCount) * 18;
+      if (dist <= r + 2 && dist < bestD) {
+        best = { d, x, y };
+        bestD = dist;
+      }
+    }
+    if (!best) return null;
+    const d = best.d;
+    const parts = [
+      d.h3 != null ? `h3 ${escapeHtml(d.h3)}` : null,
+      `count ${escapeHtml(fmtNum(Number(d.count) || 0))}`,
+      Number.isFinite(Number(d.value)) ? `Gi* z ${escapeHtml(fmtNum(Number(d.value)))}` : null,
+      Number.isFinite(Number(d.q_value)) ? `q ${escapeHtml(fmtNum(Number(d.q_value)))}` : null,
+      d.significant ? "significant (q≤0.05)" : "not significant",
+    ].filter(Boolean);
+    return { html: parts.join("\n"), x: best.x, y: best.y };
+  });
 }
 
 /** Diverging blue↔grey↔red scale on a signed value, |v| clamped to absMax. */
@@ -633,15 +707,26 @@ async function renderPanel(panel) {
   body.replaceChildren(fresh);
 }
 
+/** A panel is visible when its section has a layout box (its view is active). */
+function isVisible(panel) {
+  const section = document.getElementById(panel.id);
+  return !!section && section.offsetParent !== null;
+}
+
 function mountPanel(panel) {
-  renderPanel(panel);
-  // (Re)schedule polling.
+  // Only render now if the panel's view is the active one — the router renders
+  // a view's panels when it becomes visible, so hidden panels do no network/draw.
+  if (isVisible(panel)) renderPanel(panel);
+  // (Re)schedule polling — the tick is gated on visibility so background views
+  // stay cheap (no fetch, no canvas work) until the operator opens them.
   if (_timers.has(panel.id)) {
     clearInterval(_timers.get(panel.id));
     _timers.delete(panel.id);
   }
   if (panel.refreshMs && panel.refreshMs > 0) {
-    const t = setInterval(() => renderPanel(panel), panel.refreshMs);
+    const t = setInterval(() => {
+      if (isVisible(panel)) renderPanel(panel);
+    }, panel.refreshMs);
     _timers.set(panel.id, t);
   }
 }
@@ -677,6 +762,179 @@ function fmtNum(v) {
 export { fmtNum };
 
 // ---------------------------------------------------------------------------
+// Tiny reactive primitive — a ~1-dependency-free signal. Used by the search
+// tuning drawer (≈18 two-way-bound controls) and the metrics live numbers; the
+// existing panels keep the imperative el()+re-render model. No framework.
+//   signal(initial) -> { get, set, subscribe(fn) -> unsubscribe }
+// ---------------------------------------------------------------------------
+export function signal(initial) {
+  let v = initial;
+  const subs = new Set();
+  return {
+    get: () => v,
+    set: (nv) => {
+      if (nv !== v) {
+        v = nv;
+        for (const f of subs) f(v);
+      }
+    },
+    subscribe: (f) => {
+      subs.add(f);
+      return () => subs.delete(f);
+    },
+  };
+}
+
+/** Two-way bind a form control to a signal. parse: string->value (control to
+ *  signal), format: value->string (signal to control). */
+export function bind(input, sig, { event = "input", parse = (x) => x, format = (x) => String(x) } = {}) {
+  input.value = format(sig.get());
+  input.addEventListener(event, () => sig.set(parse(input.value)));
+  sig.subscribe((v) => {
+    const f = format(v);
+    if (input.value !== f) input.value = f;
+  });
+  return input;
+}
+
+// ---------------------------------------------------------------------------
+// installHover(canvas, hitTest) — shared chart interactivity. Ensures the canvas
+// sits in a positioned .chart-wrap with one reused .chart-tip, and on mousemove
+// calls hitTest(px, py) -> { html, x } | null to position/fill the tooltip and a
+// 1px crosshair. Dependency-free, no per-move canvas redraw (cheap on the Pi).
+// ---------------------------------------------------------------------------
+function installHover(canvas, hitTest) {
+  let wrap = canvas.parentElement;
+  if (!wrap || !wrap.classList.contains("chart-wrap")) {
+    wrap = el("div", { class: "chart-wrap" });
+    canvas.replaceWith(wrap);
+    wrap.appendChild(canvas);
+  }
+  let tip = wrap.querySelector(".chart-tip");
+  if (!tip) {
+    tip = el("div", { class: "chart-tip" });
+    wrap.appendChild(tip);
+  }
+  // Replace any prior handler from an earlier render of this canvas.
+  if (canvas.__hoverMove) canvas.removeEventListener("mousemove", canvas.__hoverMove);
+  if (canvas.__hoverLeave) canvas.removeEventListener("mouseleave", canvas.__hoverLeave);
+  const move = (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    const hit = hitTest(px, py);
+    if (!hit) {
+      tip.style.display = "none";
+      return;
+    }
+    tip.innerHTML = hit.html;
+    tip.style.left = `${hit.x != null ? hit.x : px}px`;
+    tip.style.top = `${hit.y != null ? hit.y : py}px`;
+    tip.style.display = "block";
+  };
+  const leave = () => {
+    tip.style.display = "none";
+  };
+  canvas.__hoverMove = move;
+  canvas.__hoverLeave = leave;
+  canvas.addEventListener("mousemove", move);
+  canvas.addEventListener("mouseleave", leave);
+}
+
+// ---------------------------------------------------------------------------
+// /v1/config — the effective tunable defaults + clamps + deploy config + feature
+// availability. Fetched once and cached; the tuning drawer + deploy panel read
+// it. Bearer-optional like search (retries with the token only on 401).
+// ---------------------------------------------------------------------------
+let _configCache = null;
+export async function getConfig({ force = false } = {}) {
+  if (_configCache && !force) return _configCache;
+  let res = await fetchJSON("/v1/config");
+  if (res.status === 401 && _bearer) res = await fetchJSON("/v1/config", { bearer: _bearer });
+  _configCache = res;
+  return res;
+}
+
+// ---------------------------------------------------------------------------
+// Theme: persist the (non-secret) preference in localStorage; toggle the
+// data-theme attribute on <html>. The pre-paint inline script in index.html
+// applies it before first paint to avoid a flash.
+// ---------------------------------------------------------------------------
+function currentTheme() {
+  return document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
+}
+function applyTheme(t) {
+  document.documentElement.setAttribute("data-theme", t);
+  try {
+    localStorage.setItem("meridian.theme", t);
+  } catch (_) {
+    /* localStorage unavailable — in-memory only for this session */
+  }
+}
+function wireThemeToggle() {
+  const btn = document.getElementById("theme-toggle");
+  if (!btn) return;
+  btn.addEventListener("click", () => {
+    applyTheme(currentTheme() === "light" ? "dark" : "light");
+    // Re-render visible panels so the canvas charts repaint with theme colors.
+    for (const panel of _panels.values()) renderPanel(panel);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Hash router: the sidebar selects one view (#/search, #/metrics, …). Only the
+// active view is shown; hidden panels skip their network+draw (renderPanel gates
+// on visibility) so polling stays cheap.
+// ---------------------------------------------------------------------------
+const DEFAULT_VIEW = "search";
+function currentView() {
+  const h = (location.hash || "").replace(/^#\/?/, "");
+  return h || DEFAULT_VIEW;
+}
+function applyRoute() {
+  const view = currentView();
+  let matched = false;
+  for (const sec of document.querySelectorAll(".view")) {
+    const on = sec.dataset.view === view;
+    sec.classList.toggle("view--active", on);
+    if (on) matched = true;
+  }
+  if (!matched) {
+    // Unknown route → land on the default view, no blank screen.
+    const def = document.querySelector(`.view[data-view="${DEFAULT_VIEW}"]`);
+    if (def) def.classList.add("view--active");
+  }
+  for (const a of document.querySelectorAll(".nav-item")) {
+    a.classList.toggle("active", a.dataset.view === (matched ? view : DEFAULT_VIEW));
+  }
+  const titleEl = document.getElementById("view-title");
+  if (titleEl) titleEl.textContent = (matched ? view : DEFAULT_VIEW).replace("gate", "ope gate");
+  // Render the now-visible panels (they were skipped while hidden).
+  for (const panel of _panels.values()) {
+    const sec = document.getElementById(panel.id);
+    if (sec && sec.offsetParent !== null) renderPanel(panel);
+  }
+}
+
+/** Version • CE-availability pill in the sidebar, fed by /v1/config. */
+async function wireVersionPill() {
+  const pill = document.getElementById("ver-pill");
+  if (!pill) return;
+  const { ok, data } = await getConfig();
+  if (!ok || !data) {
+    pill.textContent = "version unknown";
+    return;
+  }
+  const ce = data.features && data.features.cross_encoder_present;
+  const ver = data.version || "?";
+  pill.textContent = `v${ver} · CE ${ce ? "live" : "dormant"}`;
+  pill.classList.add(ce ? "ver-pill--live" : "ver-pill--dormant");
+  pill.title = ce
+    ? "deep / answer / corroboration are LIVE (cross-encoder present)"
+    : "deep / answer / corroboration are DORMANT (scratch image, no ort — ADR-02)";
+}
+
+// ---------------------------------------------------------------------------
 // Boot: wire the token input, import the panel modules (they self-register),
 // then mount every registered panel.
 // ---------------------------------------------------------------------------
@@ -685,9 +943,11 @@ function wireTokenInput() {
   if (!input) return;
   const apply = () => {
     _bearer = input.value || "";
-    // Re-render bearer-gated panels so they pick up (or lose) the token.
+    _configCache = null; // re-fetch /v1/config (may have been bearer-gated)
+    // Re-render visible bearer-gated panels so they pick up (or lose) the token;
+    // hidden ones re-read _bearer when their view is next opened.
     for (const panel of _panels.values()) {
-      if (panel.requiresBearer) renderPanel(panel);
+      if (panel.requiresBearer && isVisible(panel)) renderPanel(panel);
     }
   };
   input.addEventListener("change", apply);
@@ -702,15 +962,18 @@ function wireTokenInput() {
 
 async function boot() {
   wireTokenInput();
+  wireThemeToggle();
   // Import the panel modules for their self-registration side effects. Each
   // module calls registerPanel() at import time. Imported AFTER the registry +
   // helpers above are defined so the exports resolve.
   const modules = [
-    "./panels/lanes.js",
-    "./panels/trends.js",
-    "./panels/geo.js",
     "./panels/search.js",
+    "./panels/metrics.js",
+    "./panels/lanes.js",
+    "./panels/geo.js",
+    "./panels/trends.js",
     "./panels/ope.js",
+    "./panels/deploy.js",
   ];
   for (const m of modules) {
     try {
@@ -724,6 +987,11 @@ async function boot() {
   for (const panel of _panels.values()) {
     mountPanel(panel);
   }
+  // Hash router: show the requested view and render its (now-visible) panels.
+  window.addEventListener("hashchange", applyRoute);
+  applyRoute();
+  // Version • CE pill (fire-and-forget; never blocks first paint).
+  wireVersionPill();
 }
 
 if (document.readyState === "loading") {

@@ -35,7 +35,7 @@
 //     analysis?:{ … } }                                // fetch_budget>0
 // Additive corroboration / abstained fields (may NOT exist yet) are read only
 // when present and ignored gracefully when absent — never fabricated.
-import { registerPanel, fetchJSON, el, gauge, chips, barChart } from "../app.js";
+import { registerPanel, fetchJSON, el, gauge, chips, barChart, getConfig, escapeHtml } from "../app.js";
 
 // The MANDATORY confidence-score label. Used verbatim — do not paraphrase.
 const CONFIDENCE_LABEL = "uncalibrated, ranking-comparable, NOT a probability";
@@ -388,6 +388,79 @@ function bestPassageBlock(bp) {
       )
     );
   }
+
+  // C1 corroboration (schema 2): distinct INDEPENDENT evidence clusters (≠ the
+  // passage's own) whose top passage the cross-encoder finds states the same
+  // claim. Same-cluster syndicated copies are excluded BY CONSTRUCTION, so
+  // syndication can never inflate the count. Absence means "no independent
+  // support found", never "no answer".
+  const corr = bp.corroboration && typeof bp.corroboration === "object" ? bp.corroboration : null;
+  if (corr) {
+    const n = Number(corr.independent_clusters);
+    const urls = Array.isArray(corr.supporting_urls) ? corr.supporting_urls : [];
+    const basis = corr.basis && typeof corr.basis === "object" ? corr.basis : {};
+    const cwrap = el("div", { class: "search-corroboration", style: { "margin-top": "0.4rem" } });
+    cwrap.appendChild(
+      el(
+        "div",
+        { style: { display: "flex", gap: "0.5rem", "align-items": "baseline", "flex-wrap": "wrap" } },
+        el("span", {
+          class: n > 0 ? "chip chip--ok" : "chip chip--info",
+          text: Number.isFinite(n) ? `${n} independent cluster(s) corroborate` : "corroboration checked",
+        }),
+        el("span", {
+          class: "honesty",
+          text: "distinct ADR-18 clusters (≠ the passage's own) whose top passage the cross-encoder finds states the same claim — same-cluster copies excluded, so syndication can't inflate it.",
+        })
+      )
+    );
+    for (const u of urls.slice(0, 6)) {
+      cwrap.appendChild(
+        el(
+          "div",
+          { class: "result-url" },
+          el("a", { href: String(u), target: "_blank", rel: "noopener noreferrer", text: hostOf(u), style: { color: "var(--fg-muted)" } })
+        )
+      );
+    }
+    if (Number.isFinite(Number(basis.candidates_checked))) {
+      cwrap.appendChild(
+        el("div", {
+          class: "honesty",
+          text: `basis: ${Number(basis.candidates_checked)} distinct other-cluster(s) checked via ${basis.method || "cross-cluster CE"} — thin coverage degrades to a low count, never a false badge.`,
+        })
+      );
+    }
+    wrap.appendChild(cwrap);
+  }
+  return wrap;
+}
+
+// ---------------------------------------------------------------------------
+// analysis block (fetch_budget>0). VoI fetch-phase honesty: how many pages were
+// fetched, why the walk stopped, and the best unopened value left on the table.
+// ---------------------------------------------------------------------------
+function analysisBlock(an) {
+  if (!an || typeof an !== "object") return null;
+  const wrap = el("div", { class: "search-analysis", style: { margin: "0.6rem 0" } });
+  wrap.appendChild(el("h3", { class: "subhead", text: "fetch analysis (VoI)" }));
+  const fetches = Number(an.fetches_made);
+  const stop = an.search_stopped_because != null ? String(an.search_stopped_because) : "—";
+  const gain = Number(an.estimated_marginal_gain_remaining);
+  const kv = el("dl", { class: "kv" });
+  kv.appendChild(el("dt", { text: "fetches made" }));
+  kv.appendChild(el("dd", { text: Number.isFinite(fetches) ? String(fetches) : "—" }));
+  kv.appendChild(el("dt", { text: "stopped because" }));
+  kv.appendChild(el("dd", { text: stop }));
+  kv.appendChild(el("dt", { text: "est. marginal gain remaining" }));
+  kv.appendChild(el("dd", { text: Number.isFinite(gain) ? fmtScore(gain, 3) : "—" }));
+  wrap.appendChild(kv);
+  wrap.appendChild(
+    el("div", {
+      class: "honesty",
+      text: "the VoI walk stops when the next fetch's expected gain falls below its cost (ADR-26) — opt-in per-query egress, direct lane only.",
+    })
+  );
   return wrap;
 }
 
@@ -467,9 +540,14 @@ registerPanel({
   refreshMs: null, // on-demand only
   requiresBearer: false,
   async render(container) {
-    // --- Controls. All map to documented /v1/search params. -----------------
+    // Small labeled-field helper.
+    const field = (label, control) =>
+      el("label", { class: "field" }, el("span", { text: label }), control);
+
+    // --- Primary controls. All map to documented /v1/search params. ----------
     const input = el("input", {
       type: "text",
+      class: "q",
       placeholder: "query (never logged)",
       "aria-label": "search query",
     });
@@ -482,12 +560,147 @@ registerPanel({
     const scopeSel = el(
       "select",
       { "aria-label": "scope" },
-      el("option", { value: "both", text: "scope: both" }),
-      el("option", { value: "local", text: "scope: local" }),
-      el("option", { value: "web", text: "scope: web" })
+      el("option", { value: "both", text: "both" }),
+      el("option", { value: "local", text: "local" }),
+      el("option", { value: "web", text: "web" })
     );
+    const laneSel = el(
+      "select",
+      { "aria-label": "lane" },
+      el("option", { value: "direct", text: "direct" }),
+      el("option", { value: "anon", text: "anon (Tor)" }),
+      el("option", { value: "region", text: "region:…" })
+    );
+    const regionInput = el("input", { type: "text", placeholder: "region id", style: { width: "7rem", display: "none" } });
+    laneSel.addEventListener("change", () => {
+      regionInput.style.display = laneSel.value === "region" ? "" : "none";
+    });
+    const limitInput = el("input", { type: "number", min: "1", max: "50", placeholder: "limit", style: { width: "5rem" } });
     const run = el("button", { class: "action", text: "search" });
-    const form = el("div", { class: "search-form" }, input, modeSel, scopeSel, run);
+
+    const row1 = el("div", { class: "search-form" }, input, run);
+    const row2 = el(
+      "div",
+      { class: "field-row" },
+      field("mode", modeSel),
+      field("scope", scopeSel),
+      field("lane", laneSel),
+      regionInput,
+      field("limit", limitInput)
+    );
+
+    // --- Answer / fetch / diversity / compare toggles ------------------------
+    const answerChk = el("input", { type: "checkbox" });
+    const diversityChk = el("input", { type: "checkbox" });
+    const compareChk = el("input", { type: "checkbox" });
+    const fetchBudgetInput = el("input", { type: "number", min: "0", max: "8", placeholder: "budget", style: { width: "5rem" } });
+    const row3 = el(
+      "div",
+      { class: "field-row" },
+      el("label", { class: "checkbox" }, answerChk, "answer (extractive passage)"),
+      field("fetch_budget", fetchBudgetInput),
+      el("label", { class: "checkbox" }, diversityChk, "diversity=evidence"),
+      el("label", { class: "checkbox" }, compareChk, "compare=vantages")
+    );
+
+    // --- Geo + time window ---------------------------------------------------
+    const latInput = el("input", { type: "number", step: "any", placeholder: "lat", style: { width: "6rem" } });
+    const lonInput = el("input", { type: "number", step: "any", placeholder: "lon", style: { width: "6rem" } });
+    const radiusInput = el("input", { type: "number", step: "any", placeholder: "radius km", style: { width: "6rem" } });
+    const h3Input = el("input", { type: "text", placeholder: "h3 cell (alt to lat/lon)", style: { width: "11rem" } });
+    const afterInput = el("input", { type: "date", "aria-label": "after" });
+    const beforeInput = el("input", { type: "date", "aria-label": "before" });
+    const row4 = el(
+      "div",
+      { class: "field-row" },
+      field("lat", latInput),
+      field("lon", lonInput),
+      field("radius_km", radiusInput),
+      field("h3", h3Input),
+      field("after", afterInput),
+      field("before", beforeInput)
+    );
+    const geoNote = el("div", {
+      class: "honesty",
+      text: "geo/time filters apply to LOCAL documents only (ADR-10) — web results can't be geo-filtered; scope=web + a filter is refused, scope=both serves filtered-local + unfiltered-web (degraded:[geo_web_unfiltered]).",
+    });
+
+    // --- Advanced / Tuning drawer (ADR-30), built from /v1/config ------------
+    const drawer = el("details", { class: "drawer" });
+    drawer.appendChild(
+      el(
+        "summary",
+        {},
+        "Advanced / Tuning",
+        el("span", { class: "drawer-sub", text: " — per-request overrides, clamped, persist nothing" })
+      )
+    );
+    const drawerBody = el("div", { class: "drawer-body" }, el("div", { class: "muted", text: "loading config…" }));
+    drawer.appendChild(drawerBody);
+    // tuneControls: key -> { input, def, isBool }
+    const tuneControls = new Map();
+    getConfig().then(({ ok, data }) => {
+      drawerBody.replaceChildren();
+      if (!ok || !data || !data.tunable) {
+        drawerBody.appendChild(el("div", { class: "panel-empty" }, "tuning config unavailable (GET /v1/config) — defaults still apply server-side."));
+        return;
+      }
+      const resetAll = el("button", { class: "ghost", text: "reset all" });
+      drawerBody.appendChild(el("div", { class: "drawer-actions" }, resetAll));
+      const grid = el("div", { class: "tune-grid" });
+      const entries = Object.entries(data.tunable);
+      for (const [key, meta] of entries) {
+        const def = meta.default;
+        const isBool = typeof def === "boolean";
+        const nameEl = el("span", { class: "tune-name", text: key });
+        let ctl;
+        if (isBool) {
+          ctl = el(
+            "select",
+            {},
+            el("option", { value: "", text: `default (${def})` }),
+            el("option", { value: "true", text: "true" }),
+            el("option", { value: "false", text: "false" })
+          );
+        } else {
+          ctl = el("input", {
+            type: "number",
+            step: "any",
+            placeholder: String(def),
+          });
+          if (meta.min != null) ctl.min = String(meta.min);
+          if (meta.max != null) ctl.max = String(meta.max);
+        }
+        const mark = () => {
+          const changed = isBool ? ctl.value !== "" : ctl.value !== "" && Number(ctl.value) !== Number(def);
+          nameEl.classList.toggle("changed", changed);
+        };
+        ctl.addEventListener("input", mark);
+        ctl.addEventListener("change", mark);
+        tuneControls.set(key, { input: ctl, def, isBool });
+        const metaLine =
+          (meta.unit ? `${meta.unit} · ` : "") +
+          `default ${def}` +
+          (meta.min != null && meta.max != null ? ` · range ${meta.min}–${meta.max}` : "");
+        grid.appendChild(
+          el(
+            "div",
+            { class: "tune" },
+            nameEl,
+            ctl,
+            meta.rationale ? el("div", { class: "tune-why", text: meta.rationale }) : null,
+            el("div", { class: "tune-meta", text: metaLine })
+          )
+        );
+      }
+      drawerBody.appendChild(grid);
+      resetAll.addEventListener("click", () => {
+        for (const { input: c } of tuneControls.values()) c.value = "";
+        for (const n of grid.querySelectorAll(".tune-name")) n.classList.remove("changed");
+      });
+    });
+
+    const form = el("div", {}, row1, row2, row3, row4, geoNote, drawer);
     const out = el("div", { class: "search-out" });
 
     async function doSearch() {
@@ -502,8 +715,46 @@ registerPanel({
       params.set("q", qRaw);
       const mode = modeSel.value || "fast";
       const scope = scopeSel.value || "both";
-      if (mode && mode !== "fast") params.set("mode", mode);
-      if (scope && scope !== "both") params.set("scope", scope);
+      if (mode !== "fast") params.set("mode", mode);
+      if (scope !== "both") params.set("scope", scope);
+      // lane
+      const lane = laneSel.value;
+      if (lane === "anon") params.set("lane", "anon");
+      else if (lane === "region" && regionInput.value.trim()) params.set("lane", `region:${regionInput.value.trim()}`);
+      if (limitInput.value.trim()) params.set("limit", limitInput.value.trim());
+      // answer / fetch_budget / diversity / compare
+      if (fetchBudgetInput.value.trim()) params.set("fetch_budget", fetchBudgetInput.value.trim());
+      if (answerChk.checked) params.set("answer", "true");
+      if (diversityChk.checked) params.set("diversity", "evidence");
+      if (compareChk.checked) params.set("compare", "vantages");
+      // geo: h3 takes precedence; else lat/lon(+radius_km)
+      const h3v = h3Input.value.trim();
+      if (h3v) {
+        params.set("h3", h3v);
+      } else {
+        if (latInput.value.trim()) params.set("lat", latInput.value.trim());
+        if (lonInput.value.trim()) params.set("lon", lonInput.value.trim());
+        if (radiusInput.value.trim()) params.set("radius_km", radiusInput.value.trim());
+      }
+      // time window: date → unix seconds (UTC midnight)
+      const toUnix = (v) => {
+        const t = Date.parse(`${v}T00:00:00Z`);
+        return Number.isFinite(t) ? Math.floor(t / 1000) : null;
+      };
+      if (afterInput.value) {
+        const u = toUnix(afterInput.value);
+        if (u != null) params.set("after", String(u));
+      }
+      if (beforeInput.value) {
+        const u = toUnix(beforeInput.value);
+        if (u != null) params.set("before", String(u));
+      }
+      // tuning overrides (ADR-30): only knobs CHANGED from their default → ov_<key>.
+      for (const [key, { input: c, def, isBool }] of tuneControls) {
+        const raw = c.value;
+        if (raw === "" || raw == null) continue;
+        if (isBool || Number(raw) !== Number(def)) params.set(`ov_${key}`, raw);
+      }
       const path = `/v1/search?${params.toString()}`;
 
       // Fire WITHOUT a bearer first (the static shell is unauthenticated and
@@ -588,16 +839,23 @@ registerPanel({
           );
         }
       }
-      // `corroboration` (additive, future): a count/level of cross-source agreement.
-      if (Object.prototype.hasOwnProperty.call(d, "corroboration") && d.corroboration != null) {
-        const co = d.corroboration;
-        const coText =
-          typeof co === "object"
-            ? (Number.isFinite(Number(co.count)) ? `${Number(co.count)} corroborating source(s)` : JSON.stringify(co))
-            : String(co);
-        frag.appendChild(
-          el("div", { class: "honesty", style: { margin: "0.3rem 0" }, text: `corroboration: ${coText}` })
-        );
+      // Claim-level corroboration is part of best_passage (schema 2) and rendered
+      // there — not a separate top-level field.
+
+      // --- applied_overrides (ADR-30): the CLAMPED effective tuning for THIS
+      //     request — the honest "you asked 9000, you got 5000" readout. -------
+      if (d.applied_overrides && typeof d.applied_overrides === "object") {
+        const items = Object.entries(d.applied_overrides);
+        if (items.length) {
+          frag.appendChild(
+            el("div", {
+              class: "applied-overrides",
+              html:
+                "tuning in effect — " +
+                items.map(([k, v]) => `<b>${escapeHtml(k)}</b>=${escapeHtml(String(v))}`).join(", "),
+            })
+          );
+        }
       }
 
       // --- Result count + the result list (or a clear empty message). --------
@@ -633,6 +891,10 @@ registerPanel({
       // --- divergence (compare=vantages). ------------------------------------
       const db = divergenceBlock(d.divergence);
       if (db) frag.appendChild(db);
+
+      // --- analysis (fetch_budget>0): the VoI fetch-phase honesty block. ------
+      const an = analysisBlock(d.analysis);
+      if (an) frag.appendChild(an);
 
       // --- timings.stage_ms as a barChart. -----------------------------------
       const t = d.timings && typeof d.timings === "object" ? d.timings : null;

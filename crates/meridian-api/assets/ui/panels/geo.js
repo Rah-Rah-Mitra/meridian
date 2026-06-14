@@ -26,6 +26,7 @@ const WINDOW_OPTIONS = ["24h", "7d", "all"]; // narrower-than-all excludes undat
 // first paint mirrors `GET /v1/geo/heatmap` with no params.
 let _res = 5;
 let _window = "7d";
+let _q = ""; // optional query filter (heatmap of cells matching a query)
 
 registerPanel({
   id: "panel-geo",
@@ -79,13 +80,26 @@ function renderControls(container) {
     )
   );
 
+  const qInput = el("input", {
+    type: "text",
+    value: _q,
+    placeholder: "q filter (optional)",
+    title: "restrict the heatmap to cells of docs matching this query (optional)",
+    style: { width: "11rem" },
+    on: {
+      change: (e) => { _q = (e.target.value || "").trim(); onChange(); },
+      keydown: (e) => { if (e.key === "Enter") { e.preventDefault(); _q = (e.target.value || "").trim(); onChange(); } },
+    },
+  });
+
   return el(
     "div",
     { class: "search-form", style: { "margin-bottom": "0.5rem" } },
     el("label", { class: "muted", style: { "align-self": "center" } }, "resolution"),
     resSelect,
     el("label", { class: "muted", style: { "align-self": "center" } }, "window"),
-    windowSelect
+    windowSelect,
+    qInput
   );
 }
 
@@ -97,6 +111,7 @@ async function geoRender(container) {
   const params = new URLSearchParams();
   params.set("res", String(_res));
   params.set("window", _window);
+  if (_q) params.set("q", _q);
   const { ok, status, data, error } = await fetchJSON(`/v1/geo/heatmap?${params.toString()}`);
 
   if (!ok) {
@@ -147,13 +162,25 @@ async function geoRender(container) {
       value: Number(d.z),
       significant: !!d.significant,
       count: Number(d.count) || 0,
+      h3: d.h3 != null ? String(d.h3) : null,
+      q_value: Number(d.q_value),
     }));
     hexMap(canvas, mapCells, { valueLabel: "Gi* z" });
+    // Colormap legend strip (cool ↔ hot Gi* z).
+    container.appendChild(
+      el(
+        "div",
+        { class: "cmap-legend" },
+        el("span", { text: "cool" }),
+        el("span", { class: "cmap-bar" }),
+        el("span", { text: "hot (Gi* z)" })
+      )
+    );
     container.appendChild(
       el(
         "div",
         { class: "honesty-label" },
-        "color = Getis-Ord Gi* z (cool ↔ hot); the heavy ring = significant hot spot (q ≤ 0.05, BH-FDR) — the only defensible hot-spot claim. Disc area = raw count, kept visible for explainability."
+        "color = Getis-Ord Gi* z (cool ↔ hot); the heavy ring = significant hot spot (q ≤ 0.05, BH-FDR) — the only defensible hot-spot claim. Disc area = raw count, kept visible for explainability. Hover a cell for its readout."
       )
     );
   }

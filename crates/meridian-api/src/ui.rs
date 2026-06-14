@@ -68,6 +68,14 @@ fn lookup(path: &str) -> Option<Asset> {
             mime: JS,
             bytes: include_bytes!("../assets/ui/panels/ope.js"),
         },
+        "panels/metrics.js" => Asset {
+            mime: JS,
+            bytes: include_bytes!("../assets/ui/panels/metrics.js"),
+        },
+        "panels/deploy.js" => Asset {
+            mime: JS,
+            bytes: include_bytes!("../assets/ui/panels/deploy.js"),
+        },
         _ => return None,
     };
     Some(asset)

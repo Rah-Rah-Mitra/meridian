@@ -61,13 +61,75 @@ function dayToLabel(day) {
   return `${d.getUTCFullYear()}-${mm}-${dd}`;
 }
 
+// Panel-local control state (read-only GET params; no persistence).
+let _topic = "";
+let _h3 = "";
+let _twindow = "";
+
 registerPanel({
   id: "panel-trends",
   title: "trends",
   refreshMs: 60000, // conservative: trends/geo >= 60s
   requiresBearer: false,
-  async render(container) {
-    const { ok, status, data, error } = await fetchJSON("/v1/trends");
+  render(container) {
+    return trendsRender(container);
+  },
+});
+
+// topic (GDELT EventRootCode 1..20) / window / h3 res-5 selectors. Changing any
+// re-issues the GET into the same container (mirrors geo's control pattern).
+function trendsControls(container) {
+  const onChange = () => {
+    container.replaceChildren();
+    trendsRender(container).catch((err) => {
+      container.appendChild(
+        el("div", { class: "panel-error" }, `panel failed to render: ${String(err && err.message ? err.message : err)}`)
+      );
+    });
+  };
+  const topicSel = el(
+    "select",
+    { "aria-label": "topic", title: "GDELT EventRootCode 1..20", on: { change: (e) => { _topic = e.target.value; onChange(); } } },
+    el("option", { value: "", selected: _topic === "" ? true : null }, "all topics"),
+    Array.from({ length: 20 }, (_, i) =>
+      el("option", { value: String(i + 1), selected: _topic === String(i + 1) ? true : null }, rootLabel(i + 1))
+    )
+  );
+  const winSel = el(
+    "select",
+    { "aria-label": "window", on: { change: (e) => { _twindow = e.target.value; onChange(); } } },
+    el("option", { value: "", selected: _twindow === "" ? true : null }, "default window"),
+    ["24h", "7d", "all"].map((w) => el("option", { value: w, selected: _twindow === w ? true : null }, w))
+  );
+  const h3Input = el("input", {
+    type: "text",
+    value: _h3,
+    placeholder: "h3 res-5 (optional)",
+    style: { width: "10rem" },
+    on: {
+      change: (e) => { _h3 = (e.target.value || "").trim(); onChange(); },
+      keydown: (e) => { if (e.key === "Enter") { e.preventDefault(); _h3 = (e.target.value || "").trim(); onChange(); } },
+    },
+  });
+  return el(
+    "div",
+    { class: "search-form", style: { "margin-bottom": "0.5rem" } },
+    el("label", { class: "muted", style: { "align-self": "center" } }, "topic"),
+    topicSel,
+    el("label", { class: "muted", style: { "align-self": "center" } }, "window"),
+    winSel,
+    h3Input
+  );
+}
+
+async function trendsRender(container) {
+    container.appendChild(trendsControls(container));
+    const tparams = new URLSearchParams();
+    if (_topic) tparams.set("topic", _topic);
+    if (_h3) tparams.set("h3", _h3);
+    if (_twindow) tparams.set("window", _twindow);
+    const qs = tparams.toString();
+    const { ok, status, data, error } = await fetchJSON(`/v1/trends${qs ? `?${qs}` : ""}`);
 
     if (!ok) {
       // 404 = analytics disabled (GDELT opt-in). Distinguish it clearly from a
@@ -177,8 +239,7 @@ registerPanel({
         "honesty"
       )
     );
-  },
-});
+}
 
 // Build the movers table. `significant` is the PRIMARY badge; z/q_value are
 // supporting columns; the noise label and the burst flag each render as their
