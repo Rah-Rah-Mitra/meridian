@@ -313,6 +313,29 @@ pub struct SearchConfig {
     /// ms-marco logit scale is corpus-specific, so an operator re-derives it from
     /// their own `answer_trust` run before relying on the badge.
     pub answer_corroboration_tau: f32,
+    /// Reciprocal Rank Fusion constant `k` (Cormack et al., SIGIR'09; SPEC §3/§11).
+    /// `score(d) = Σ_i 1/(k + rank_i(d))` — score-scale agnostic, so it needs no
+    /// tuning in practice. Promoted from the locked `rrf::RRF_K` const so an
+    /// operator can probe the fusion's rank-decay per request; the default stays
+    /// the SPEC-locked 60.
+    pub rrf_k: u32,
+    /// Cross-encoder rerank stage deadline (deep mode, SPEC §11). The CE re-scores
+    /// the top candidates; on overrun it returns what it finished and the response
+    /// carries `degraded:["rerank_timeout"]` — a thinner reranking, never a stalled
+    /// request. Promoted from a planner constant; default 1500ms.
+    pub rerank_deadline_ms: u64,
+    /// Answer-mode passage-CE batch deadline (Phase 10, ADR-29): the per-fetched-
+    /// document pass that scores each extracted passage to pick `best_passage`.
+    /// On overrun the CE returns its completed pairs — a thinner (never inflated)
+    /// passage set. Promoted from a planner constant; default 800ms.
+    pub answer_passage_deadline_ms: u64,
+    /// C1 corroboration CE-batch deadline (Phase 10, ADR-29 / roadmap §8.2): the
+    /// single cross-cluster pass behind `best_passage.corroboration`. Measured
+    /// on-device at p50 312ms / p99 508ms (~5 clusters, ms-marco INT8 on the A76),
+    /// so 450ms caps the worst-case answer-p50 addition while rarely truncating;
+    /// on overrun the count only thins, never inflates. Promoted from a planner
+    /// constant; default 450ms.
+    pub answer_corroboration_deadline_ms: u64,
 }
 
 impl Default for SearchConfig {
@@ -334,6 +357,11 @@ impl Default for SearchConfig {
             answer_abstain_threshold: 0.0,
             answer_corroborate: true,
             answer_corroboration_tau: 3.0,
+            // Kept in sync with `meridian_query::rrf::RRF_K` (SPEC §3 locked).
+            rrf_k: 60,
+            rerank_deadline_ms: 1_500,
+            answer_passage_deadline_ms: 800,
+            answer_corroboration_deadline_ms: 450,
         }
     }
 }
@@ -436,11 +464,23 @@ impl ModelsConfig {
 #[serde(deny_unknown_fields, default)]
 pub struct EvidenceConfig {
     pub enabled: bool,
+    /// Query-time derivation-clustering threshold on estimated sketch containment
+    /// (Phase 7, ADR-18). Edges with `containment ≥ τ` merge into one origin
+    /// cluster. This governs ONLY the per-response union-find — the index-time
+    /// sketch encoding is unaffected, so changing it never needs a re-ingest. The
+    /// unrelated-pair noise floor is ≈ BINS/256 expected matching bins, so a τ far
+    /// below ~0.23 starts merging independent docs. Promoted from the locked
+    /// `sketch::CONTAINMENT_TAU` const; default 0.3 (suite-9).
+    pub containment_tau: f64,
 }
 
 impl Default for EvidenceConfig {
     fn default() -> Self {
-        Self { enabled: true }
+        Self {
+            enabled: true,
+            // Kept in sync with `meridian_index::sketch::CONTAINMENT_TAU` (suite-9).
+            containment_tau: 0.3,
+        }
     }
 }
 

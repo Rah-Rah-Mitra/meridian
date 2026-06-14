@@ -84,6 +84,7 @@ fn temp_planner(
         None,
         &SearchConfig::default(),
         &vector_cfg,
+        &meridian_common::config::EvidenceConfig::default(),
     )
 }
 
@@ -102,6 +103,7 @@ fn request(lane: Lane, scope: Scope) -> SearchRequest {
         fetch_budget: 0,
         answer: false,
         diversity_evidence: false,
+        overrides: Default::default(),
     }
 }
 
@@ -234,6 +236,7 @@ async fn inv18_decision_log_direct_lane_only() {
         None,
         &SearchConfig::default(),
         &vector_cfg,
+        &meridian_common::config::EvidenceConfig::default(),
     );
 
     // (a) Unpinned direct web search: exactly one decision row (the write is

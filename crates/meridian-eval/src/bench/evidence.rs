@@ -91,7 +91,11 @@ pub fn run(cfg: &BenchConfig) -> SuiteResult {
                 .map(|r| meridian_index::lexical::url_key(&r.url))
                 .collect();
             let sketches = reader.get_many(&keys);
-            let block = annotate(&mut results, &sketches);
+            let block = annotate(
+                &mut results,
+                &sketches,
+                meridian_index::sketch::CONTAINMENT_TAU,
+            );
             samples.push(t.elapsed().as_secs_f64() * 1e3);
             last_independent = block.independent_source_count;
         }

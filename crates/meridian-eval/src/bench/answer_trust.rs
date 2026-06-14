@@ -628,7 +628,7 @@ fn cluster_query(q: &ClaimQuery) -> Clustered {
     for (i, c) in q.cands.iter().enumerate() {
         sketches.insert(i as u64, Sketch::compute(&c.text));
     }
-    let tags = cluster_tags(&keys, &sketches);
+    let tags = cluster_tags(&keys, &sketches, meridian_index::sketch::CONTAINMENT_TAU);
     let c_w = tags[0].expect("claim always sketched").id;
 
     let mut other_clusters = Vec::new();

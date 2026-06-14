@@ -245,6 +245,7 @@ fn build_components(config: MeridianConfig) -> Result<Components, String> {
         sketches,
         &config.search,
         &config.vector,
+        &config.evidence,
     ));
     Ok(Components {
         config,
