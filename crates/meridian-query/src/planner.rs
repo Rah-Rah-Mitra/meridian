@@ -4,9 +4,9 @@
 //! ANN joins the fusion in Phase 2; LTR/rerank in Phase 3.
 
 use crate::intent;
-use crate::rrf::{RRF_K, rrf_fuse};
+use crate::rrf::rrf_fuse;
 use crate::{Scope, SearchMode};
-use meridian_common::config::{SearchConfig, VectorConfig};
+use meridian_common::config::{EvidenceConfig, SearchConfig, VectorConfig};
 use meridian_common::shed::ShedState;
 use meridian_egress::{Lane, LaneRegistry};
 use meridian_embed::Embedder;
@@ -72,6 +72,38 @@ pub struct SearchRequest {
     /// syndicated copies defer to the back. Pure local reordering — no
     /// privacy surface; a no-op when the evidence layer is off.
     pub diversity_evidence: bool,
+    /// Per-request tuning overrides (ADR-30): each `Some` value replaces the
+    /// corresponding config default for THIS request only (the API layer has
+    /// already clamped them to safe bounds). `None` everywhere = the default
+    /// path, byte-identical to pre-ADR-30 behavior. Persists nothing; never
+    /// logged with the query text.
+    pub overrides: SearchOverrides,
+}
+
+/// Clamped per-request tuning overrides (ADR-30). All `None` = use config. The
+/// API layer builds this from the `ov_*` query params, saturating each to the
+/// shared safe range; the planner reads `overrides.X.unwrap_or(cfg.X)` at each
+/// site. Names mirror the config fields (sans struct prefix).
+#[derive(Debug, Clone, Default)]
+pub struct SearchOverrides {
+    pub bm25_top_k: Option<usize>,
+    pub vector_top_k: Option<usize>,
+    pub max_per_domain: Option<usize>,
+    pub searx_deadline_ms: Option<u64>,
+    pub deep_fetch_max: Option<usize>,
+    pub deep_fetch_deadline_ms: Option<u64>,
+    pub answer_deadline_ms: Option<u64>,
+    pub answer_passage_cap: Option<usize>,
+    pub answer_abstain_threshold: Option<f32>,
+    pub answer_corroborate: Option<bool>,
+    pub answer_corroboration_tau: Option<f32>,
+    pub compare_jitter_ms_max: Option<u64>,
+    pub compare_noise_floor_p90: Option<f64>,
+    pub rrf_k: Option<u32>,
+    pub containment_tau: Option<f64>,
+    pub rerank_deadline_ms: Option<u64>,
+    pub answer_passage_deadline_ms: Option<u64>,
+    pub answer_corroboration_deadline_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -335,6 +367,9 @@ pub struct Planner {
     sketches: Option<crate::ingest::SketchReader>,
     cfg: SearchConfig,
     vector_cfg: VectorConfig,
+    /// Query-time derivation-clustering threshold (config `evidence.containment_tau`),
+    /// the default the per-request `containment_tau` override falls back to.
+    evidence_containment_tau: f64,
 }
 
 impl Planner {
@@ -357,6 +392,7 @@ impl Planner {
         sketches: Option<crate::ingest::SketchReader>,
         cfg: &SearchConfig,
         vector_cfg: &VectorConfig,
+        evidence_cfg: &EvidenceConfig,
     ) -> Self {
         let cache = moka::sync::Cache::builder()
             .max_capacity(128 * 1024 * 1024)
@@ -390,6 +426,7 @@ impl Planner {
             sketches,
             cfg: cfg.clone(),
             vector_cfg: vector_cfg.clone(),
+            evidence_containment_tau: evidence_cfg.containment_tau,
         }
     }
 
@@ -425,6 +462,48 @@ impl Planner {
         }
         hasher.update(&req.after.unwrap_or(0).to_le_bytes());
         hasher.update(&req.before.unwrap_or(u64::MAX).to_le_bytes());
+        // Per-request tuning overrides (ADR-30) MUST key the cache: a result set
+        // produced under a custom bm25_top_k / rrf_k / containment_tau / deadline
+        // is a different artifact than the default one. A no-override request
+        // hashes every presence byte to 0, so default queries still share entries.
+        let o = &req.overrides;
+        for v in [
+            o.bm25_top_k,
+            o.vector_top_k,
+            o.max_per_domain,
+            o.deep_fetch_max,
+            o.answer_passage_cap,
+        ] {
+            hasher.update(&[u8::from(v.is_some())]);
+            hasher.update(&(v.unwrap_or(0) as u64).to_le_bytes());
+        }
+        for v in [
+            o.searx_deadline_ms,
+            o.deep_fetch_deadline_ms,
+            o.answer_deadline_ms,
+            o.compare_jitter_ms_max,
+            o.rerank_deadline_ms,
+            o.answer_passage_deadline_ms,
+            o.answer_corroboration_deadline_ms,
+        ] {
+            hasher.update(&[u8::from(v.is_some())]);
+            hasher.update(&v.unwrap_or(0).to_le_bytes());
+        }
+        hasher.update(&[u8::from(o.rrf_k.is_some())]);
+        hasher.update(&o.rrf_k.unwrap_or(0).to_le_bytes());
+        for v in [o.answer_abstain_threshold, o.answer_corroboration_tau] {
+            hasher.update(&[u8::from(v.is_some())]);
+            hasher.update(&v.unwrap_or(0.0).to_le_bytes());
+        }
+        for v in [o.compare_noise_floor_p90, o.containment_tau] {
+            hasher.update(&[u8::from(v.is_some())]);
+            hasher.update(&v.unwrap_or(0.0).to_le_bytes());
+        }
+        hasher.update(&[match o.answer_corroborate {
+            None => 0,
+            Some(false) => 1,
+            Some(true) => 2,
+        }]);
         *hasher.finalize().as_bytes()
     }
 
@@ -498,6 +577,13 @@ impl Planner {
     pub fn purge_caches(&self) {
         self.cache.invalidate_all();
         self.anon_cache.invalidate_all();
+    }
+
+    /// Whether the cross-encoder is compiled in AND its model loaded. Gates the
+    /// deep-rerank / answer / corroboration features — `GET /v1/config` surfaces
+    /// it so the console shows those as LIVE vs DORMANT (scratch image, no ort).
+    pub fn reranker_available(&self) -> bool {
+        self.reranker.available()
     }
 
     /// Honest cache occupancy for `/metrics` (Phase-6 finding: weighted-cap
@@ -666,8 +752,8 @@ impl Planner {
             let embedder = self.embedder.clone();
             let vectors = self.vectors.clone();
             let q = req.q.clone();
-            let top_k = self.cfg.bm25_top_k;
-            let ann_k = self.vector_cfg.top_k;
+            let top_k = req.overrides.bm25_top_k.unwrap_or(self.cfg.bm25_top_k);
+            let ann_k = req.overrides.vector_top_k.unwrap_or(self.vector_cfg.top_k);
             let filter = search_filter.clone();
             let filtered =
                 filter.geo.is_some() || filter.after_ts.is_some() || filter.before_ts.is_some();
@@ -925,7 +1011,7 @@ impl Planner {
         }
         lists.extend(engine_lists.into_values());
 
-        let fused = rrf_fuse(&lists, RRF_K);
+        let fused = rrf_fuse(&lists, req.overrides.rrf_k.unwrap_or(self.cfg.rrf_k));
         timings.insert("fuse_ms", fuse_start.elapsed().as_millis() as u64);
 
         // LTR re-score the top-100 fused candidates (SPEC §11). Cold-start linear
@@ -997,7 +1083,12 @@ impl Planner {
                 .and_then(|u| u.host_str().map(str::to_owned))
                 .unwrap_or_default();
             let count = per_domain.entry(domain).or_insert(0);
-            if *count >= self.cfg.max_per_domain {
+            if *count
+                >= req
+                    .overrides
+                    .max_per_domain
+                    .unwrap_or(self.cfg.max_per_domain)
+            {
                 continue;
             }
             *count += 1;
@@ -1035,9 +1126,17 @@ impl Planner {
                     .collect();
                 let query = req.q.clone();
                 let reranker = self.reranker.clone();
+                let rerank_deadline_ms = req
+                    .overrides
+                    .rerank_deadline_ms
+                    .unwrap_or(self.cfg.rerank_deadline_ms);
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 rayon::spawn(move || {
-                    let r = reranker.rerank(&query, &pairs, std::time::Duration::from_millis(1500));
+                    let r = reranker.rerank(
+                        &query,
+                        &pairs,
+                        std::time::Duration::from_millis(rerank_deadline_ms),
+                    );
                     let _ = tx.send(r);
                 });
                 match rx.await {
@@ -1097,11 +1196,20 @@ impl Planner {
                     // its own phase deadline (02-budgets: answer p50 ≤3.0s —
                     // the deep 2.5s budget is not silently busted).
                     let deadline = std::time::Duration::from_millis(if answer_mode {
-                        self.cfg.answer_deadline_ms
+                        req.overrides
+                            .answer_deadline_ms
+                            .unwrap_or(self.cfg.answer_deadline_ms)
                     } else {
-                        self.cfg.deep_fetch_deadline_ms
+                        req.overrides
+                            .deep_fetch_deadline_ms
+                            .unwrap_or(self.cfg.deep_fetch_deadline_ms)
                     });
-                    let budget = req.fetch_budget.min(self.cfg.deep_fetch_max.max(1));
+                    let budget = req.fetch_budget.min(
+                        req.overrides
+                            .deep_fetch_max
+                            .unwrap_or(self.cfg.deep_fetch_max)
+                            .max(1),
+                    );
                     let head = results.len().min(20);
                     // Standardize head scores once — the value model's score_z.
                     let n = head.max(1) as f64;
@@ -1249,7 +1357,10 @@ impl Planner {
                                 let passages = meridian_fetch::passage::split_passages(
                                     &doc.text,
                                     500,
-                                    self.cfg.answer_passage_cap.max(1),
+                                    req.overrides
+                                        .answer_passage_cap
+                                        .unwrap_or(self.cfg.answer_passage_cap)
+                                        .max(1),
                                 );
                                 if !passages.is_empty() {
                                     let pairs: Vec<Pair> = passages
@@ -1263,12 +1374,16 @@ impl Planner {
                                         .collect();
                                     let query = req.q.clone();
                                     let reranker = self.reranker.clone();
+                                    let passage_deadline_ms = req
+                                        .overrides
+                                        .answer_passage_deadline_ms
+                                        .unwrap_or(self.cfg.answer_passage_deadline_ms);
                                     let (tx, rx) = tokio::sync::oneshot::channel();
                                     rayon::spawn(move || {
                                         let r = reranker.rerank(
                                             &query,
                                             &pairs,
-                                            std::time::Duration::from_millis(800),
+                                            std::time::Duration::from_millis(passage_deadline_ms),
                                         );
                                         let _ = tx.send(r);
                                     });
@@ -1336,7 +1451,12 @@ impl Planner {
                         // low-relevance passages, it does NOT certify shown ones
                         // (no coverage guarantee — conformal bands died in suite 16).
                         if let Some(bp) = &best_passage {
-                            if bp.ce_score < self.cfg.answer_abstain_threshold {
+                            if bp.ce_score
+                                < req
+                                    .overrides
+                                    .answer_abstain_threshold
+                                    .unwrap_or(self.cfg.answer_abstain_threshold)
+                            {
                                 best_passage = None;
                                 degraded.push("answer_below_threshold");
                             }
@@ -1359,12 +1479,16 @@ impl Planner {
                             .collect();
                         let query = req.q.clone();
                         let reranker = self.reranker.clone();
+                        let passage_deadline_ms = req
+                            .overrides
+                            .answer_passage_deadline_ms
+                            .unwrap_or(self.cfg.answer_passage_deadline_ms);
                         let (tx, rx) = tokio::sync::oneshot::channel();
                         rayon::spawn(move || {
                             let r = reranker.rerank(
                                 &query,
                                 &pairs,
-                                std::time::Duration::from_millis(800),
+                                std::time::Duration::from_millis(passage_deadline_ms),
                             );
                             let _ = tx.send(r);
                         });
@@ -1427,7 +1551,13 @@ impl Planner {
             let ev_start = Instant::now();
             let keys: Vec<u64> = results.iter().map(|r| url_key(&r.url)).collect();
             let found = reader.get_many(&keys);
-            let block = crate::evidence::annotate(&mut results, &found);
+            let block = crate::evidence::annotate(
+                &mut results,
+                &found,
+                req.overrides
+                    .containment_tau
+                    .unwrap_or(self.evidence_containment_tau),
+            );
             timings.insert("evidence_ms", ev_start.elapsed().as_millis() as u64);
             block
         });
@@ -1462,7 +1592,13 @@ impl Planner {
         // count. One CE batch (~10–20ms within the ~500ms answer headroom);
         // shipped after the judge cleared precision 0.97 / recall 1.0 / zero
         // same-cluster leakage on real text + the real CE.
-        if self.cfg.answer_corroborate && evidence.is_some() && self.reranker.available() {
+        if req
+            .overrides
+            .answer_corroborate
+            .unwrap_or(self.cfg.answer_corroborate)
+            && evidence.is_some()
+            && self.reranker.available()
+        {
             if let Some(bp) = best_passage.as_mut() {
                 // the winner's cluster, found by URL (robust to the diversity
                 // reorder above, which permutes `results`).
@@ -1488,23 +1624,31 @@ impl Planner {
                             .collect();
                         let claim = bp.text.clone();
                         let reranker = self.reranker.clone();
+                        let corroboration_deadline_ms = req
+                            .overrides
+                            .answer_corroboration_deadline_ms
+                            .unwrap_or(self.cfg.answer_corroboration_deadline_ms);
                         let (tx, rx) = tokio::sync::oneshot::channel();
-                        // 450ms deadline: the batch measures p50 312ms / p99 508ms
-                        // on-device (suite-20 answer_trust, ~5 clusters), so this
-                        // caps the worst-case answer-p50 addition at +450ms
-                        // (2502+450 ≈ 2952ms ≤ 3.0s) while rarely truncating. On
-                        // overrun the CE returns its completed pairs — a thinner
-                        // (never inflated) count, the honest degradation.
+                        // Corroboration CE-batch deadline (default 450ms): the batch
+                        // measures p50 312ms / p99 508ms on-device (suite-20
+                        // answer_trust, ~5 clusters), so the default caps the
+                        // worst-case answer-p50 addition at +450ms (2502+450 ≈
+                        // 2952ms ≤ 3.0s) while rarely truncating. On overrun the CE
+                        // returns its completed pairs — a thinner (never inflated)
+                        // count, the honest degradation.
                         rayon::spawn(move || {
                             let r = reranker.rerank(
                                 &claim,
                                 &pairs,
-                                std::time::Duration::from_millis(450),
+                                std::time::Duration::from_millis(corroboration_deadline_ms),
                             );
                             let _ = tx.send(r);
                         });
                         if let Ok(Ok(scored)) = rx.await {
-                            let tau = self.cfg.answer_corroboration_tau;
+                            let tau = req
+                                .overrides
+                                .answer_corroboration_tau
+                                .unwrap_or(self.cfg.answer_corroboration_tau);
                             let mut supporting_urls: Vec<String> = Vec::new();
                             for s in &scored {
                                 if s.ce_score >= tau {

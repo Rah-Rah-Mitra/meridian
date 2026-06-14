@@ -7,7 +7,17 @@
 
 pub mod problem;
 pub mod state;
+pub mod tuning;
 pub mod ui;
+
+/// Image/release version surfaced by `GET /v1/config`. The release image version
+/// is the git tag (release.yml), NOT Cargo.toml (pinned at 0.1.0) — so it's
+/// injected at build time via `MERIDIAN_BUILD_VERSION` and falls back to the
+/// crate version for local/dev builds.
+pub const VERSION: &str = match option_env!("MERIDIAN_BUILD_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
 
 use axum::extract::{ConnectInfo, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
@@ -37,6 +47,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/decision-log", get(decision_log_status))
         .route("/v1/decision-log/wipe", post(decision_log_wipe))
         .route("/v1/decision-log/ope", get(decision_log_ope))
+        .route("/v1/config", get(config_endpoint))
         .route("/healthz", get(healthz))
         .route("/metrics", get(metrics_endpoint))
         .layer(axum::middleware::from_fn_with_state(
@@ -211,6 +222,47 @@ struct SearchParams {
     after: Option<u64>,
     #[serde(default)]
     before: Option<u64>,
+    // ----- per-request tuning overrides (ADR-30) -----
+    // Each replaces the config default for THIS request only; clamped to a safe
+    // range server-side (saturating, never 400) and reflected in
+    // `applied_overrides`. Persists nothing; never logged with the query text.
+    // `deny_unknown_fields` (above) makes a misspelled knob a loud 400.
+    #[serde(default)]
+    ov_bm25_top_k: Option<usize>,
+    #[serde(default)]
+    ov_vector_top_k: Option<usize>,
+    #[serde(default)]
+    ov_max_per_domain: Option<usize>,
+    #[serde(default)]
+    ov_searx_deadline_ms: Option<u64>,
+    #[serde(default)]
+    ov_deep_fetch_max: Option<usize>,
+    #[serde(default)]
+    ov_deep_fetch_deadline_ms: Option<u64>,
+    #[serde(default)]
+    ov_answer_deadline_ms: Option<u64>,
+    #[serde(default)]
+    ov_answer_passage_cap: Option<usize>,
+    #[serde(default)]
+    ov_answer_abstain_threshold: Option<f32>,
+    #[serde(default)]
+    ov_answer_corroborate: Option<bool>,
+    #[serde(default)]
+    ov_answer_corroboration_tau: Option<f32>,
+    #[serde(default)]
+    ov_compare_jitter_ms_max: Option<u64>,
+    #[serde(default)]
+    ov_compare_noise_floor_p90: Option<f64>,
+    #[serde(default)]
+    ov_rrf_k: Option<u32>,
+    #[serde(default)]
+    ov_containment_tau: Option<f64>,
+    #[serde(default)]
+    ov_rerank_deadline_ms: Option<u64>,
+    #[serde(default)]
+    ov_answer_passage_deadline_ms: Option<u64>,
+    #[serde(default)]
+    ov_answer_corroboration_deadline_ms: Option<u64>,
 }
 
 /// `h3` accepts the canonical hex form (e.g. `871f1d489ffffff`) or decimal.
@@ -268,10 +320,14 @@ async fn search(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Query(params): Query<SearchParams>,
-) -> Result<Json<SearchResponse>, Problem> {
+) -> Result<Json<serde_json::Value>, Problem> {
     if state.config.auth.require_bearer_for_search {
         bearer_ok(&state, &headers)?;
     }
+    // Per-request tuning overrides (ADR-30): clamp each ov_* to its safe range
+    // (saturating) and record the changed knobs for the honest `applied_overrides`
+    // readout. Nothing here is persisted or logged with the query text.
+    let (overrides, applied_overrides) = build_overrides(&params);
     let mode = match params.mode.as_deref() {
         None | Some("fast") => SearchMode::Fast,
         Some("deep") => SearchMode::Deep,
@@ -332,7 +388,13 @@ async fn search(
                     "a compare must not fetch — its anon half would inherit the budget",
                 ));
             }
-            n.min(state.config.search.deep_fetch_max)
+            // The override (already clamped ≤ the absolute deep_fetch_max ceiling)
+            // is the operator's explicit per-query egress budget.
+            n.min(
+                overrides
+                    .deep_fetch_max
+                    .unwrap_or(state.config.search.deep_fetch_max),
+            )
         }
     };
     let diversity_evidence = match params.diversity.as_deref() {
@@ -368,6 +430,7 @@ async fn search(
         fetch_budget,
         answer,
         diversity_evidence,
+        overrides,
     };
     if compare {
         // Compare governs lanes itself and is web-scoped by definition; a
@@ -398,23 +461,170 @@ async fn search(
                 + state.config.search.anon_searx_deadline_ms
                 + 1_000,
         );
-        let effective_jitter = state.config.search.compare_jitter_ms_max.min(budget_ms);
+        let jitter_max = request
+            .overrides
+            .compare_jitter_ms_max
+            .unwrap_or(state.config.search.compare_jitter_ms_max);
+        let noise_floor = request
+            .overrides
+            .compare_noise_floor_p90
+            .unwrap_or(state.config.search.compare_noise_floor_p90);
+        let effective_jitter = jitter_max.min(budget_ms);
         let response = meridian_query::compare::compare_vantages(
             &state.planner,
             request,
             effective_jitter,
-            state.config.search.compare_noise_floor_p90,
+            noise_floor,
         )
         .await
         .map_err(problem::plan_error)?;
-        return Ok(Json(response));
+        return with_applied(response, applied_overrides);
     }
     let response = state
         .planner
         .search(request)
         .await
         .map_err(problem::plan_error)?;
-    Ok(Json(response))
+    with_applied(response, applied_overrides)
+}
+
+/// Build the clamped per-request overrides (ADR-30) + the `applied_overrides`
+/// readout map (only the knobs the operator changed, with their clamped effective
+/// value). Clamping saturates to `tuning::KNOBS` bounds — the same ranges
+/// `GET /v1/config` advertises, so the drawer's range can never exceed what's
+/// enforced.
+fn build_overrides(
+    p: &SearchParams,
+) -> (
+    meridian_query::planner::SearchOverrides,
+    std::collections::BTreeMap<String, serde_json::Value>,
+) {
+    use meridian_query::planner::SearchOverrides;
+    use tuning::{clamp_f32, clamp_f64, clamp_u32, clamp_u64, clamp_usize};
+    let mut o = SearchOverrides::default();
+    let mut a: std::collections::BTreeMap<String, serde_json::Value> =
+        std::collections::BTreeMap::new();
+    // usize knobs
+    if let Some(v) = p.ov_bm25_top_k {
+        let c = clamp_usize("bm25_top_k", v);
+        o.bm25_top_k = Some(c);
+        a.insert("bm25_top_k".to_owned(), c.into());
+    }
+    if let Some(v) = p.ov_vector_top_k {
+        let c = clamp_usize("vector_top_k", v);
+        o.vector_top_k = Some(c);
+        a.insert("vector_top_k".to_owned(), c.into());
+    }
+    if let Some(v) = p.ov_max_per_domain {
+        let c = clamp_usize("max_per_domain", v);
+        o.max_per_domain = Some(c);
+        a.insert("max_per_domain".to_owned(), c.into());
+    }
+    if let Some(v) = p.ov_deep_fetch_max {
+        let c = clamp_usize("deep_fetch_max", v);
+        o.deep_fetch_max = Some(c);
+        a.insert("deep_fetch_max".to_owned(), c.into());
+    }
+    if let Some(v) = p.ov_answer_passage_cap {
+        let c = clamp_usize("answer_passage_cap", v);
+        o.answer_passage_cap = Some(c);
+        a.insert("answer_passage_cap".to_owned(), c.into());
+    }
+    // u64 (ms) knobs
+    if let Some(v) = p.ov_searx_deadline_ms {
+        let c = clamp_u64("searx_deadline_ms", v);
+        o.searx_deadline_ms = Some(c);
+        a.insert("searx_deadline_ms".to_owned(), c.into());
+    }
+    if let Some(v) = p.ov_deep_fetch_deadline_ms {
+        let c = clamp_u64("deep_fetch_deadline_ms", v);
+        o.deep_fetch_deadline_ms = Some(c);
+        a.insert("deep_fetch_deadline_ms".to_owned(), c.into());
+    }
+    if let Some(v) = p.ov_answer_deadline_ms {
+        let c = clamp_u64("answer_deadline_ms", v);
+        o.answer_deadline_ms = Some(c);
+        a.insert("answer_deadline_ms".to_owned(), c.into());
+    }
+    if let Some(v) = p.ov_compare_jitter_ms_max {
+        let c = clamp_u64("compare_jitter_ms_max", v);
+        o.compare_jitter_ms_max = Some(c);
+        a.insert("compare_jitter_ms_max".to_owned(), c.into());
+    }
+    if let Some(v) = p.ov_rerank_deadline_ms {
+        let c = clamp_u64("rerank_deadline_ms", v);
+        o.rerank_deadline_ms = Some(c);
+        a.insert("rerank_deadline_ms".to_owned(), c.into());
+    }
+    if let Some(v) = p.ov_answer_passage_deadline_ms {
+        let c = clamp_u64("answer_passage_deadline_ms", v);
+        o.answer_passage_deadline_ms = Some(c);
+        a.insert("answer_passage_deadline_ms".to_owned(), c.into());
+    }
+    if let Some(v) = p.ov_answer_corroboration_deadline_ms {
+        let c = clamp_u64("answer_corroboration_deadline_ms", v);
+        o.answer_corroboration_deadline_ms = Some(c);
+        a.insert("answer_corroboration_deadline_ms".to_owned(), c.into());
+    }
+    // u32
+    if let Some(v) = p.ov_rrf_k {
+        let c = clamp_u32("rrf_k", v);
+        o.rrf_k = Some(c);
+        a.insert("rrf_k".to_owned(), c.into());
+    }
+    // f32 (CE logits)
+    if let Some(v) = p.ov_answer_abstain_threshold {
+        let c = clamp_f32("answer_abstain_threshold", v);
+        o.answer_abstain_threshold = Some(c);
+        a.insert("answer_abstain_threshold".to_owned(), c.into());
+    }
+    if let Some(v) = p.ov_answer_corroboration_tau {
+        let c = clamp_f32("answer_corroboration_tau", v);
+        o.answer_corroboration_tau = Some(c);
+        a.insert("answer_corroboration_tau".to_owned(), c.into());
+    }
+    // f64
+    if let Some(v) = p.ov_compare_noise_floor_p90 {
+        let c = clamp_f64("compare_noise_floor_p90", v);
+        o.compare_noise_floor_p90 = Some(c);
+        a.insert("compare_noise_floor_p90".to_owned(), c.into());
+    }
+    if let Some(v) = p.ov_containment_tau {
+        let c = clamp_f64("containment_tau", v);
+        o.containment_tau = Some(c);
+        a.insert("containment_tau".to_owned(), c.into());
+    }
+    // bool (no clamp)
+    if let Some(v) = p.ov_answer_corroborate {
+        o.answer_corroborate = Some(v);
+        a.insert("answer_corroborate".to_owned(), v.into());
+    }
+    (o, a)
+}
+
+/// Serialize the search response and, when overrides were applied, attach the
+/// `applied_overrides` readout (the clamped effective values) — returned to the
+/// caller only, never persisted.
+fn with_applied(
+    resp: SearchResponse,
+    applied: std::collections::BTreeMap<String, serde_json::Value>,
+) -> Result<Json<serde_json::Value>, Problem> {
+    let mut v = serde_json::to_value(&resp).map_err(|e| {
+        Problem::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "serialize failed",
+            e.to_string(),
+        )
+    })?;
+    if !applied.is_empty() {
+        if let Some(obj) = v.as_object_mut() {
+            obj.insert(
+                "applied_overrides".to_owned(),
+                serde_json::Value::Object(applied.into_iter().collect()),
+            );
+        }
+    }
+    Ok(Json(v))
 }
 
 #[derive(Debug, Deserialize)]
@@ -966,6 +1176,152 @@ async fn decision_log_ope(
     .map_err(|_| Problem::new(StatusCode::INTERNAL_SERVER_ERROR, "ope failed", "join"))?
     .map_err(|e| Problem::new(StatusCode::INTERNAL_SERVER_ERROR, "ope failed", e))?;
     Ok(Json(report))
+}
+
+/// `GET /v1/config` (ADR-30): the effective per-request tuning defaults + safe
+/// clamp ranges (so the console's tuning drawer pre-fills from THIS deployment),
+/// the read-only deploy/index config with the env var per field, and feature
+/// availability (cross-encoder → deep/answer/corroboration live vs dormant).
+/// Bearer-optional — gated only when `auth.require_bearer_for_search`, like
+/// search. NEVER serializes secrets: no bearer, no token file, no internal
+/// searx URLs/paths (only an `anon_configured` boolean).
+async fn config_endpoint(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, Problem> {
+    if state.config.auth.require_bearer_for_search {
+        bearer_ok(&state, &headers)?;
+    }
+    let s = &state.config.search;
+    let v = &state.config.vector;
+    let e = &state.config.evidence;
+    let a = &state.config.analytics;
+    let ce = state.planner.reranker_available();
+
+    // Tunable defaults from LIVE config (so they reflect env overrides), paired
+    // with the bounds/unit/rationale from the shared KNOBS table.
+    let defaults: &[(&str, serde_json::Value)] = &[
+        ("bm25_top_k", s.bm25_top_k.into()),
+        ("vector_top_k", v.top_k.into()),
+        ("max_per_domain", s.max_per_domain.into()),
+        ("searx_deadline_ms", s.searx_deadline_ms.into()),
+        ("deep_fetch_max", s.deep_fetch_max.into()),
+        ("deep_fetch_deadline_ms", s.deep_fetch_deadline_ms.into()),
+        ("answer_deadline_ms", s.answer_deadline_ms.into()),
+        ("answer_passage_cap", s.answer_passage_cap.into()),
+        (
+            "answer_abstain_threshold",
+            s.answer_abstain_threshold.into(),
+        ),
+        (
+            "answer_corroboration_tau",
+            s.answer_corroboration_tau.into(),
+        ),
+        ("compare_jitter_ms_max", s.compare_jitter_ms_max.into()),
+        ("compare_noise_floor_p90", s.compare_noise_floor_p90.into()),
+        ("rrf_k", s.rrf_k.into()),
+        ("containment_tau", e.containment_tau.into()),
+        ("rerank_deadline_ms", s.rerank_deadline_ms.into()),
+        (
+            "answer_passage_deadline_ms",
+            s.answer_passage_deadline_ms.into(),
+        ),
+        (
+            "answer_corroboration_deadline_ms",
+            s.answer_corroboration_deadline_ms.into(),
+        ),
+    ];
+    let mut tunable = serde_json::Map::new();
+    for (key, def) in defaults.iter() {
+        if let Some(k) = tuning::KNOBS.iter().find(|k| k.name == *key) {
+            tunable.insert(
+                (*key).to_owned(),
+                serde_json::json!({
+                    "default": def.clone(),
+                    "min": k.min,
+                    "max": k.max,
+                    "unit": k.unit,
+                    "rationale": k.rationale,
+                }),
+            );
+        }
+    }
+    // The one bool knob (no numeric range).
+    tunable.insert(
+        "answer_corroborate".to_owned(),
+        serde_json::json!({
+            "default": s.answer_corroborate,
+            "rationale": "C1 claim-level corroboration: count distinct independent evidence clusters whose top passage the cross-encoder finds states the same claim (suite-20: precision 0.97 / recall 1.0). Needs the cross-encoder — dormant in the scratch image.",
+        }),
+    );
+
+    Ok(Json(serde_json::json!({
+        "schema": 1,
+        "version": crate::VERSION,
+        "features": {
+            "cross_encoder_present": ce,
+            "deep_available": ce,
+            "answer_available": ce,
+            "corroboration_available": ce && s.answer_corroborate,
+            "evidence_enabled": e.enabled,
+            "analytics_enabled": a.enabled,
+            "trends_available": state.analytics.is_some(),
+            "decision_log_enabled": state.config.searx.decision_log,
+            "contextual_policy": state.config.searx.contextual_policy,
+            "anon_configured": state.config.searx.anon_url.is_some(),
+            "anon_lane_enabled": state.config.lanes.anon_enabled,
+            "regions_lane_enabled": state.config.lanes.regions_enabled,
+        },
+        "tunable": serde_json::Value::Object(tunable),
+        "deploy": {
+            "index": {
+                "shingle_k": meridian_index::sketch::SHINGLE_K,
+                "sketch_bins": meridian_index::sketch::BINS,
+                "min_match_bins": meridian_index::sketch::MIN_MATCH_BINS,
+                "merge_max_docs": state.config.index.merge_max_docs,
+                "note": "INDEX-TIME: baked into stored sketches/segments at ingest — changing needs a RE-INGEST.",
+                "env_prefix": "MERIDIAN_INDEX__",
+            },
+            "vector": {
+                "connectivity": v.connectivity,
+                "expansion_add": v.expansion_add,
+                "expansion_search": v.expansion_search,
+                "top_k": v.top_k,
+                "binary_quantization": v.binary_quantization,
+                "note": "connectivity/expansion_add are INDEX-REBUILD HNSW build params. expansion_search (ef) is query-time but applied store-wide in this build (not a per-request override — varying it per query would race shared index state); set it deploy-wide.",
+                "env_prefix": "MERIDIAN_VECTOR__",
+            },
+            "server": {
+                "concurrency_limit": state.config.server.concurrency_limit,
+                "request_timeout_ms": state.config.server.request_timeout_ms,
+                "rate_limit_per_sec": state.config.server.rate_limit_per_sec,
+                "rate_limit_burst": state.config.server.rate_limit_burst,
+                "note": "DEPLOY-TIME: loaded at startup (figment).",
+                "env_prefix": "MERIDIAN_SERVER__",
+            },
+            "analytics": {
+                "enabled": a.enabled,
+                "pull_interval_secs": a.pull_interval_secs,
+                "retention_days": a.retention_days,
+                "note": "GDELT third-party feed (opt-in). Enables /v1/trends.",
+                "env_prefix": "MERIDIAN_ANALYTICS__",
+            },
+            "lanes": {
+                "anon_enabled": state.config.lanes.anon_enabled,
+                "regions_enabled": state.config.lanes.regions_enabled,
+                "allow_onion": state.config.lanes.allow_onion,
+                "note": "DEPLOY-TIME egress lanes. Region lanes also need per-region WireGuard endpoints (see docs/region-lanes.md).",
+                "env_prefix": "MERIDIAN_LANES__",
+            },
+            "searx": {
+                "decision_log": state.config.searx.decision_log,
+                "contextual_policy": state.config.searx.contextual_policy,
+                "anon_configured": state.config.searx.anon_url.is_some(),
+                "note": "contextual_policy is ADR-25-gated (≥10k logged decisions + DR-uplift CI excluding zero); stays OFF until GET /v1/decision-log/ope reports pass.",
+                "env_prefix": "MERIDIAN_SEARX__",
+            },
+        },
+    })))
 }
 
 async fn healthz(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {

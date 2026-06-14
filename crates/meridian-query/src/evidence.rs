@@ -15,7 +15,7 @@
 
 use crate::planner::SearchResult;
 use meridian_index::lexical::url_key;
-use meridian_index::sketch::{CONTAINMENT_TAU, Sketch};
+use meridian_index::sketch::Sketch;
 use std::collections::HashMap;
 
 /// Per-result evidence annotation (additive, ADR-20).
@@ -68,7 +68,14 @@ pub struct ClusterTag {
 /// `annotate` (the response block) and the dup-eval diversity harness
 /// (the `diversity=evidence` gate). O(s²) pairwise over sketched keys —
 /// bounded by the response limit (≤50), microseconds in practice (suite 11).
-pub fn cluster_tags(keys: &[u64], sketches: &HashMap<u64, Sketch>) -> Vec<Option<ClusterTag>> {
+/// `tau` is the containment merge threshold (config `evidence.containment_tau`,
+/// default `sketch::CONTAINMENT_TAU`); callers pass the deployment/per-request
+/// value so the threshold is never silently hard-coded here.
+pub fn cluster_tags(
+    keys: &[u64],
+    sketches: &HashMap<u64, Sketch>,
+    tau: f64,
+) -> Vec<Option<ClusterTag>> {
     let keyed: Vec<(usize, u64)> = keys
         .iter()
         .enumerate()
@@ -86,7 +93,7 @@ pub fn cluster_tags(keys: &[u64], sketches: &HashMap<u64, Sketch>) -> Vec<Option
     for a in 0..keyed.len() {
         for b in (a + 1)..keyed.len() {
             let (sa, sb) = (&sketches[&keyed[a].1], &sketches[&keyed[b].1]);
-            if sa.containment(sb) >= CONTAINMENT_TAU {
+            if sa.containment(sb) >= tau {
                 let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
                 if ra != rb {
                     parent[ra] = rb;
@@ -124,10 +131,15 @@ pub fn cluster_tags(keys: &[u64], sketches: &HashMap<u64, Sketch>) -> Vec<Option
 }
 
 /// Cluster `results` by sketch containment and annotate them in place.
-/// Returns the response-level block.
-pub fn annotate(results: &mut [SearchResult], sketches: &HashMap<u64, Sketch>) -> EvidenceBlock {
+/// Returns the response-level block. `tau` is the containment merge threshold
+/// (config `evidence.containment_tau`, default `sketch::CONTAINMENT_TAU`).
+pub fn annotate(
+    results: &mut [SearchResult],
+    sketches: &HashMap<u64, Sketch>,
+    tau: f64,
+) -> EvidenceBlock {
     let keys: Vec<u64> = results.iter().map(|r| url_key(&r.url)).collect();
-    let tags = cluster_tags(&keys, sketches);
+    let tags = cluster_tags(&keys, sketches, tau);
 
     let mut members: Vec<u32> = Vec::new();
     let mut domains: Vec<std::collections::HashSet<String>> = Vec::new();
@@ -177,6 +189,7 @@ fn result_host(url: &str) -> String {
 mod tests {
     use super::*;
     use crate::planner::RankSignals;
+    use meridian_index::sketch::CONTAINMENT_TAU;
 
     fn result(url: &str) -> SearchResult {
         SearchResult {
@@ -197,6 +210,16 @@ mod tests {
             ts: None,
             evidence: None,
         }
+    }
+
+    #[test]
+    fn config_defaults_track_promoted_consts() {
+        // The promoted (C) constants must keep config defaults pinned to the
+        // SPEC-locked / suite-derived values — drift here is a silent behavior
+        // change, so the defaults are asserted against the canonical consts.
+        use meridian_common::config::{EvidenceConfig, SearchConfig};
+        assert_eq!(EvidenceConfig::default().containment_tau, CONTAINMENT_TAU);
+        assert_eq!(SearchConfig::default().rrf_k, crate::rrf::RRF_K);
     }
 
     #[test]
@@ -221,7 +244,7 @@ mod tests {
             result("https://c.example/3"),
             result("https://unsketched.example/4"), // pure web result
         ];
-        let block = annotate(&mut results, &sketches);
+        let block = annotate(&mut results, &sketches, CONTAINMENT_TAU);
 
         assert_eq!(block.schema, 2);
         assert_eq!(block.apparent_source_count, 4);

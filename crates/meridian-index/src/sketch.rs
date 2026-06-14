@@ -37,7 +37,7 @@ const B_BIT_COLLISION: f64 = 1.0 / 256.0;
 /// (min(|A|,|B|) ≈ 10) amplifies through the containment denominator to ≥τ —
 /// a false merge observed live during the P7 exit drill (tiny repeated doc vs
 /// a large unrelated article).
-const MIN_MATCH_BINS: usize = 5;
+pub const MIN_MATCH_BINS: usize = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sketch {

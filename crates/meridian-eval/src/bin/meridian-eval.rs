@@ -1197,11 +1197,14 @@ fn run_dup(data: &str, models: &str, queries: &str, qrels_path: &str) -> ExitCod
         // each ADR-18 cluster keeps its slot, copies defer to the back.
         let head_keys: Vec<u64> = head.iter().map(|(k, _)| *k).collect();
         let head_sketches = sketch_reader.get_many(&head_keys);
-        let head_tags: Vec<Option<(u32, bool)>> =
-            meridian_query::evidence::cluster_tags(&head_keys, &head_sketches)
-                .into_iter()
-                .map(|t| t.map(|t| (t.id, t.canonical)))
-                .collect();
+        let head_tags: Vec<Option<(u32, bool)>> = meridian_query::evidence::cluster_tags(
+            &head_keys,
+            &head_sketches,
+            meridian_index::sketch::CONTAINMENT_TAU,
+        )
+        .into_iter()
+        .map(|t| t.map(|t| (t.id, t.canonical)))
+        .collect();
         let ev_order = meridian_rank::diversity::cluster_diversify(&head_tags);
         let ev_ranked: Vec<String> = ev_order
             .iter()
@@ -1264,11 +1267,14 @@ fn run_dup(data: &str, models: &str, queries: &str, qrels_path: &str) -> ExitCod
         let b_keys: Vec<u64> = b_head.iter().map(|(k, _)| *k).collect();
         let b_sketches = sketch_reader.get_many(&b_keys);
         sketched_total += b_sketches.len();
-        let b_tags: Vec<Option<(u32, bool)>> =
-            meridian_query::evidence::cluster_tags(&b_keys, &b_sketches)
-                .into_iter()
-                .map(|t| t.map(|t| (t.id, t.canonical)))
-                .collect();
+        let b_tags: Vec<Option<(u32, bool)>> = meridian_query::evidence::cluster_tags(
+            &b_keys,
+            &b_sketches,
+            meridian_index::sketch::CONTAINMENT_TAU,
+        )
+        .into_iter()
+        .map(|t| t.map(|t| (t.id, t.canonical)))
+        .collect();
         let b_ev_order = meridian_rank::diversity::cluster_diversify(&b_tags);
         let b_ev_ranked: Vec<String> = b_ev_order
             .iter()
